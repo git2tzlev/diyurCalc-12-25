@@ -264,9 +264,24 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
     from utils.utils import month_range_ts
 
     payment_codes = get_payment_codes(conn)
+    housing_filter = get_housing_array_filter()
 
+    # שליפת אנשים - עם סינון לפי מערך דיור אם מוגדר
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cursor.execute("SELECT id, name, start_date, is_married, meirav_code FROM people WHERE is_active::integer = 1 ORDER BY name")
+    if housing_filter is not None:
+        cursor.execute("""
+            SELECT id, name, start_date, is_married, meirav_code
+            FROM people
+            WHERE is_active::integer = 1 AND housing_array_id = %s
+            ORDER BY name
+        """, (housing_filter,))
+    else:
+        cursor.execute("""
+            SELECT id, name, start_date, is_married, meirav_code
+            FROM people
+            WHERE is_active::integer = 1
+            ORDER BY name
+        """)
     people = cursor.fetchall()
     cursor.close()
 
@@ -281,7 +296,6 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
     start_dt, end_dt = month_range_ts(year, month)
     start_date = start_dt.date()
     end_date = end_dt.date()
-    housing_filter = get_housing_array_filter()
 
     person_status_cache = get_all_person_statuses_for_month(conn, person_ids, year, month)
 

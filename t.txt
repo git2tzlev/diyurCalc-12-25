@@ -1,0 +1,628 @@
+הורדה ל-PDF
+טכנולוגיה נדרשת
+Puppeteer - להמרת HTML ל-PDF (headless Chrome)
+תהליך יצירת PDF
+
+const puppeteer = require('puppeteer');
+
+async function generatePDF(htmlContent) {
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox']
+  });
+  
+  const page = await browser.newPage();
+  await page.setContent(htmlContent, { waitUntil: 'domcontentloaded' });
+  
+  const pdfBuffer = await page.pdf({
+    format: 'A4',
+    printBackground: true,
+    margin: {
+      top: '10mm',
+      bottom: '10mm',
+      left: '10mm',
+      right: '10mm'
+    }
+  });
+
+  await page.close();
+  await browser.close();
+  
+  return Buffer.from(pdfBuffer);
+}
+תבנית HTML לדוח (RTL)
+
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+  <meta charset="UTF-8">
+  <title>דוח משמרות - [שם המדריך]</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      direction: rtl;
+      padding: 10px;
+    }
+    h1 { color: #334155; text-align: center; }
+    .info { text-align: center; color: #666; margin-bottom: 30px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th {
+      background-color: #f3f4f6;
+      color: #111827;
+      padding: 4px;
+      text-align: center;
+      font-weight: bold;
+      border-bottom: 2px solid #e5e7eb;
+    }
+    td { padding: 1px 4px; border: 1px solid #ddd; text-align: center; }
+    tr:nth-child(even) { background-color: #f9f9f9; }
+    .fixed-row { background-color: #f0fdf4; }  /* שורות תשלום קבוע - ירוק בהיר */
+    .summary-table th, .summary-table td { 
+      border: 1px solid #ddd; 
+      padding: 3px; 
+    }
+    .footer { margin-top: 30px; text-align: center; color: #999; font-size: 10px; }
+  </style>
+</head>
+<body>
+  <h1>דוח משמרות</h1>
+  <div class="info">
+    <p><strong>עובד:</strong> [שם המדריך]</p>
+    <p><strong>תקופה:</strong> [01/01/26 - 31/01/26]</p>
+  </div>
+  
+  <table>
+    <thead>
+      <tr>
+        <th>תאריך</th>
+        <th>יום</th>
+        <th>דירה</th>
+        <th>סוג משמרת</th>
+        <th>התחלה</th>
+        <th>סיום</th>
+        <th>עבודה</th>
+        <th>כוננות</th>
+      </tr>
+    </thead>
+    <tbody>
+      <!-- שורות הדוח -->
+    </tbody>
+  </table>
+
+  <table class="summary-table">
+    <thead>
+      <tr>
+        <th>סה"כ שעות עבודה</th>
+        <th>סה"כ משמרות כוננות</th>
+        <th>סה"כ תוספות (₪)</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>[153.50]</td>
+        <td>[28]</td>
+        <td>[1036.00]</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="footer">
+    <p>הופק על ידי מערכת [שם המערכת]</p>
+    <p>[תאריך ושעה]</p>
+  </div>
+</body>
+</html>
+Endpoint להורדה
+
+// GET /api/reports/download-pdf?reportType=guide&month=1&year=2026&guideId=123
+
+app.get("/api/reports/download-pdf", async (req, res) => {
+  const { month, year, guideId } = req.query;
+  
+  // 1. שליפת נתונים וחישובים
+  const reportData = await getGuideReportData(guideId, month, year);
+  
+  // 2. יצירת HTML
+  const htmlContent = generateReportHTML(reportData);
+  
+  // 3. המרה ל-PDF
+  const pdfBuffer = await generatePDF(htmlContent);
+  
+  // 4. שליחה להורדה
+  const filename = `report_${reportData.guideName}_${month}_${year}.pdf`;
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+  res.send(pdfBuffer);
+});
+שליחה למייל
+טבלת הגדרות SMTP
+
+CREATE TABLE email_settings (
+  id SERIAL PRIMARY KEY,
+  smtp_host TEXT NOT NULL,           -- 'smtp.gmail.com'
+  smtp_port INTEGER DEFAULT 587,
+  smtp_user TEXT NOT NULL,           -- כתובת מייל
+  smtp_password TEXT NOT NULL,       -- סיסמה/App Password
+  smtp_secure BOOLEAN DEFAULT FALSE, -- TRUE ל-SSL (פורט 465)
+  from_email TEXT NOT NULL,          -- מייל השולח
+  from_name TEXT NOT NULL,           -- שם השולח
+  is_active BOOLEAN DEFAULT TRUE
+);
+קוד שליחה עם Nodemailer
+
+const nodemailer = require('nodemailer');
+
+async function sendReportEmail(toEmail, subject, htmlBody, pdfBuffer, filename) {
+  // 1. שליפת הגדרות SMTP מה-DB
+  const settings = await db.select().from(emailSettings).limit(1);
+  
+  if (!settings || !settings.isActive) {
+    throw new Error('הגדרות מייל לא מוגדרות');
+  }
+  
+  // 2. יצירת transporter
+  const transporter = nodemailer.createTransport({
+    host: settings.smtpHost,
+    port: settings.smtpPort,
+    secure: settings.smtpSecure,  // true לפורט 465
+    auth: {
+      user: settings.smtpUser,
+      pass: settings.smtpPassword,
+    },
+  });
+  
+  // 3. אימות החיבור
+  await transporter.verify();
+  
+  // 4. שליחת המייל
+  await transporter.sendMail({
+    from: `"${settings.fromName}" <${settings.fromEmail}>`,
+    to: toEmail,
+    subject: subject,
+    html: htmlBody,
+    attachments: [{
+      filename: filename,
+      content: pdfBuffer
+    }]
+  });
+}
+Endpoint לשליחת מייל בודד
+
+// POST /api/reports/send-email
+// Body: { reportType: 'guide', email: 'guide@email.com', month: 1, year: 2026, guideId: 123 }
+
+app.post("/api/reports/send-email", async (req, res) => {
+  const { email, month, year, guideId } = req.body;
+  
+  // 1. יצירת הדוח
+  const reportData = await getGuideReportData(guideId, month, year);
+  const htmlReport = generateReportHTML(reportData);
+  const pdfBuffer = await generatePDF(htmlReport);
+  
+  // 2. הכנת גוף המייל
+  const monthNames = ['ינואר', 'פברואר', ...];
+  const subject = `דוח משמרות - ${reportData.guideName} - ${monthNames[month-1]} ${year}`;
+  const filename = `report_${reportData.guideName}_${month}_${year}.pdf`;
+  
+  const bodyMessage = `
+    <div dir="rtl" style="font-family: Arial, sans-serif;">
+      <h2>שלום,</h2>
+      <p>מצורף דוח משמרות עבור התקופה המבוקשת.</p>
+      <p>בברכה,<br/>צוות המערכת</p>
+    </div>
+  `;
+  
+  // 3. שליחה
+  await sendReportEmail(email, subject, bodyMessage, pdfBuffer, filename);
+  
+  res.json({ success: true, message: 'הדוח נשלח בהצלחה' });
+});
+שליחה מרוכזת לכל המדריכים
+
+// GET /api/reports/send-bulk-stream?month=1&year=2026
+// מחזיר SSE (Server-Sent Events) להתקדמות בזמן אמת
+
+app.get("/api/reports/send-bulk-stream", async (req, res) => {
+  const { month, year } = req.query;
+  
+  // הגדרת SSE
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  
+  const sendEvent = (event, data) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+  
+  // שליפת כל המדריכים עם מייל
+  const guides = await db.select().from(people)
+    .where(and(
+      eq(people.isActive, true),
+      eq(roles.name, 'guide')
+    ));
+  
+  sendEvent('start', { total: guides.length });
+  
+  let sent = 0, skipped = 0;
+  
+  for (const guide of guides) {
+    // דילוג אם אין מייל
+    if (!guide.email) {
+      skipped++;
+      sendEvent('progress', { current: guide.name, status: 'skipped', reason: 'אין מייל' });
+      continue;
+    }
+    
+    try {
+      // יצירת ושליחת הדוח
+      const reportData = await getGuideReportData(guide.id, month, year);
+      
+      if (reportData.rows.length === 0) {
+        skipped++;
+        sendEvent('progress', { current: guide.name, status: 'skipped', reason: 'אין משמרות' });
+        continue;
+      }
+      
+      const html = generateReportHTML(reportData);
+      const pdf = await generatePDF(html);
+      await sendReportEmail(guide.email, ...);
+      
+      sent++;
+      sendEvent('progress', { current: guide.name, status: 'sent', sent, skipped });
+      
+    } catch (error) {
+      skipped++;
+      sendEvent('progress', { current: guide.name, status: 'failed', reason: error.message });
+    }
+  }
+  
+  sendEvent('complete', { sent, skipped });
+  res.end();
+});
+טבלת לוג שליחות (אופציונלי)
+
+CREATE TABLE email_logs (
+  id SERIAL PRIMARY KEY,
+  recipient_id INTEGER REFERENCES people(id),
+  recipient_email TEXT NOT NULL,
+  recipient_name TEXT NOT NULL,
+  email_type TEXT NOT NULL,           -- 'guide_report'
+  subject TEXT NOT NULL,
+  status TEXT NOT NULL,               -- 'sent', 'skipped', 'failed'
+  error_message TEXT,
+  month INTEGER,
+  year INTEGER,
+  sent_by INTEGER REFERENCES people(id),
+  batch_id TEXT,                      -- לזיהוי שליחה מרוכזת
+  created_at TIMESTAMP DEFAULT NOW()
+);
+סיכום API Endpoints
+Endpoint	Method	תיאור
+/api/reports/download-pdf	GET	הורדת PDF
+/api/reports/send-email	POST	שליחת דוח בודד
+/api/reports/send-bulk-stream	GET	שליחה מרוכזת (SSE)
+/api/reports/send-bulk	POST	שליחה מרוכזת (fallback)
+צריכה עוד פרטים?
+
+נתת לו גם הורראות בשליחה לכל המדריכים איך זה נראה כלומר שיש התקדמות בפועל ורואים למי נשלח וכו ,אני רוצה את ההוראות לחלון של השליחה המרוכזת
+Globpattern: "**/*BulkEmail*"
+Found 4 files
+Read f:\DiyurClock\004\Diyur002\client\src\components\reports\BulkEmailDialog.tsx
+מעולה, הנה ההוראות המפורטות לחלון השליחה המרוכזת:
+
+חלון שליחה מרוכזת (BulkEmailDialog)
+מבנה הממשק
+
+┌─────────────────────────────────────────────────────────────────┐
+│  שליחת דוחות מרוכזת - ינואר/2026                          [X]  │
+│  כל מדריך יקבל את הדוח האישי שלו בלבד.                         │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │ ✅ 45 יקבלו מייל     ⏭️ 3 ללא מייל         סה"כ: 48   │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                                                                 │
+│  ┌──────────────────────── התקדמות ──────────────────────┐    │
+│  │ התקדמות: 23 / 45                               51%    │    │
+│  │ ██████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   │    │
+│  │ זמן משוער שנותר: ~3 דקות                              │    │
+│  └─────────────────────────────────────────────────────────┘   │
+│                                                                 │
+│  ┌──────────────────── רשימת מדריכים ──────────────────────┐   │
+│  │ ✓ אברהם יצחק                         guide@email.com    │   │
+│  │ ✓ בני לוי                            beni@email.com     │   │
+│  │ ✓ גלי כהן                               נשלח ✓         │   │
+│  │ ⟳ דוד משה                              שולח...         │   │  <-- מודגש בכחול
+│  │ ◷ הדס רחל                                ממתין          │   │
+│  │ ◷ ורד שרה                                ממתין          │   │
+│  │ ⊖ חנה מרים                        אין משמרות בחודש זה   │   │  <-- צהוב
+│  │ ✗ טלי נעמי                             חסר מייל         │   │  <-- אדום
+│  └─────────────────────────────────────────────────────────┘   │
+│                                                                 │
+│                    [ביטול]  [שלח ל-45 מדריכים]                 │
+└─────────────────────────────────────────────────────────────────┘
+סטטוסי מדריך
+סטטוס	אייקון	צבע רקע	תיאור
+pending	◷ Clock	-	ממתין לשליחה
+sending	⟳ Loader (מסתובב)	כחול בהיר	בתהליך שליחה
+sent	✓ CheckCircle	ירוק בהיר	נשלח בהצלחה
+skipped	⊖ MinusCircle	צהוב בהיר	דולג (אין משמרות/מייל לא תקין)
+failed	✗ XCircle	אדום בהיר	שגיאה בשליחה
+קוד TypeScript (React)
+
+// Types
+interface GuideEmailStatus {
+  id: number;
+  name: string;
+  email?: string;
+  hasEmail: boolean;
+  sendStatus?: 'pending' | 'sending' | 'sent' | 'skipped' | 'failed';
+  sendReason?: string;  // סיבת דילוג/כישלון
+}
+
+interface ProgressState {
+  processed: number;   // כמה עובדו
+  total: number;       // סה"כ לשליחה
+  current: string;     // שם המדריך הנוכחי
+  currentId?: number;  // ID לגלילה אוטומטית
+  sent: number;        // כמה נשלחו
+  skipped: number;     // כמה דולגו
+}
+
+// State
+const [guides, setGuides] = useState<GuideEmailStatus[]>([]);
+const [isSending, setIsSending] = useState(false);
+const [progress, setProgress] = useState<ProgressState | null>(null);
+const [result, setResult] = useState<SendResult | null>(null);
+const eventSourceRef = useRef<EventSource | null>(null);
+התחברות ל-SSE (Server-Sent Events)
+
+const handleSendBulk = () => {
+  setIsSending(true);
+  
+  // איפוס סטטוסים
+  setGuides(prev => prev.map(g => ({
+    ...g,
+    sendStatus: g.hasEmail ? 'pending' : 'skipped',
+    sendReason: g.hasEmail ? undefined : 'אין כתובת מייל תקינה'
+  })));
+  
+  // יצירת חיבור SSE
+  const eventSource = new EventSource(
+    `/api/reports/send-bulk-stream?month=${month}&year=${year}`
+  );
+  eventSourceRef.current = eventSource;
+
+  // אירוע: התחלה
+  eventSource.addEventListener('start', (event) => {
+    const data = JSON.parse(event.data);
+    // data = { total: 45, month: 1, year: 2026, batchId: "bulk-xxx" }
+    setProgress(prev => ({ ...prev, total: data.total }));
+  });
+
+  // אירוע: מתחיל לשלוח למדריך ספציפי
+  eventSource.addEventListener('sending', (event) => {
+    const data = JSON.parse(event.data);
+    // data = { id: 123, name: "דוד משה" }
+    updateGuideStatus(data.id, 'sending');
+    scrollToGuide(data.id);  // גלילה אוטומטית
+  });
+
+  // אירוע: התקדמות
+  eventSource.addEventListener('progress', (event) => {
+    const data = JSON.parse(event.data);
+    // data = { 
+    //   processed: 23, total: 45, 
+    //   current: "דוד משה", currentId: 123,
+    //   status: "sent" | "skipped", reason?: "אין משמרות",
+    //   sent: 20, skipped: 3
+    // }
+    
+    const status = data.status === 'sent' ? 'sent' : 
+                   data.status === 'skipped' ? 'skipped' : 'failed';
+    updateGuideStatus(data.currentId, status, data.reason);
+    
+    setProgress({
+      processed: data.processed,
+      total: data.total,
+      current: data.current,
+      sent: data.sent,
+      skipped: data.skipped
+    });
+  });
+
+  // אירוע: סיום
+  eventSource.addEventListener('complete', (event) => {
+    const data = JSON.parse(event.data);
+    // data = { 
+    //   sent: [{ id: 1, name: "...", email: "..." }, ...],
+    //   skipped: [{ id: 2, name: "...", reason: "..." }, ...],
+    //   batchId: "bulk-xxx"
+    // }
+    setResult({ sent: data.sent, skipped: data.skipped });
+    setIsSending(false);
+    eventSource.close();
+    
+    toast({ title: `נשלחו ${data.sent.length} מיילים` });
+  });
+
+  // אירוע: שגיאה
+  eventSource.addEventListener('error', () => {
+    toast({ title: "שגיאה", variant: "destructive" });
+    setIsSending(false);
+    eventSource.close();
+  });
+};
+עדכון סטטוס מדריך + גלילה
+
+// עדכון סטטוס
+const updateGuideStatus = (
+  guideId: number, 
+  status: GuideEmailStatus['sendStatus'], 
+  reason?: string
+) => {
+  setGuides(prev => prev.map(g => 
+    g.id === guideId 
+      ? { ...g, sendStatus: status, sendReason: reason }
+      : g
+  ));
+};
+
+// גלילה אוטומטית למדריך הנוכחי
+const scrollToGuide = (guideId: number) => {
+  const element = document.getElementById(`guide-row-${guideId}`);
+  if (element) {
+    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+};
+רנדור שורת מדריך
+
+const renderGuideRow = (guide: GuideEmailStatus) => {
+  // צבע רקע לפי סטטוס
+  const bgClass = 
+    guide.sendStatus === 'sending' ? 'bg-blue-50 border border-blue-200' :
+    guide.sendStatus === 'sent' ? 'bg-green-50/50' :
+    guide.sendStatus === 'skipped' ? 'bg-yellow-50/30' :
+    guide.sendStatus === 'failed' ? 'bg-red-50/50' : '';
+
+  return (
+    <div 
+      key={guide.id}
+      id={`guide-row-${guide.id}`}
+      className={`flex items-center justify-between p-2.5 rounded ${bgClass}`}
+    >
+      {/* אייקון סטטוס */}
+      {guide.sendStatus === 'pending' && <Clock className="h-4 w-4 text-gray-400" />}
+      {guide.sendStatus === 'sending' && <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />}
+      {guide.sendStatus === 'sent' && <CheckCircle className="h-4 w-4 text-green-500" />}
+      {guide.sendStatus === 'skipped' && <MinusCircle className="h-4 w-4 text-yellow-500" />}
+      {guide.sendStatus === 'failed' && <XCircle className="h-4 w-4 text-red-500" />}
+      
+      {/* שם */}
+      <span className={guide.sendStatus === 'sending' ? 'font-medium text-blue-700' : ''}>
+        {guide.name}
+      </span>
+      
+      {/* סטטוס טקסטואלי */}
+      <div>
+        {guide.sendStatus === 'pending' && <span className="text-gray-400">ממתין</span>}
+        {guide.sendStatus === 'sending' && <span className="text-blue-600 animate-pulse">שולח...</span>}
+        {guide.sendStatus === 'sent' && <span className="text-green-600">נשלח ✓</span>}
+        {guide.sendStatus === 'skipped' && <span className="text-yellow-600">{guide.sendReason}</span>}
+        {guide.sendStatus === 'failed' && <span className="text-red-600">נכשל</span>}
+      </div>
+    </div>
+  );
+};
+סרגל התקדמות
+
+const ProgressBar = ({ progress }: { progress: ProgressState }) => {
+  const percent = Math.round((progress.processed / progress.total) * 100);
+  const remainingMinutes = Math.ceil((progress.total - progress.processed) / 5 * 6 / 60);
+  
+  return (
+    <div className="bg-blue-50 p-3 rounded-lg border border-blue-100">
+      <div className="flex justify-between text-sm">
+        <span>התקדמות: {progress.processed} / {progress.total}</span>
+        <span className="font-medium">{percent}%</span>
+      </div>
+      
+      {/* Progress bar */}
+      <div className="h-2 bg-gray-200 rounded-full mt-2">
+        <div 
+          className="h-2 bg-blue-600 rounded-full transition-all"
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+      
+      <div className="text-xs text-blue-600 text-center mt-2">
+        זמן משוער שנותר: ~{remainingMinutes} דקות
+      </div>
+    </div>
+  );
+};
+כפתור ביטול
+
+const handleCancel = () => {
+  if (eventSourceRef.current) {
+    eventSourceRef.current.close();
+    eventSourceRef.current = null;
+  }
+  setIsSending(false);
+  setProgress(null);
+  
+  toast({
+    title: "בוטל",
+    description: "השליחה בוטלה. חלק מהמיילים אולי כבר נשלחו.",
+    variant: "destructive",
+  });
+};
+סיכום סטטיסטיקות (לפני/אחרי)
+
+// לפני שליחה
+<Badge className="bg-green-50 text-green-700">
+  {guidesWithEmail.length} יקבלו מייל
+</Badge>
+<Badge className="bg-yellow-50 text-yellow-700">
+  {guidesWithoutEmail.length} ללא מייל
+</Badge>
+
+// בזמן שליחה
+<Badge className="bg-green-50 text-green-700">
+  ✅ {progress.sent} נשלחו
+</Badge>
+<Badge className="bg-yellow-50 text-yellow-700">
+  ⏭️ {progress.skipped} דולגו
+</Badge>
+
+// אחרי סיום
+<Badge className="bg-green-50 text-green-700">
+  ✅ {result.sent.length} נשלחו
+</Badge>
+<Badge className="bg-yellow-50 text-yellow-700">
+  ⏭️ {result.skipped.length} דולגו
+</Badge>
+תרשים זרימה
+
+┌─────────────────┐
+│  פתיחת החלון   │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ טעינת מדריכים  │ ──> GET /api/people?type=guides
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ הצגת רשימה     │ ◄── מיון: קודם מי שיש מייל
+│ + הערכת זמן    │
+└────────┬────────┘
+         │ [לחיצה על "שלח"]
+         ▼
+┌─────────────────────────────────────────┐
+│ חיבור SSE                               │
+│ GET /api/reports/send-bulk-stream       │
+└────────┬────────────────────────────────┘
+         │
+    ┌────┴────┐
+    │         │
+    ▼         ▼
+┌───────┐  ┌────────┐
+│ start │  │ error  │──> toast + סגירה
+└───┬───┘  └────────┘
+    │
+    ▼ (לכל מדריך)
+┌─────────────────┐
+│    sending      │ ──> סימון כחול + גלילה
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│   progress      │ ──> עדכון סטטוס + מספרים
+└────────┬────────┘
+         │
+         ▼ (כל המדריכים)
+┌─────────────────┐
+│   complete      │ ──> הצגת סיכום
+└─────────────────┘
+צריכה הבהרות נוספות?

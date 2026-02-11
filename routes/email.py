@@ -22,6 +22,7 @@ from services.email_service import (
     send_test_email,
     send_guide_email,
     send_all_guides_email,
+    send_all_guides_to_single_email,
 )
 
 from utils.utils import format_currency, human_date
@@ -168,6 +169,28 @@ def send_all_guides_email_route(request: Request, year: int, month: int) -> JSON
         return JSONResponse(result)
     except Exception as e:
         logger.error(f"Error in send_all_guides_email_route: {e}", exc_info=True)
+        return JSONResponse({"success": False, "error": str(e)})
+
+
+async def send_all_to_single_email_route(request: Request, year: int, month: int) -> JSONResponse:
+    """שליחת כל דוחות המדריכים למייל אחד."""
+    try:
+        body = await request.json()
+        target_email = body.get('email')
+
+        if not target_email:
+            return JSONResponse({"success": False, "error": "יש להזין כתובת מייל"})
+
+        import asyncio
+
+        def send_task(y, m, email):
+            with get_conn() as conn:
+                return send_all_guides_to_single_email(conn, y, m, email)
+
+        result = await asyncio.to_thread(send_task, year, month, target_email)
+        return JSONResponse(result)
+    except Exception as e:
+        logger.error(f"Error in send_all_to_single_email_route: {e}", exc_info=True)
         return JSONResponse({"success": False, "error": str(e)})
 
 

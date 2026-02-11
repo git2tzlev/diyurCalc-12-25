@@ -1224,6 +1224,7 @@ def get_daily_segments_data(
             parts.append((next_day, 0, rep_end_orig - MINUTES_PER_DAY, 0))
 
         seg_list = segments_by_shift.get(r["shift_type_id"], [])
+        has_predefined_segments = bool(seg_list)  # האם יש סגמנטים מוגדרים מראש למשמרת
         if not seg_list:
             # אין סגמנטים מוגדרים - יצירת סגמנט דינמי
             seg_list = [{
@@ -1232,7 +1233,7 @@ def get_daily_segments_data(
                 "segment_type": "work",
                 "id": None
             }]
-            
+
         work_type = None
         shift_name_str = (r["shift_name"] or "")
         is_sick_report = ("מחלה" in shift_name_str)
@@ -1369,6 +1370,31 @@ def get_daily_segments_data(
             if r["shift_name"]:
                 entry["shifts"].add(r["shift_name"])
 
+            # חישוב זמני התחלה וסיום של הסגמנטים המוגדרים
+            first_seg_start, _ = span_minutes(seg_list[0]["start_time"], seg_list[0]["end_time"])
+            _, last_seg_end = span_minutes(seg_list[-1]["start_time"], seg_list[-1]["end_time"])
+
+            # נתוני הדיווח לשעות לא מכוסות
+            apartment_type_id = r.get("apartment_type_id")
+            actual_apartment_type_id = r.get("actual_apartment_type_id")
+            is_married = r.get("is_married")
+            apartment_name = r.get("apartment_name", "")
+            apartment_type_name = r.get("apartment_type_name", "")
+            housing_array_name = r.get("housing_array_name", "")
+            rate_apartment_type_name = r.get("rate_apartment_type_name", "")
+            apartment_type_change_date = r.get("apartment_type_change_date", "")
+            housing_array_id = r.get("housing_array_id")
+
+            # שעות לא מכוסות לפני תחילת המשמרת
+            # בתגבור: ביום שישי (weekday==4) רק לפני, בשבת (weekday==5) רק אחרי
+            is_friday = r_date.weekday() == 4
+            is_saturday = r_date.weekday() == 5
+
+            if rep_start_orig < first_seg_start and not is_saturday:
+                uncov_start = rep_start_orig
+                uncov_end = first_seg_start
+                entry["segments"].append((uncov_start, uncov_end, "work", "work", WORK_HOUR_SHIFT_ID, None, apartment_type_id, is_married, apartment_name, r_date, actual_apartment_type_id, None, housing_array_id, apartment_type_name, housing_array_name, rate_apartment_type_name, apartment_type_change_date))
+
             # מעקב אחרי זמן הסיום של הסגמנט הקודם לזיהוי מעבר יום
             prev_seg_end = None
             days_offset = 0  # כמה ימים עברו מתחילת המשמרת
@@ -1404,19 +1430,21 @@ def get_daily_segments_data(
                     label = "work"
 
                 segment_id = seg.get("id")
-                apartment_type_id = r.get("apartment_type_id")  # For rate calculation
-                actual_apartment_type_id = r.get("actual_apartment_type_id")  # For visual indicator
-                is_married = r.get("is_married")
-                apartment_name = r.get("apartment_name", "")
-                apartment_type_name = r.get("apartment_type_name", "")
-                housing_array_name = r.get("housing_array_name", "")
-                rate_apartment_type_name = r.get("rate_apartment_type_name", "")
-                apartment_type_change_date = r.get("apartment_type_change_date", "")
 
                 # For fixed segment shifts (tagbur/vacation/sick), standby_defined_end = seg_end (full standby)
                 standby_defined_end = seg_end if effective_seg_type == "standby" else None
-                housing_array_id = r.get("housing_array_id")
                 entry["segments"].append((seg_start, seg_end, effective_seg_type, label, r["shift_type_id"], segment_id, apartment_type_id, is_married, apartment_name, actual_seg_date, actual_apartment_type_id, standby_defined_end, housing_array_id, apartment_type_name, housing_array_name, rate_apartment_type_name, apartment_type_change_date))
+
+            # שעות לא מכוסות אחרי סיום המשמרת
+            # התאמה למקרה של משמרת שחוצה חצות
+            # בתגבור: ביום שישי רק לפני, בשבת רק אחרי
+            effective_rep_end = rep_end_orig if rep_end_orig > rep_start_orig else rep_end_orig + MINUTES_PER_DAY
+            if effective_rep_end > last_seg_end and not is_friday:
+                uncov_start = last_seg_end
+                uncov_end = effective_rep_end
+                # התאריך של הסגמנט הלא מכוסה אחרי = התאריך של הסגמנט האחרון
+                last_seg_date = r_date + timedelta(days=days_offset)
+                entry["segments"].append((uncov_start, uncov_end, "work", "work", WORK_HOUR_SHIFT_ID, None, apartment_type_id, is_married, apartment_name, last_seg_date, actual_apartment_type_id, None, housing_array_id, apartment_type_name, housing_array_name, rate_apartment_type_name, apartment_type_change_date))
 
             continue  # דלג על העיבוד הרגיל עבור משמרת זו
 
@@ -1573,9 +1601,21 @@ def get_daily_segments_data(
                     else:
                         current_seg_start = orig_s_start
                         current_seg_end = orig_s_end
-                        
+
                     # Calculate overlap between report part (s_start, s_end) and segment
                     overlap = overlap_minutes(s_start, s_end, current_seg_start, current_seg_end)
+
+                    # אם הסגמנט חוצה חצות ואין חפיפה, ננסה עם הזמנים מוזזים
+                    # זה קורה כשדיווח 00:00-08:00 צריך להתאים לסגמנט 20:00-08:00
+                    if overlap <= 0 and orig_s_end > MINUTES_PER_DAY:
+                        # נסה עם הסגמנט מוזז אחורה ביום
+                        shifted_start = orig_s_start - MINUTES_PER_DAY
+                        shifted_end = orig_s_end - MINUTES_PER_DAY
+                        overlap = overlap_minutes(s_start, s_end, shifted_start, shifted_end)
+                        if overlap > 0:
+                            current_seg_start = shifted_start
+                            current_seg_end = shifted_end
+
                     if overlap <= 0:
                         continue
                         
@@ -1669,10 +1709,13 @@ def get_daily_segments_data(
                             eff_uncov_start = uncov_start
                             eff_uncov_end = uncov_end
 
-                        # הוספת סגמנט עבודה - שעות מחוץ לסגמנטים מוגדרים משולמות לפי תעריף "שעת עבודה"
+                        # הוספת סגמנט עבודה - שעות מחוץ לסגמנטים מוגדרים
+                        # אם יש סגמנטים מוגדרים מראש (103,105,106,107) - תעריף "שעת עבודה"
+                        # אם אין סגמנטים מוגדרים (120 ליווי בי"ח) - תעריף המשמרת המקורית
+                        uncovered_shift_id = WORK_HOUR_SHIFT_ID if has_predefined_segments else r["shift_type_id"]
                         entry["segments"].append((
                             eff_uncov_start, eff_uncov_end, "work", "work",
-                            WORK_HOUR_SHIFT_ID, segment_id,
+                            uncovered_shift_id, segment_id,
                             apartment_type_id, is_married,
                             apartment_name, p_date, actual_apartment_type_id, None, housing_array_id, apartment_type_name, housing_array_name, rate_apartment_type_name, apartment_type_change_date
                         ))
@@ -1782,7 +1825,7 @@ def get_daily_segments_data(
             elif s_type == "sick":
                 sick_segments.append((s_start, s_end, actual_date))
             else:
-                work_segments.append((s_start, s_end, label, sid, apt_name, actual_date, apt_type, actual_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date))
+                work_segments.append((s_start, s_end, label, sid, apt_name, actual_date, apt_type, actual_apt_type, apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date))
                 
         work_segments.sort(key=lambda x: x[0])
         standby_segments.sort(key=lambda x: x[0])
@@ -1797,7 +1840,7 @@ def get_daily_segments_data(
             if k not in seen:
                 deduped.append(w)
                 seen.add(k)
-        work_segments = deduped  # Each is (start, end, label, sid, apt_name, actual_date, apt_type, actual_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date)
+        work_segments = deduped  # Each is (start, end, label, sid, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date)
 
         # Note: Night chain detection is now done per-chain, not per-day
         # A chain is a "night chain" if it has 2+ hours in 22:00-06:00 range
@@ -1862,10 +1905,10 @@ def get_daily_segments_data(
             if is_early_exit:
                 # יציאה מוקדמת - הכוננות החלקית הופכת לשעות עבודה שממשיכות את הרצף
                 # הוספה לרשימת סגמנטי עבודה במקום כוננות
-                # (start, end, label, sid, apt_name, actual_date, apt_type, actual_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date)
+                # (start, end, label, sid, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date)
                 early_exit_work_segments.append((
                     sb_start, sb_end, "כוננות חלקית", shift_type_id,
-                    "", actual_date, apt_type, actual_apt_type, None, "", "", "", ""
+                    "", actual_date, apt_type, actual_apt_type, apt_type, None, "", "", "", ""
                 ))
                 # לא מוסיפים ל-trimmed_standbys ולא ל-cancelled_standbys
                 continue
@@ -2127,8 +2170,8 @@ def get_daily_segments_data(
 
         # Merge all events for processing - כל המשמרות כולל תגבור
         all_events = []
-        for s, e, l, sid, apt_name, actual_date, apt_type, actual_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date in work_segments:
-            all_events.append({"start": s, "end": e, "type": "work", "label": l, "shift_id": sid, "apartment_name": apt_name or "", "apartment_type_id": actual_apt_type, "rate_apt_type": apt_type, "actual_date": actual_date or day_date, "housing_array_id": housing_array_id, "apartment_type_name": apt_type_name or "", "housing_array_name": ha_name or "", "rate_apt_type_name": rate_apt_type_name or "", "apt_type_change_date": apt_type_change_date or ""})
+        for s, e, l, sid, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date in work_segments:
+            all_events.append({"start": s, "end": e, "type": "work", "label": l, "shift_id": sid, "apartment_name": apt_name or "", "apartment_type_id": actual_apt_type, "rate_apt_type": rate_apt_type, "actual_date": actual_date or day_date, "housing_array_id": housing_array_id, "apartment_type_name": apt_type_name or "", "housing_array_name": ha_name or "", "rate_apt_type_name": rate_apt_type_name or "", "apt_type_change_date": apt_type_change_date or ""})
         for s, e, seg_id, apt, married, actual_date, _shift_type_id, actual_apt_type, _standby_defined_end in standby_segments:
             all_events.append({"start": s, "end": e, "type": "standby", "label": "כוננות", "seg_id": seg_id, "apt": apt, "actual_apt_type": actual_apt_type, "married": married, "actual_date": actual_date or day_date})
         for s, e, actual_date in vacation_segments:
@@ -2211,11 +2254,18 @@ def get_daily_segments_data(
                         multiplier = 1.25
                     else:
                         multiplier = 1.0
-                    # חישוב תשלום עם שעות ותעריף מעוגלים (שיטת מירב)
-                    c_pay += round(seg_minutes / 60, 2) * multiplier * round(seg_rate, 2)
+                    # חישוב תשלום בנוסחת גשר: round(שעות,2) × round(תעריף×מכפיל,2)
+                    c_pay += round(seg_minutes / 60, 2) * round(seg_rate * multiplier, 2)
             else:
-                # חישוב תשלום עם שעות ותעריף מעוגלים (שיטת מירב)
-                c_pay = (round(c_100/60, 2)*1.0 + round(c_125/60, 2)*1.25 + round(c_150/60, 2)*1.5 + round(c_175/60, 2)*1.75 + round(c_200/60, 2)*2.0) * round(effective_rate, 2)
+                # חישוב תשלום בנוסחת גשר: round(שעות,2) × round(תעריף×מכפיל,2)
+                c_pay = (
+                    round(c_100/60, 2) * round(effective_rate * 1.0, 2) +
+                    round(c_125/60, 2) * round(effective_rate * 1.25, 2) +
+                    round(c_150/60, 2) * round(effective_rate * 1.5, 2) +
+                    round(c_175/60, 2) * round(effective_rate * 1.75, 2) +
+                    round(c_200/60, 2) * round(effective_rate * 2.0, 2)
+                )
+                c_pay = round(c_pay, 2)
 
             return c_pay, c_100, c_125, c_150, c_175, c_200, seg_detail, effective_rate
 
@@ -2416,8 +2466,15 @@ def get_daily_segments_data(
                     # התוספת באגורות - ממירים לשקלים
                     seg_label = f"{seg_label} +{hourly_supplement / 100:.2f}"
 
-                # חישוב תשלום עם שעות ותעריף מעוגלים (שיטת מירב)
-                seg_pay = (round(seg_c100/60, 2)*1.0 + round(seg_c125/60, 2)*1.25 + round(seg_c150/60, 2)*1.5 + round(seg_c175/60, 2)*1.75 + round(seg_c200/60, 2)*2.0) * round(seg_rate, 2)
+                # חישוב תשלום בנוסחת גשר: round(שעות,2) × round(תעריף×מכפיל,2)
+                seg_pay = (
+                    round(seg_c100/60, 2) * round(seg_rate * 1.0, 2) +
+                    round(seg_c125/60, 2) * round(seg_rate * 1.25, 2) +
+                    round(seg_c150/60, 2) * round(seg_rate * 1.5, 2) +
+                    round(seg_c175/60, 2) * round(seg_rate * 1.75, 2) +
+                    round(seg_c200/60, 2) * round(seg_rate * 2.0, 2)
+                )
+                seg_pay = round(seg_pay, 2)
 
                 start_str = f"{seg_start // 60 % 24:02d}:{seg_start % 60:02d}"
                 end_str = f"{seg_end // 60 % 24:02d}:{seg_end % 60:02d}"
@@ -3193,24 +3250,40 @@ def aggregate_daily_segments_to_monthly(
     # שמירת שכר אפקטיבי
     monthly_totals["effective_hourly_rate"] = minimum_wage
 
-    # חישוב סה"כ מעוגל - סכום הרכיבים הבודדים (תואם לתצוגה בתבנית)
-    # שיטת מירב: סכום כל payment_calc* + vacation + sick + standby + travel + extras
-    rounded_total = (
-        monthly_totals.get("payment_calc100", 0) +
-        monthly_totals.get("payment_calc125", 0) +
-        monthly_totals.get("payment_calc150", 0) +
-        monthly_totals.get("payment_calc175", 0) +
-        monthly_totals.get("payment_calc200", 0) +
-        monthly_totals.get("payment_calc_variable", 0) +
-        monthly_totals.get("vacation_payment", 0) +
-        monthly_totals.get("sick_payment", 0) +
-        monthly_totals.get("standby_payment", 0) +
-        monthly_totals.get("travel", 0) +
-        monthly_totals.get("professional_support", 0) +
-        monthly_totals.get("extras", 0)
+    # חישוב סה"כ תואם לתצוגה: כל רכיב מעוגל ל-1 ספרה לפני הסיכום
+    # כך הסה"כ = סכום השורות המוצגות
+    h100 = round(monthly_totals.get("calc100", 0) / 60, 2)
+    h125 = round(monthly_totals.get("calc125", 0) / 60, 2)
+    h150_overtime = round(monthly_totals.get("calc150_overtime", 0) / 60, 2)
+    h150_shabbat_100 = round(monthly_totals.get("calc150_shabbat_100", 0) / 60, 2)
+    h150_shabbat_50 = round(monthly_totals.get("calc150_shabbat_50", 0) / 60, 2)
+    h175 = round(monthly_totals.get("calc175", 0) / 60, 2)
+    h200 = round(monthly_totals.get("calc200", 0) / 60, 2)
+
+    # כל רכיב מעוגל ל-2 ספרות, ואז ל-1 ספרה לפני הסיכום (תואם בדיוק ל-template)
+    # Template עושה: round(hours * rate, 2) | round(1) לצבירה
+    gesher_total = (
+        round(round(h100 * round(minimum_wage * 1.0, 2), 2), 1) +
+        round(round(h125 * round(minimum_wage * 1.25, 2), 2), 1) +
+        round(round(h150_overtime * round(minimum_wage * 1.5, 2), 2), 1) +
+        round(round(h150_shabbat_100 * round(minimum_wage * 1.0, 2), 2), 1) +
+        round(round(h150_shabbat_50 * round(minimum_wage * 0.5, 2), 2), 1) +
+        round(round(h175 * round(minimum_wage * 1.75, 2), 2), 1) +
+        round(round(h200 * round(minimum_wage * 2.0, 2), 2), 1) +
+        round(round(monthly_totals.get("payment_calc_variable", 0) or 0, 2), 1) +
+        round(round(monthly_totals.get("standby_payment", 0) or 0, 2), 1) +
+        round(round(monthly_totals.get("vacation_payment", 0) or 0, 2), 1) +
+        round(round(monthly_totals.get("sick_payment", 0) or 0, 2), 1) +
+        round(round(monthly_totals.get("travel", 0) or 0, 2), 1) +
+        round(round(monthly_totals.get("professional_support", 0) or 0, 2), 1) +
+        round(round(monthly_totals.get("extras", 0) or 0, 2), 1)
     )
 
-    monthly_totals["rounded_total"] = round(rounded_total, 2)
+    monthly_totals["gesher_total"] = round(gesher_total, 2)
+    # display_total = סכום השורות המעוגלות (ללא round(2) בסוף) - מתאים לחישוב ידני
+    monthly_totals["display_total"] = round(gesher_total, 1)
+    # rounded_total = gesher_total לעקביות
+    monthly_totals["rounded_total"] = monthly_totals["gesher_total"]
     # total_payment = rounded_total לעקביות בכל המערכת
     monthly_totals["total_payment"] = monthly_totals["rounded_total"]
 

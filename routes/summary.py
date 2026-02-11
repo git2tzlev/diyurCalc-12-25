@@ -17,6 +17,7 @@ from core.logic import (
     get_payment_codes,
     calculate_monthly_summary,
 )
+from core.history import get_minimum_wage_for_month
 from utils.utils import format_currency, human_date
 import logging
 
@@ -55,6 +56,9 @@ def general_summary(
         payment_time = time.time() - payment_start
         logger.info(f"Payment codes fetch took: {payment_time:.4f}s")
 
+        # Get minimum wage for the month
+        minimum_wage = get_minimum_wage_for_month(conn.conn, year, month)
+
         pre_calc_time = time.time()
         logger.info("Starting optimized calculation...")
 
@@ -85,7 +89,8 @@ def general_summary(
         "selected_year": year,
         "selected_month": month,
         "search_query": q or "",
-        "years": year_options
+        "years": year_options,
+        "minimum_wage": minimum_wage
     })
     render_time = time.time() - render_start
     logger.info(f"Template rendering took: {render_time:.4f}s")

@@ -12,8 +12,26 @@ from fastapi import Request, HTTPException
 from fastapi.responses import HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
 from core.config import config
-from core.database import get_conn
+from core.database import get_conn, get_housing_array_filter
 from services import gesher_exporter
+
+
+def _validate_guide_access(person_id: int, housing_filter: Optional[int]) -> None:
+    """
+    בודק שלמשתמש יש הרשאה לצפות במדריך.
+    זורק HTTPException 403 אם אין הרשאה.
+    """
+    if housing_filter is None:
+        return  # מנהל על - יכול לראות הכל
+
+    # בדוק שהמדריך שייך למערך הדיור של המשתמש
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT housing_array_id FROM people WHERE id = %s",
+            (person_id,)
+        ).fetchone()
+        if not row or row["housing_array_id"] != housing_filter:
+            raise HTTPException(status_code=403, detail="אין הרשאה לייצא מדריך זה")
 from utils.utils import format_currency, human_date
 
 templates = Jinja2Templates(directory=str(config.TEMPLATES_DIR))
@@ -64,6 +82,10 @@ def export_gesher_person(
     """
     ייצוא קובץ גשר לעובד בודד
     """
+    # בדיקת הרשאה - מנהל מסגרת יכול לייצא רק מדריכים מהמערך שלו
+    housing_filter = get_housing_array_filter()
+    _validate_guide_access(person_id, housing_filter)
+
     with get_conn() as conn:
         # שליפת שם העובד לשם הקובץ
         person = conn.execute("SELECT name, meirav_code FROM people WHERE id = %s", (person_id,)).fetchone()
@@ -103,6 +125,11 @@ def export_gesher_multiple(
     """
     ייצוא קובץ גשר ממוזג למספר עובדים נבחרים
     """
+    # בדיקת הרשאה - מנהל מסגרת יכול לייצא רק מדריכים מהמערך שלו
+    housing_filter = get_housing_array_filter()
+    for person_id in person_ids:
+        _validate_guide_access(person_id, housing_filter)
+
     with get_conn() as conn:
         content, company = gesher_exporter.generate_gesher_file_for_multiple(conn, person_ids, year, month)
 
@@ -236,6 +263,8 @@ def export_excel(year: Optional[int] = None, month: Optional[int] = None) -> Res
                 'שעות 200%': round(totals.get('calc200', 0) / 60, 2),
                 'נסיעות': round(totals.get('travel', 0), 2),
                 'תוספות': round(totals.get('extras', 0), 2),
+                'ת.מקצועי': round(totals.get('professional_support', 0), 2),
+                'סה"כ': round(totals.get('rounded_total', 0), 2),
             }
             summary_rows.append(row)
 

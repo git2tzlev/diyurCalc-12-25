@@ -255,7 +255,14 @@ def to_gematria(num: int) -> str:
 
 
 def format_currency(value: float | int | None) -> str:
-    """Format number as currency with thousand separators (e.g., 11403.00 -> 11,403.00)."""
+    """Format number as currency with thousand separators (e.g., 11403.0 -> 11,403.0)."""
+    if value is None:
+        value = 0
+    return f"{float(value):,.1f}"
+
+
+def format_currency_total(value: float | int | None) -> str:
+    """פורמט סכום סה"כ עם 2 ספרות אחרי הנקודה."""
     if value is None:
         value = 0
     return f"{float(value):,.2f}"

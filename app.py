@@ -28,9 +28,12 @@ from core.database import (
 from core.logic import (
     calculate_person_monthly_totals,
 )
-from utils.utils import human_date, format_currency
+from utils.utils import human_date, format_currency, format_currency_total
 from routes.home import home
-from routes.guide import simple_summary_view, guide_view
+from routes.guide import (
+    simple_summary_view, guide_view, shifts_report_view,
+    shifts_report_pdf, shifts_report_email
+)
 from routes.admin import (
     manage_payment_codes, update_payment_codes,
     demo_sync_page, sync_demo_database, demo_sync_status,
@@ -51,6 +54,7 @@ from routes.email import (
     send_test_email_route,
     send_guide_email_route,
     send_all_guides_email_route,
+    send_all_to_single_email_route,
 )
 from routes.stats import (
     stats_page,
@@ -121,6 +125,7 @@ app = FastAPI(title="ניהול משמרות בענן")
 templates = Jinja2Templates(directory=str(config.TEMPLATES_DIR))
 templates.env.filters["human_date"] = human_date
 templates.env.filters["format_currency"] = format_currency
+templates.env.filters["format_currency_total"] = format_currency_total
 templates.env.globals["app_version"] = config.VERSION
 
 
@@ -307,6 +312,28 @@ def simple_summary_route(request: Request, person_id: int, month: int | None = N
 def guide_route(request: Request, person_id: int, month: int | None = None, year: int | None = None):
     """Detailed guide view."""
     return guide_view(request, person_id, month, year)
+
+
+@app.get("/guide/{person_id}/shifts/pdf")
+def shifts_report_pdf_route(request: Request, person_id: int, month: int | None = None, year: int | None = None):
+    """Download shifts report as PDF."""
+    return shifts_report_pdf(request, person_id, month, year)
+
+
+@app.get("/guide/{person_id}/shifts", response_class=HTMLResponse)
+def shifts_report_route(request: Request, person_id: int, month: int | None = None, year: int | None = None):
+    """Shifts report view for a guide."""
+    return shifts_report_view(request, person_id, month, year)
+
+
+@app.post("/api/send-shifts-email/{person_id}")
+async def shifts_report_email_route(request: Request, person_id: int, year: int, month: int):
+    """Send shifts report via email."""
+    try:
+        return await shifts_report_email(request, person_id, year, month)
+    except Exception as e:
+        logger.error(f"Unhandled error in shifts_report_email_route: {e}", exc_info=True)
+        return JSONResponse({"success": False, "error": f"שגיאה לא צפויה: {str(e)}"})
 
 
 @app.get("/admin", include_in_schema=False)
@@ -551,6 +578,12 @@ async def send_guide_email_api(request: Request, person_id: int, year: int, mont
 def send_all_guides_email_api(request: Request, year: int, month: int):
     """Send guide report emails to all active guides."""
     return send_all_guides_email_route(request, year, month)
+
+
+@app.post("/api/send-all-to-single-email")
+async def send_all_to_single_email_api(request: Request, year: int, month: int):
+    """שליחת כל דוחות המדריכים למייל אחד."""
+    return await send_all_to_single_email_route(request, year, month)
 
 
 @app.post("/api/toggle-demo-mode")

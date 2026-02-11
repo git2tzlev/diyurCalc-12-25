@@ -7,6 +7,8 @@ import configparser
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
 
+from core.database import get_housing_array_filter
+
 # נתיב לקובץ התצורה
 CONFIG_PATH = Path(__file__).parent / "gesher_config.ini"
 
@@ -413,15 +415,26 @@ def generate_gesher_file(conn, year: int, month: int, filter_name: str = None, c
         company = options.get('default_company', '001')
 
     minimum_wage = get_minimum_wage(conn)
+    housing_filter = get_housing_array_filter()
 
-    # שליפת מיפוי עובדים למפעלים
-    cursor = conn.execute("""
-        SELECT p.id, p.name, p.meirav_code, e.code as employer_code
-        FROM people p
-        LEFT JOIN employers e ON p.employer_id = e.id
-        WHERE p.is_active::integer = 1 AND p.meirav_code IS NOT NULL AND p.meirav_code != ''
-        ORDER BY p.name
-    """)
+    # שליפת מיפוי עובדים למפעלים - עם סינון לפי מערך דיור אם מוגדר
+    if housing_filter is not None:
+        cursor = conn.execute("""
+            SELECT p.id, p.name, p.meirav_code, e.code as employer_code
+            FROM people p
+            LEFT JOIN employers e ON p.employer_id = e.id
+            WHERE p.is_active::integer = 1 AND p.meirav_code IS NOT NULL AND p.meirav_code != ''
+              AND p.housing_array_id = %s
+            ORDER BY p.name
+        """, (housing_filter,))
+    else:
+        cursor = conn.execute("""
+            SELECT p.id, p.name, p.meirav_code, e.code as employer_code
+            FROM people p
+            LEFT JOIN employers e ON p.employer_id = e.id
+            WHERE p.is_active::integer = 1 AND p.meirav_code IS NOT NULL AND p.meirav_code != ''
+            ORDER BY p.name
+        """)
     all_people = {row['id']: row for row in cursor.fetchall()}
 
     # חישוב יעיל - כל העובדים בבת אחת
