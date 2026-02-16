@@ -164,21 +164,19 @@
         <span class="summary-label">סה"כ משמרות כוננות</span><br>
         <span class="summary-value">{{ standby_count }}</span>
       </td>
+      {% if total_additions_no_travel and total_additions_no_travel > 0 %}
       <td>
         <span class="summary-label">סה"כ תוספות (&#8362;)</span><br>
-        <span class="summary-value">{{ "%.2f"|format(total_additions) }}</span>
+        <span class="summary-value">{{ "%.2f"|format(total_additions_no_travel) }}</span>
       </td>
-      <td>
-        <span class="summary-label">סה"כ שכר (&#8362;)</span><br>
-        <span class="summary-value" style="color: #16a34a; font-size: 15px;">{{ "%.2f"|format(total_salary) }}</span>
-      </td>
+      {% endif %}
     </tr>
   </table>
 
   {% if variable_shifts and variable_shifts|length > 0 %}
   <div style="margin-top: 20px; text-align: center;">
     <h3 style="margin: 0 0 10px; font-size: 14px; color: #475569; border-bottom: 2px solid #94a3b8; padding-bottom: 5px; display: inline-block;">
-      סיכום שעות בתעריף משתנה
+      פירוט שעות בתעריף משתנה
     </h3>
     <table style="max-width: 500px; margin: 0 auto;">
       <thead>

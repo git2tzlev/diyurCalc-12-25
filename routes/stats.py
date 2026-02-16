@@ -12,7 +12,7 @@ from fastapi import Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from core.config import config
-from core.database import get_conn, get_housing_array_filter
+from core.database import get_conn, get_housing_array_filter, get_default_period
 from core.logic import calculate_monthly_summary
 from utils.utils import format_currency, human_date, available_months_from_db
 
@@ -67,11 +67,12 @@ def stats_page(
         year: שנה לתצוגה
         month: חודש לתצוגה
     """
-    now = datetime.now(config.LOCAL_TZ)
-    if year is None:
-        year = now.year
-    if month is None:
-        month = now.month
+    if year is None or month is None:
+        default_year, default_month = get_default_period(request)
+        if year is None:
+            year = default_year
+        if month is None:
+            month = default_month
 
     housing_filter = get_housing_array_filter()
     months_all = available_months_from_db(housing_filter)

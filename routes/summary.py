@@ -5,14 +5,13 @@ Contains general summary and export functionality.
 from __future__ import annotations
 
 import time
-from datetime import datetime
 from typing import Optional
 
 from fastapi import Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from core.config import config
-from core.database import get_conn
+from core.database import get_conn, get_default_period
 from core.logic import (
     get_payment_codes,
     calculate_monthly_summary,
@@ -38,12 +37,13 @@ def general_summary(
     start_time = time.time()
     logger.info(f"Starting general_summary for {month}/{year}, filter: {q}")
 
-    # Set default date if not provided
-    now = datetime.now(config.LOCAL_TZ)
-    if year is None:
-        year = now.year
-    if month is None:
-        month = now.month
+    # Set default date if not provided - נסה לקרוא מהעוגייה, אחרת חודש קודם
+    if year is None or month is None:
+        default_year, default_month = get_default_period(request)
+        if year is None:
+            year = default_year
+        if month is None:
+            month = default_month
 
     conn_start = time.time()
     with get_conn() as conn:

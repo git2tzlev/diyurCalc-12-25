@@ -21,27 +21,27 @@ logger = logging.getLogger(__name__)
 def safe_delete_file(file_path: str, max_retries: int = 5, retry_delay: float = 1.0, initial_wait: float = 2.0) -> bool:
     """
     Safely delete a file with retry mechanism for Windows file locking issues.
-    
+
     Args:
         file_path: Path to the file to delete
         max_retries: Maximum number of retry attempts (default: 5)
         retry_delay: Delay between retries in seconds (default: 1.0)
         initial_wait: Initial wait time before first deletion attempt in seconds (default: 2.0)
-    
+
     Returns:
         True if file was successfully deleted, False otherwise
     """
     import time
-    
+
     if not os.path.exists(file_path):
         logger.debug(f"File does not exist, nothing to delete: {file_path}")
         return True
-    
+
     # Initial wait to allow processes (like Edge/Chrome) to release file handles
     if initial_wait > 0:
         logger.debug(f"Waiting {initial_wait} seconds before attempting to delete: {file_path}")
         time.sleep(initial_wait)
-    
+
     for attempt in range(1, max_retries + 1):
         try:
             os.unlink(file_path)
@@ -72,7 +72,7 @@ def safe_delete_file(file_path: str, max_retries: int = 5, retry_delay: float = 
                 time.sleep(retry_delay)
             else:
                 return False
-    
+
     return False
 
 
@@ -253,7 +253,7 @@ def generate_guide_pdf(conn, person_id: int, year: int, month: int) -> Optional[
     import time
     from fastapi.testclient import TestClient
     from core.config import config
-    
+
     # Import app inside function to avoid circular dependency
     try:
         from app import app
@@ -269,13 +269,13 @@ def generate_guide_pdf(conn, person_id: int, year: int, month: int) -> Optional[
         # 1. Render HTML using TestClient (internal execution, no network deadlock)
         client = TestClient(app)
         response = client.get(f"/guide/{person_id}?year={year}&month={month}")
-        
+
         if response.status_code != 200:
             logger.error(f"Failed to render guide page: {response.status_code}")
             return None
-            
+
         html_content = response.text
-        
+
         # 2. Fix static assets for file:// access
         # Convert /static/path to file:///absolute/path/static/path
         if config.STATIC_DIR:
@@ -283,11 +283,11 @@ def generate_guide_pdf(conn, person_id: int, year: int, month: int) -> Optional[
             # Ensure it ends with / if needed, though as_uri usually doesn't for dirs?
             # actually as_uri on Windows path might be file:///C:/.../static
             # We want to replace all "/static/" references.
-            
+
             # Simple replace: href="/static/css..." -> href="file:///.../static/css..."
             # We strip the leading slash from the uri if present in replacement
             # static_base_uri usually looks like 'file:///F:/.../static'
-            
+
             html_content = html_content.replace('"/static/', f'"{static_base_uri}/')
             html_content = html_content.replace("'/static/", f"'{static_base_uri}/")
 
@@ -295,11 +295,11 @@ def generate_guide_pdf(conn, person_id: int, year: int, month: int) -> Optional[
         fd, temp_html_path = tempfile.mkstemp(suffix='.html')
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
             f.write(html_content)
-            
+
         # 4. Prepare temp PDF path
         fd_pdf, temp_pdf_path = tempfile.mkstemp(suffix='.pdf')
         os.close(fd_pdf) # Just reserve the name
-        
+
         # 5. Find Browser (Edge or Chrome)
         # We try standard paths for both
         browser_paths = [
@@ -308,13 +308,13 @@ def generate_guide_pdf(conn, person_id: int, year: int, month: int) -> Optional[
             r"C:\Program Files\Google\Chrome\Application\chrome.exe",
             r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
         ]
-        
+
         browser_exe = None
         for path in browser_paths:
             if os.path.exists(path):
                 browser_exe = path
                 break
-        
+
         if not browser_exe:
             logger.error("No suitable browser (Edge/Chrome) found for PDF generation")
             return None
@@ -332,7 +332,7 @@ def generate_guide_pdf(conn, person_id: int, year: int, month: int) -> Optional[
 
         logger.info(f"Generating PDF using browser from local file: {temp_html_path}")
         logger.info(f"Running browser command: {cmd}")
-        
+
         # Use Popen for better process control
         process = subprocess.Popen(
             cmd,
@@ -340,7 +340,7 @@ def generate_guide_pdf(conn, person_id: int, year: int, month: int) -> Optional[
             stderr=subprocess.PIPE,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
         )
-        
+
         # Wait for process to complete with timeout
         try:
             stdout, stderr = process.communicate(timeout=45)
@@ -393,13 +393,13 @@ def generate_guide_pdf(conn, person_id: int, year: int, month: int) -> Optional[
     except Exception as e:
         logger.error(f"Error generating PDF: {e}", exc_info=True)
         return None
-    
+
     finally:
         # Cleanup temp files with retry mechanism
         if temp_html_path:
             logger.debug(f"Cleaning up HTML temp file: {temp_html_path}")
             safe_delete_file(temp_html_path, initial_wait=1.0)
-        
+
         if temp_pdf_path:
             logger.debug(f"Cleaning up PDF temp file: {temp_pdf_path}")
             safe_delete_file(temp_pdf_path, initial_wait=1.0)
@@ -434,6 +434,17 @@ def send_email_with_pdf(
         msg['From'] = formataddr((str(Header(from_name, 'utf-8')), from_email))
         msg['To'] = formataddr((str(Header(to_name, 'utf-8')), to_email))
         msg['Subject'] = Header(subject, 'utf-8')
+
+        # Headers למניעת תשובות אוטומטיות ולסימון המייל כאוטומטי
+        # Reply-To - אם יש כתובת noreply בהגדרות, נשתמש בה
+        reply_to_email = settings.get('reply_to_email') or from_email
+        msg['Reply-To'] = reply_to_email
+        # RFC 3834 - סימון שהמייל נוצר אוטומטית
+        msg['Auto-Submitted'] = 'auto-generated'
+        # Microsoft Outlook - מניעת תשובות אוטומטיות
+        msg['X-Auto-Response-Suppress'] = 'All'
+        # סימון כמייל בכמות גדולה/אוטומטי
+        msg['Precedence'] = 'bulk'
 
         # Add body as HTML with RTL for proper Hebrew display
         html_body = f"""<!DOCTYPE html>
@@ -507,6 +518,9 @@ def send_guide_email(conn, person_id: int, year: int, month: int, custom_email: 
 בברכה,
 מדור שכר
 צהר הלב
+
+<span style="color: #888; font-size: 11px;">─────────────────────────────</span>
+<span style="color: red; font-size: 11px;">הודעה זו נשלחה באופן אוטומטי. אין להשיב למייל זה.</span>
 """
         pdf_filename = f"דוח_שכר_{person['name']}_{month:02d}_{year}.pdf"
 
@@ -626,8 +640,8 @@ def send_all_guides_to_single_email(conn, year: int, month: int, target_email: s
 סה"כ {guide_count} דוחות בקובץ (כל מדריך בעמוד נפרד).
 {f"לא ניתן היה ליצור דוח עבור: {', '.join(failed_guides)}" if failed_guides else ""}
 
-בברכה,
-מערכת דיור003
+<span style="color: #888; font-size: 11px;">─────────────────────────────</span>
+<span style="color: red; font-size: 11px;">הודעה זו נשלחה באופן אוטומטי. אין להשיב למייל זה.</span>
 """,
             pdf_bytes=pdf_bytes,
             pdf_filename=f"דוחות_שכר_כל_המדריכים_{month:02d}_{year}.pdf"
@@ -646,61 +660,159 @@ def send_all_guides_to_single_email(conn, year: int, month: int, target_email: s
         return {"success": False, "error": str(e)}
 
 
+def send_selected_guides_email(conn, guide_ids: list, year: int, month: int) -> Dict[str, Any]:
+    """שליחת דוחות למדריכים נבחרים בלבד (לפי רשימת מזהים)."""
+    try:
+        logger.info(f"=== התחלת שליחת מיילים ל-{len(guide_ids)} מדריכים - {month:02d}/{year} ===")
+
+        settings = get_email_settings(conn)
+        if not settings:
+            logger.error("הגדרות מייל לא נמצאו")
+            return {"success": False, "error": "הגדרות מייל לא נמצאו"}
+
+        if not guide_ids:
+            logger.warning("לא נבחרו מדריכים")
+            return {"success": False, "error": "לא נבחרו מדריכים"}
+
+        # שליפת פרטי המדריכים הנבחרים שיש להם מייל
+        placeholders = ",".join(["%s"] * len(guide_ids))
+        guides = conn.execute(f"""
+            SELECT id, name, email
+            FROM people
+            WHERE id IN ({placeholders})
+            AND email IS NOT NULL
+            AND email != ''
+        """, tuple(guide_ids)).fetchall()
+
+        if not guides:
+            logger.warning("לא נמצאו מדריכים עם מייל ברשימה")
+            return {"success": False, "error": "לא נמצאו מדריכים עם מייל ברשימה"}
+
+        logger.info(f"נמצאו {len(guides)} מדריכים עם מייל מתוך {len(guide_ids)} שנבחרו")
+
+        results = {"success": [], "failed": []}
+        total = len(guides)
+
+        for idx, guide in enumerate(guides, 1):
+            guide_name = guide['name']
+            guide_email = guide['email']
+            logger.info(f"[{idx}/{total}] שולח ל: {guide_name} ({guide_email})...")
+
+            result = send_guide_email(conn, guide['id'], year, month)
+
+            if result.get('success'):
+                logger.info(f"[{idx}/{total}] ✓ נשלח בהצלחה: {guide_name} -> {guide_email}")
+                results['success'].append({"name": guide_name, "email": guide_email})
+            else:
+                error_msg = result.get('error', 'שגיאה לא ידועה')
+                logger.error(f"[{idx}/{total}] ✗ נכשל: {guide_name} ({guide_email}) - {error_msg}")
+                results['failed'].append({
+                    "name": guide_name,
+                    "email": guide_email,
+                    "error": error_msg
+                })
+
+        success_count = len(results['success'])
+        failed_count = len(results['failed'])
+
+        logger.info(f"=== סיום שליחה: {success_count} הצליחו, {failed_count} נכשלו ===")
+
+        if failed_count > 0:
+            logger.warning(f"נכשלו: {', '.join([f['name'] for f in results['failed']])}")
+
+        return {
+            "success": True,
+            "message": f"נשלחו {success_count} מתוך {total} מיילים",
+            "total": total,
+            "success_count": success_count,
+            "failed_count": failed_count,
+            "details": results
+        }
+
+    except Exception as e:
+        logger.error(f"Error in send_selected_guides_email: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+def send_selected_guides_to_single_email(conn, guide_ids: list, year: int, month: int, target_email: str) -> Dict[str, Any]:
+    """שליחת דוחות מדריכים נבחרים למייל אחד (קובץ PDF משולב)."""
+    try:
+        settings = get_email_settings(conn)
+        if not settings:
+            return {"success": False, "error": "הגדרות מייל לא נמצאו"}
+
+        if not target_email:
+            return {"success": False, "error": "לא הוזנה כתובת מייל"}
+
+        if not guide_ids:
+            return {"success": False, "error": "לא נבחרו מדריכים"}
+
+        # שליפת פרטי המדריכים הנבחרים
+        placeholders = ",".join(["%s"] * len(guide_ids))
+        guides = conn.execute(f"""
+            SELECT id, name
+            FROM people
+            WHERE id IN ({placeholders})
+            ORDER BY name
+        """, tuple(guide_ids)).fetchall()
+
+        if not guides:
+            return {"success": False, "error": "לא נמצאו מדריכים ברשימה"}
+
+        # Generate combined PDF with selected guides
+        pdf_bytes, guide_count, failed_guides = _generate_combined_guides_pdf(
+            conn, guides, year, month
+        )
+
+        if not pdf_bytes:
+            return {"success": False, "error": "לא ניתן היה ליצור את ה-PDF"}
+
+        # Send single email with combined PDF
+        result = send_email_with_pdf(
+            settings=settings,
+            to_email=target_email,
+            to_name="",
+            subject=f"דוחות שכר מדריכים - חודש {month:02d}/{year}",
+            body=f"""שלום,
+
+מצורף קובץ PDF עם דוחות פירוט שעות העבודה והתשלום לחודש {month:02d}/{year}.
+
+סה"כ {guide_count} דוחות בקובץ (כל מדריך בעמוד נפרד).
+{f"לא ניתן היה ליצור דוח עבור: {', '.join(failed_guides)}" if failed_guides else ""}
+
+<span style="color: #888; font-size: 11px;">─────────────────────────────</span>
+<span style="color: red; font-size: 11px;">הודעה זו נשלחה באופן אוטומטי. אין להשיב למייל זה.</span>
+""",
+            pdf_bytes=pdf_bytes,
+            pdf_filename=f"דוחות_שכר_מדריכים_{month:02d}_{year}.pdf"
+        )
+
+        if result['success']:
+            msg = f"נשלח קובץ PDF עם {guide_count} דוחות ל-{target_email}"
+            if failed_guides:
+                msg += f" (נכשלו: {', '.join(failed_guides)})"
+            return {"success": True, "message": msg}
+        else:
+            return result
+
+    except Exception as e:
+        logger.error(f"Error in send_selected_guides_to_single_email: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
 def _generate_combined_guides_pdf(conn, guides, year: int, month: int):
     """יצירת קובץ PDF אחד משולב עם כל המדריכים - כל מדריך בעמוד נפרד.
 
-    שולף נתונים ישירות מ-time_reports כמו בדוח הבודד.
+    משתמש ב-prepare_guide_pdf_data מ-routes.guide לקבלת נתונים זהים לדוח הבודד.
     """
-    import calendar
-    from datetime import datetime, date
-    from typing import Dict
+    import time
+    import subprocess
+    import tempfile
     from jinja2 import Environment, FileSystemLoader
-    from core.config import config
-    from core.database import get_conn
-    from core.time_utils import span_minutes, get_shabbat_times_cache
-    from utils.utils import month_range_ts
-    from core.history import get_minimum_wage_for_month
-    from app_utils import get_daily_segments_data, aggregate_daily_segments_to_monthly
+    from routes.guide import prepare_guide_pdf_data
 
     failed_guides = []
     successful_guides = 0
-
-    # Hebrew day names
-    def _get_hebrew_day_name(d) -> str:
-        """מחזיר שם יום בעברית."""
-        day_map = {0: 'ב', 1: 'ג', 2: 'ד', 3: 'ה', 4: 'ו', 5: 'ש', 6: 'א'}
-        return day_map.get(d.weekday(), '')
-
-    def _calculate_segment_hours(start_time_str, end_time_str, shift_type_id, segments_by_shift):
-        """חישוב שעות עבודה וכוננות לפי סגמנטים."""
-        if not start_time_str or not end_time_str:
-            return 0.0, 0.0
-
-        actual_start, actual_end = span_minutes(start_time_str, end_time_str)
-        total_work = 0.0
-        total_standby = 0.0
-
-        segment_list = segments_by_shift.get(shift_type_id, [])
-        if not segment_list:
-            # אין סגמנטים - הכל עבודה
-            total_minutes = actual_end - actual_start
-            if total_minutes < 0:
-                total_minutes += 24 * 60
-            return round(total_minutes / 60, 2), 0.0
-
-        for seg in segment_list:
-            seg_start, seg_end = span_minutes(seg["start_time"], seg["end_time"])
-            overlap_start = max(seg_start, actual_start)
-            overlap_end = min(seg_end, actual_end)
-
-            if overlap_end > overlap_start:
-                overlap_minutes = overlap_end - overlap_start
-                if seg.get("segment_type") == "standby":
-                    total_standby += overlap_minutes
-                else:
-                    total_work += overlap_minutes
-
-        return round(total_work / 60, 2), round(total_standby / 60, 2)
 
     try:
         # Setup Jinja2 template
@@ -710,363 +822,20 @@ def _generate_combined_guides_pdf(conn, guides, year: int, month: int):
         # Collect HTML content from all guides
         html_parts = []
 
-        # תאריכי החודש
-        start_dt, end_dt = month_range_ts(year, month)
-        start_date = start_dt.date()
-        end_date = end_dt.date()
-
-        for i, guide in enumerate(guides):
+        for guide in guides:
             try:
                 person_id = guide['id']
                 person_name = guide['name']
 
-                # Get person info
-                person = conn.execute(
-                    "SELECT id, name, email, type FROM people WHERE id = %s",
-                    (person_id,)
-                ).fetchone()
+                # שימוש בפונקציה המשותפת להכנת נתונים - זהה לדוח הבודד
+                pdf_data = prepare_guide_pdf_data(conn, person_id, year, month)
 
-                if not person:
+                if not pdf_data:
                     failed_guides.append(person_name)
                     continue
 
-                # שליפת משמרות מ-time_reports
-                reports = conn.execute("""
-                    SELECT
-                        tr.id, tr.date, tr.start_time, tr.end_time, tr.shift_type_id,
-                        st.name AS shift_type_name,
-                        a.name AS apartment_name
-                    FROM time_reports tr
-                    LEFT JOIN shift_types st ON tr.shift_type_id = st.id
-                    LEFT JOIN apartments a ON tr.apartment_id = a.id
-                    WHERE tr.person_id = %s
-                      AND tr.date >= %s AND tr.date < %s
-                    ORDER BY tr.date, tr.start_time
-                """, (person_id, start_date, end_date)).fetchall()
-
-                # שליפת סגמנטים
-                shift_ids = list({r["shift_type_id"] for r in reports if r["shift_type_id"]})
-                segments_by_shift = {}
-                if shift_ids:
-                    placeholders = ",".join(["%s"] * len(shift_ids))
-                    segments = conn.execute(f"""
-                        SELECT shift_type_id, segment_type, start_time, end_time
-                        FROM shift_time_segments
-                        WHERE shift_type_id IN ({placeholders})
-                        ORDER BY shift_type_id, order_index
-                    """, tuple(shift_ids)).fetchall()
-                    for seg in segments:
-                        segments_by_shift.setdefault(seg["shift_type_id"], []).append(seg)
-
-                # בניית שורות הדוח
-                shifts_data = []
-                total_work_hours = 0.0
-                standby_count = 0
-
-                for r in reports:
-                    r_date = r["date"]
-                    if isinstance(r_date, datetime):
-                        r_date = r_date.date()
-
-                    # עיבוד שם סוג משמרת
-                    shift_name = r["shift_type_name"] or ""
-                    if shift_name.startswith("משמרת "):
-                        shift_name = shift_name[len("משמרת "):]
-
-                    # בדיקה אם תגבור
-                    is_tagbor = "תגבור" in shift_name
-                    segment_list = segments_by_shift.get(r["shift_type_id"], [])
-
-                    if is_tagbor and segment_list and r["start_time"] and r["end_time"]:
-                        # תצוגה מיוחדת למשמרת תגבור
-                        actual_start, actual_end = span_minutes(r["start_time"], r["end_time"])
-                        overlapping_segments = []
-                        for seg in segment_list:
-                            seg_start, seg_end = span_minutes(seg["start_time"], seg["end_time"])
-                            overlap_start = max(seg_start, actual_start)
-                            overlap_end = min(seg_end, actual_end)
-                            if overlap_end > overlap_start:
-                                overlapping_segments.append({
-                                    "overlap_start": overlap_start,
-                                    "overlap_end": overlap_end,
-                                    "segment_type": seg.get("segment_type", "work"),
-                                })
-
-                        first_segment = True
-                        for idx, seg_data in enumerate(overlapping_segments):
-                            is_last_segment = (idx == len(overlapping_segments) - 1)
-                            overlap_start = seg_data["overlap_start"]
-                            overlap_end = seg_data["overlap_end"]
-                            segment_type = seg_data["segment_type"]
-
-                            is_friday_tagbor = (r["shift_type_id"] == 108)
-                            is_shabbat_tagbor = (r["shift_type_id"] == 109)
-
-                            if first_segment and is_friday_tagbor:
-                                display_start = f"{(actual_start // 60) % 24:02d}:{actual_start % 60:02d}"
-                                calc_start = actual_start
-                            else:
-                                display_start = f"{(overlap_start // 60) % 24:02d}:{overlap_start % 60:02d}"
-                                calc_start = overlap_start
-
-                            if is_last_segment and is_shabbat_tagbor:
-                                display_end = f"{(actual_end // 60) % 24:02d}:{actual_end % 60:02d}"
-                                calc_end = actual_end
-                            else:
-                                display_end = f"{(overlap_end // 60) % 24:02d}:{overlap_end % 60:02d}"
-                                calc_end = overlap_end
-
-                            segment_minutes = calc_end - calc_start
-                            segment_hours = round(segment_minutes / 60, 2)
-
-                            if segment_type == "standby":
-                                work_hours = 0.0
-                                standby_hours = segment_hours
-                            else:
-                                work_hours = segment_hours
-                                standby_hours = 0.0
-
-                            total_work_hours += work_hours
-                            if standby_hours > 0:
-                                standby_count += 1
-
-                            shifts_data.append({
-                                "date": r_date.strftime("%d/%m/%y") if first_segment else "",
-                                "day": _get_hebrew_day_name(r_date) if first_segment else "",
-                                "apartment": r["apartment_name"] or "" if first_segment else "",
-                                "shift_type": shift_name if first_segment else "",
-                                "start_time": display_start,
-                                "end_time": display_end,
-                                "work_hours": work_hours,
-                                "standby_hours": standby_hours,
-                                "tagbor_group": True,
-                                "tagbor_first": first_segment,
-                                "tagbor_last": is_last_segment,
-                            })
-                            first_segment = False
-
-                    elif r["shift_type_id"] == 107 and r["start_time"] and r["end_time"]:
-                        # משמרת לילה - חישוב מיוחד
-                        actual_start, actual_end = span_minutes(r["start_time"], r["end_time"])
-                        FIRST_WORK_MINUTES = 120
-                        STANDBY_END_MINUTES = 6 * 60 + 30
-
-                        work_end_first = actual_start + FIRST_WORK_MINUTES
-                        first_work_minutes = min(FIRST_WORK_MINUTES, actual_end - actual_start)
-
-                        standby_start = work_end_first
-                        if actual_end < actual_start:
-                            actual_end_adjusted = actual_end + 24 * 60
-                        else:
-                            actual_end_adjusted = actual_end
-
-                        if actual_start >= 12 * 60:
-                            standby_end_target = STANDBY_END_MINUTES + 24 * 60
-                        else:
-                            standby_end_target = STANDBY_END_MINUTES
-
-                        standby_end = min(standby_end_target, actual_end_adjusted)
-                        standby_minutes = max(0, standby_end - standby_start)
-
-                        morning_work_start = standby_end_target
-                        morning_work_minutes = max(0, actual_end_adjusted - morning_work_start)
-
-                        work_hours = round((first_work_minutes + morning_work_minutes) / 60, 2)
-                        standby_hours = round(standby_minutes / 60, 2)
-
-                        total_work_hours += work_hours
-                        if standby_hours > 0:
-                            standby_count += 1
-
-                        shifts_data.append({
-                            "date": r_date.strftime("%d/%m/%y"),
-                            "day": _get_hebrew_day_name(r_date),
-                            "apartment": r["apartment_name"] or "",
-                            "shift_type": shift_name,
-                            "start_time": r["start_time"][:5] if r["start_time"] else "",
-                            "end_time": r["end_time"][:5] if r["end_time"] else "",
-                            "work_hours": round(work_hours, 2),
-                            "standby_hours": round(standby_hours, 2),
-                        })
-                    else:
-                        # תצוגה רגילה
-                        work_hours, standby_hours = 0.0, 0.0
-                        if r["start_time"] and r["end_time"]:
-                            work_hours, standby_hours = _calculate_segment_hours(
-                                r["start_time"], r["end_time"],
-                                r["shift_type_id"], segments_by_shift
-                            )
-
-                        total_work_hours += work_hours
-                        if standby_hours > 0:
-                            standby_count += 1
-
-                        shifts_data.append({
-                            "date": r_date.strftime("%d/%m/%y"),
-                            "day": _get_hebrew_day_name(r_date),
-                            "apartment": r["apartment_name"] or "",
-                            "shift_type": shift_name,
-                            "start_time": r["start_time"][:5] if r["start_time"] else "",
-                            "end_time": r["end_time"][:5] if r["end_time"] else "",
-                            "work_hours": round(work_hours, 2),
-                            "standby_hours": round(standby_hours, 2),
-                        })
-
-                # שליפת תשלומים נוספים
-                payment_comps = conn.execute("""
-                    SELECT
-                        pc.quantity, pc.rate, pc.description,
-                        pct.name AS component_type_name
-                    FROM payment_components pc
-                    LEFT JOIN payment_component_types pct ON pc.component_type_id = pct.id
-                    WHERE pc.person_id = %s
-                      AND pc.date >= %s AND pc.date < %s
-                    ORDER BY pc.date
-                """, (person_id, start_date, end_date)).fetchall()
-
-                payments_by_type: Dict[str, float] = {}
-                total_additions = 0.0
-                for pc in payment_comps:
-                    # תעריפים באגורות - מחלקים ב-100
-                    amount = (pc["quantity"] * pc["rate"]) / 100
-                    total_additions += amount
-                    # סיכום לפי סוג תשלום
-                    type_name = pc["component_type_name"] or "אחר"
-                    if pc["description"]:
-                        key = f"{type_name} - {pc['description']}"
-                    else:
-                        key = type_name
-                    payments_by_type[key] = payments_by_type.get(key, 0) + amount
-
-                payments_data = [
-                    {"description": desc, "amount": round(amt, 2)}
-                    for desc, amt in payments_by_type.items()
-                ]
-
-                # חישוב תעריפים משתנים מ-daily_segments
-                MINIMUM_WAGE = get_minimum_wage_for_month(conn.conn, year, month)
-                shabbat_cache = get_shabbat_times_cache(conn.conn)
-
-                with get_conn() as temp_conn:
-                    daily_segments, _ = get_daily_segments_data(
-                        temp_conn, person_id, year, month, shabbat_cache, MINIMUM_WAGE
-                    )
-                    monthly_totals = aggregate_daily_segments_to_monthly(
-                        temp_conn, daily_segments, person_id, year, month, MINIMUM_WAGE
-                    )
-
-                variable_by_shift = {}
-                for day in daily_segments:
-                    for chain in day.get("chains", []):
-                        chain_shift_name = chain.get("shift_name", "") or ""
-                        chain_rate = chain.get("effective_rate", MINIMUM_WAGE) or MINIMUM_WAGE
-
-                        if not chain_shift_name:
-                            continue
-
-                        is_special_hourly = chain.get("is_special_hourly", False)
-                        is_variable_rate = is_special_hourly or abs(chain_rate - MINIMUM_WAGE) > 0.01
-
-                        if is_variable_rate:
-                            calc100 = chain.get("calc100", 0) or 0
-                            calc125 = chain.get("calc125", 0) or 0
-                            calc150 = chain.get("calc150", 0) or 0
-                            calc150_shabbat = chain.get("calc150_shabbat", 0) or 0
-                            calc175 = chain.get("calc175", 0) or 0
-                            calc200 = chain.get("calc200", 0) or 0
-                            total_minutes = calc100 + calc125 + calc150 + calc175 + calc200
-                            shabbat_minutes = calc150_shabbat + calc175 + calc200
-
-                            if total_minutes <= 0:
-                                continue
-
-                            rounded_rate = round(chain_rate, 2)
-                            h100 = round(calc100 / 60, 2)
-                            h125 = round(calc125 / 60, 2)
-                            h150 = round(calc150 / 60, 2)
-                            h175 = round(calc175 / 60, 2)
-                            h200 = round(calc200 / 60, 2)
-
-                            gesher_payment = (
-                                h100 * 1.0 * rounded_rate +
-                                h125 * 1.25 * rounded_rate +
-                                h150 * 1.5 * rounded_rate +
-                                h175 * 1.75 * rounded_rate +
-                                h200 * 2.0 * rounded_rate +
-                                (chain.get("escort_bonus_pay", 0) or 0)
-                            )
-
-                            group_key = (chain_shift_name, rounded_rate)
-                            if group_key not in variable_by_shift:
-                                variable_by_shift[group_key] = {
-                                    "shift_name": chain_shift_name,
-                                    "minutes": 0,
-                                    "shabbat_minutes": 0,
-                                    "payment": 0,
-                                    "rate": rounded_rate
-                                }
-                            variable_by_shift[group_key]["minutes"] += total_minutes
-                            variable_by_shift[group_key]["shabbat_minutes"] += shabbat_minutes
-                            variable_by_shift[group_key]["payment"] += gesher_payment
-
-                # בדיקה אילו משמרות יש להן תעריפים שונים
-                shift_names_with_multiple_rates = set()
-                shift_name_rates = {}
-                for (shift_name, rate), data in variable_by_shift.items():
-                    if shift_name not in shift_name_rates:
-                        shift_name_rates[shift_name] = set()
-                    shift_name_rates[shift_name].add(rate)
-                for shift_name, rates in shift_name_rates.items():
-                    if len(rates) > 1:
-                        shift_names_with_multiple_rates.add(shift_name)
-
-                variable_shifts = []
-                for group_key, data in variable_by_shift.items():
-                    hours = round(data["minutes"] / 60, 2)
-                    payment = round(data["payment"], 1)
-                    rate = data["rate"]
-                    base_shift_name = data["shift_name"]
-
-                    if base_shift_name in shift_names_with_multiple_rates:
-                        is_shabbat = data["shabbat_minutes"] > (data["minutes"] * 0.5)
-                        display_name = f"{base_shift_name} (שבת)" if is_shabbat else f"{base_shift_name} (חול)"
-                    else:
-                        display_name = base_shift_name
-
-                    base_payment = round(hours * rate, 2)
-                    overtime_payment = round(payment - base_payment, 1)
-                    variable_shifts.append({
-                        "shift_name": display_name,
-                        "hours": hours,
-                        "rate": rate,
-                        "overtime_payment": overtime_payment,
-                        "payment": payment
-                    })
-
-                # Calculate period dates
-                last_day = calendar.monthrange(year, month)[1]
-                period_start = f"01/{month:02d}/{str(year)[2:]}"
-                period_end = f"{last_day}/{month:02d}/{str(year)[2:]}"
-                generation_time = datetime.now(config.LOCAL_TZ).strftime("%H:%M:%S %d.%m.%Y")
-
-                summary_total_salary = monthly_totals.get("rounded_total", 0)
-                variable_rate_total = round(monthly_totals.get("payment_calc_variable", 0) or 0, 1)
-
                 # Render template for this guide
-                guide_html = template.render(
-                    person=dict(person),
-                    shifts_data=shifts_data,
-                    payments_data=payments_data,
-                    total_work_hours=round(total_work_hours, 2),
-                    standby_count=standby_count,
-                    total_additions=round(total_additions, 2),
-                    total_salary=round(summary_total_salary, 2),
-                    period_start=period_start,
-                    period_end=period_end,
-                    generation_time=generation_time,
-                    variable_shifts=variable_shifts,
-                    variable_rate_total=variable_rate_total,
-                )
+                guide_html = template.render(**pdf_data)
 
                 # Extract body content
                 body_match = re.search(r'<body[^>]*>(.*?)</body>', guide_html, re.DOTALL | re.IGNORECASE)
@@ -1206,10 +975,6 @@ def _generate_combined_guides_pdf(conn, guides, year: int, month: int):
         logger.info(f"Generating combined PDF for {successful_guides} guides using headless browser")
 
         # יצירת PDF באמצעות דפדפן headless
-        import subprocess
-        import tempfile
-        import time
-
         temp_html_path = None
         temp_pdf_path = None
 
@@ -1295,5 +1060,3 @@ def _generate_combined_guides_pdf(conn, guides, year: int, month: int):
     except Exception as e:
         logger.error(f"Error generating combined PDF: {e}", exc_info=True)
         return None, 0, failed_guides
-
-

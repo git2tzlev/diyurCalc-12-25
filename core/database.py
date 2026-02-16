@@ -64,6 +64,44 @@ def get_demo_mode_from_cookie(request) -> bool:
     return cookie_value.lower() == "true"
 
 
+def get_selected_period_from_cookie(request) -> tuple[Optional[int], Optional[int]]:
+    """
+    מחלץ את החודש והשנה האחרונים שנבחרו מעוגיית הבקשה.
+
+    Returns:
+        (year, month) או (None, None) אם אין עוגייה
+    """
+    cookie_value = request.cookies.get("selected_period", "")
+    if cookie_value:
+        parts = cookie_value.split("-")
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            return int(parts[0]), int(parts[1])
+    return None, None
+
+
+def get_default_period(request) -> tuple[int, int]:
+    """
+    מחזיר את החודש והשנה לברירת מחדל.
+    עדיפות: 1) מה שנשמר בעוגייה 2) החודש שלפני הנוכחי
+
+    Returns:
+        (year, month)
+    """
+    from datetime import datetime
+    from core.config import config
+
+    # נסה לקרוא מהעוגייה
+    cookie_year, cookie_month = get_selected_period_from_cookie(request)
+    if cookie_year and cookie_month:
+        return cookie_year, cookie_month
+
+    # ברירת מחדל: חודש קודם
+    now = datetime.now(config.LOCAL_TZ)
+    if now.month == 1:
+        return now.year - 1, 12
+    return now.year, now.month - 1
+
+
 def _get_prod_pool() -> pool.ThreadedConnectionPool:
     """Get or create the production connection pool."""
     global _prod_pool
@@ -163,11 +201,13 @@ class PostgresConnection:
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.conn.closed:
             return
-        if exc_type is not None:
-            self.rollback()
-        else:
-            self.commit()
-        self.close()
+        try:
+            if exc_type is not None:
+                self.rollback()
+            else:
+                self.commit()
+        finally:
+            self.close()
 
 
 def get_conn() -> PostgresConnection:

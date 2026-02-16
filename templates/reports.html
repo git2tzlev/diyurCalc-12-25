@@ -1,0 +1,406 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="header-line">
+    <h2 class="section-title">ניהול דוחות</h2>
+    <div class="muted">שליחת דוחות חודשיים למדריכים במייל</div>
+  </div>
+
+  <form method="get" class="controls" style="margin: 12px 0; flex-wrap: wrap; gap: 8px;">
+    <label for="housing_array_id">מערך דיור:</label>
+    <select id="housing_array_id" name="housing_array_id">
+      <option value="">כל המערכים</option>
+      {% for ha in housing_arrays %}
+        <option value="{{ ha.id }}" {% if ha.id == selected_housing_array %}selected{% endif %}>{{ ha.name }}</option>
+      {% endfor %}
+    </select>
+    <label for="month">חודש:</label>
+    <select id="month" name="month">
+      {% for m in months %}
+        <option value="{{ m.month }}" data-year="{{ m.year }}" {% if m.month == selected_month and m.year == selected_year %}selected{% endif %}>{{ m.label }}</option>
+      {% endfor %}
+    </select>
+    <label for="year">שנה:</label>
+    <select id="year" name="year">
+      {% for y in years %}
+        <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit">טען דוחות</button>
+    {% if selected_month and selected_year %}
+      <span class="muted">{{ total_guides }} מדריכים | {{ guides_with_email }} עם מייל</span>
+    {% endif %}
+  </form>
+
+  <div style="display: flex; gap: 8px; margin-bottom: 15px; flex-wrap: wrap; align-items: center; padding: 12px; background: #f8f9fa; border-radius: 8px;">
+    <button id="sendAllEmailBtn" onclick="sendAllEmails()" style="padding: 8px 16px; background: #6f42c1; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500;">
+      📧 שלח דוחות לכל המדריכים
+    </button>
+    <span style="color: #999; margin: 0 4px;">|</span>
+    <input type="email" id="singleEmailInput" placeholder="מייל לשליחת כל הדוחות" style="padding: 6px 10px; border: 1px solid #ccc; border-radius: 6px; width: 200px; font-size: 14px;">
+    <button id="sendToSingleBtn" onclick="sendAllToSingleEmail()" style="padding: 8px 16px; background: #0d6efd; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500;">
+      📨 שלח PDF משולב למייל זה
+    </button>
+  </div>
+
+  <!-- אזור התקדמות שליחה -->
+  <div id="progressArea" style="display: none; margin-bottom: 15px; padding: 15px; background: #e8f4fc; border-radius: 8px; border: 1px solid #b8daff;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+      <strong id="progressTitle">שולח מיילים...</strong>
+      <span id="progressCount" style="font-size: 14px; color: #666;"></span>
+    </div>
+    <div style="background: #ddd; border-radius: 4px; height: 8px; margin-bottom: 10px;">
+      <div id="progressBar" style="background: #28a745; height: 100%; border-radius: 4px; width: 0%; transition: width 0.3s;"></div>
+    </div>
+    <div id="progressLog" style="max-height: 150px; overflow-y: auto; font-size: 12px; font-family: monospace; background: white; padding: 8px; border-radius: 4px; border: 1px solid #ddd;"></div>
+  </div>
+
+  <table id="reportsTable">
+    <thead>
+      <tr>
+        <th>שם</th>
+        <th>סוג</th>
+        <th>משמרות</th>
+        <th style="width: 220px;">מייל</th>
+        <th style="width: 160px;">פעולות</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for g in guides %}
+      <tr data-guide-id="{{ g.id }}">
+        <td>
+          <a href="/guide/{{ g.id }}{% if selected_month and selected_year %}?month={{ selected_month }}&year={{ selected_year }}{% endif %}" style="text-decoration: none; color: #0969da; font-weight: 500;">
+            {{ g.name }}
+          </a>
+        </td>
+        <td>{{ g.type }}</td>
+        <td>{{ g.shift_count }}</td>
+        <td>
+          <input type="email" class="guide-email-input" value="{{ g.email }}" placeholder="הזן מייל" style="width: 100%; padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px;">
+        </td>
+        <td>
+          <button class="send-btn" onclick="sendGuideEmail({{ g.id }}, this)" style="padding: 4px 12px; background: #1f6feb; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">
+            📧 שלח
+          </button>
+          <span class="status-indicator" style="margin-right: 8px; font-size: 12px;"></span>
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="5" class="muted">לא נמצאו מדריכים עם דוחות לחודש זה</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<style>
+  .guide-email-input:focus {
+    border-color: #1f6feb;
+    outline: none;
+  }
+  .send-btn:hover {
+    background: #1a5cd0;
+  }
+  .send-btn:disabled {
+    background: #ccc;
+    cursor: not-allowed;
+  }
+  .status-indicator.sending { color: #f59e0b; }
+  .status-indicator.success { color: #22c55e; }
+  .status-indicator.error { color: #ef4444; }
+  tbody tr:hover {
+    background-color: #f6f8fa;
+  }
+</style>
+
+<script>
+  const selectedYear = {{ selected_year or 'null' }};
+  const selectedMonth = {{ selected_month or 'null' }};
+
+  // קבלת רשימת מזהי המדריכים המוצגים בטבלה
+  function getDisplayedGuideIds() {
+    const rows = document.querySelectorAll('#reportsTable tbody tr[data-guide-id]');
+    return Array.from(rows).map(row => parseInt(row.dataset.guideId));
+  }
+
+  document.addEventListener('DOMContentLoaded', function() {
+    const monthSelect = document.getElementById('month');
+    const yearSelect = document.getElementById('year');
+    const housingArraySelect = document.getElementById('housing_array_id');
+    const form = document.querySelector('form.controls');
+
+    // פונקציה לשליחת טופס עם הסרת פרמטרים ריקים
+    function submitFormClean() {
+      // השבת שדות ריקים כדי שלא יישלחו בכתובת
+      if (housingArraySelect && housingArraySelect.value === '') {
+        housingArraySelect.disabled = true;
+      }
+      form.submit();
+    }
+
+    if (monthSelect && form) {
+      monthSelect.addEventListener('change', function() {
+        const selectedOption = monthSelect.options[monthSelect.selectedIndex];
+        const yearFromMonth = selectedOption.getAttribute('data-year');
+        if (yearFromMonth && yearSelect) {
+          yearSelect.value = yearFromMonth;
+        }
+        submitFormClean();
+      });
+    }
+
+    if (yearSelect && form) {
+      yearSelect.addEventListener('change', function() {
+        submitFormClean();
+      });
+    }
+
+    if (housingArraySelect && form) {
+      housingArraySelect.addEventListener('change', function() {
+        submitFormClean();
+      });
+    }
+  });
+
+  async function sendGuideEmail(personId, btn) {
+    const row = btn.closest('tr');
+    const emailInput = row.querySelector('.guide-email-input');
+    const statusSpan = row.querySelector('.status-indicator');
+    const email = emailInput.value.trim();
+
+    if (!email) {
+      alert('יש להזין כתובת מייל');
+      emailInput.focus();
+      return;
+    }
+
+    if (!selectedYear || !selectedMonth) {
+      alert('יש לבחור חודש ושנה');
+      return;
+    }
+
+    btn.disabled = true;
+    statusSpan.className = 'status-indicator sending';
+    statusSpan.textContent = 'שולח...';
+
+    try {
+      const response = await fetch(
+        `/api/send-guide-email/${personId}?year=${selectedYear}&month=${selectedMonth}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: email })
+        }
+      );
+
+      const result = await response.json();
+
+      if (result.success) {
+        statusSpan.className = 'status-indicator success';
+        statusSpan.textContent = '✓ נשלח';
+      } else {
+        statusSpan.className = 'status-indicator error';
+        statusSpan.textContent = '✗ ' + (result.error || 'שגיאה');
+      }
+    } catch (error) {
+      statusSpan.className = 'status-indicator error';
+      statusSpan.textContent = '✗ שגיאת רשת';
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function sendAllEmails() {
+    const btn = document.getElementById('sendAllEmailBtn');
+    const originalText = btn.innerText;
+    const progressArea = document.getElementById('progressArea');
+    const progressBar = document.getElementById('progressBar');
+    const progressCount = document.getElementById('progressCount');
+    const progressLog = document.getElementById('progressLog');
+    const progressTitle = document.getElementById('progressTitle');
+
+    // איסוף מידע על המדריכים מהטבלה
+    const rows = document.querySelectorAll('#reportsTable tbody tr[data-guide-id]');
+    const guides = [];
+    rows.forEach(row => {
+      const id = row.dataset.guideId;
+      const name = row.querySelector('a')?.textContent?.trim() || 'לא ידוע';
+      const emailInput = row.querySelector('.guide-email-input');
+      const email = emailInput?.value?.trim() || '';
+      if (id && email) {
+        guides.push({ id, name, email, row });
+      }
+    });
+
+    if (!selectedYear || !selectedMonth) {
+      alert('יש לבחור חודש ושנה');
+      return;
+    }
+
+    if (guides.length === 0) {
+      alert('אין מדריכים עם מייל לשליחה');
+      return;
+    }
+
+    const BATCH_SIZE = 5; // שליחה של 5 במקביל
+    const estimatedTime = Math.ceil(guides.length / BATCH_SIZE) * 5; // ~5 שניות לכל batch
+
+    if (!confirm(`לשלוח את הדוחות במייל ל-${guides.length} מדריכים?\n\nשליחה במקביל (${BATCH_SIZE} בכל פעם) - כ-${estimatedTime} שניות`)) {
+      return;
+    }
+
+    // הצגת אזור התקדמות
+    btn.disabled = true;
+    btn.innerText = 'שולח...';
+    progressArea.style.display = 'block';
+    progressBar.style.width = '0%';
+    progressLog.innerHTML = '';
+    progressTitle.textContent = 'שולח מיילים...';
+
+    let successCount = 0;
+    let failedCount = 0;
+    let processedCount = 0;
+    const total = guides.length;
+
+    function addLog(text, isError = false) {
+      const time = new Date().toLocaleTimeString('he-IL');
+      const color = isError ? '#dc3545' : '#28a745';
+      const icon = isError ? '✗' : '✓';
+      progressLog.innerHTML += `<div style="color: ${color};">[${time}] ${icon} ${text}</div>`;
+      progressLog.scrollTop = progressLog.scrollHeight;
+    }
+
+    function updateProgress() {
+      progressCount.textContent = `${processedCount}/${total} (${successCount} הצליחו, ${failedCount} נכשלו)`;
+      progressBar.style.width = `${(processedCount / total) * 100}%`;
+    }
+
+    // פונקציה לשליחת מייל בודד
+    async function sendOne(guide) {
+      const statusSpan = guide.row.querySelector('.status-indicator');
+      if (statusSpan) {
+        statusSpan.className = 'status-indicator sending';
+        statusSpan.textContent = 'שולח...';
+        statusSpan.style.color = '#0d6efd';
+      }
+
+      try {
+        const response = await fetch(
+          `/api/send-guide-email/${guide.id}?year=${selectedYear}&month=${selectedMonth}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: guide.email })
+          }
+        );
+
+        const result = await response.json();
+
+        if (result.success) {
+          successCount++;
+          addLog(`${guide.name} (${guide.email})`, false);
+          if (statusSpan) {
+            statusSpan.className = 'status-indicator success';
+            statusSpan.textContent = '✓ נשלח';
+            statusSpan.style.color = '#28a745';
+          }
+        } else {
+          failedCount++;
+          addLog(`${guide.name} - ${result.error || 'שגיאה'}`, true);
+          if (statusSpan) {
+            statusSpan.className = 'status-indicator error';
+            statusSpan.textContent = '✗ נכשל';
+            statusSpan.style.color = '#dc3545';
+          }
+        }
+      } catch (error) {
+        failedCount++;
+        addLog(`${guide.name} - שגיאת רשת`, true);
+        if (statusSpan) {
+          statusSpan.className = 'status-indicator error';
+          statusSpan.textContent = '✗ שגיאה';
+          statusSpan.style.color = '#dc3545';
+        }
+      }
+
+      processedCount++;
+      updateProgress();
+    }
+
+    addLog(`התחלת שליחה ל-${total} מדריכים (${BATCH_SIZE} במקביל)`, false);
+
+    // שליחה ב-batches במקביל
+    for (let i = 0; i < guides.length; i += BATCH_SIZE) {
+      const batch = guides.slice(i, i + BATCH_SIZE);
+      const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+      const totalBatches = Math.ceil(guides.length / BATCH_SIZE);
+
+      progressTitle.textContent = `שולח batch ${batchNum}/${totalBatches} (${batch.map(g => g.name).join(', ')})`;
+
+      // שליחה במקביל של כל ה-batch
+      await Promise.all(batch.map(guide => sendOne(guide)));
+    }
+
+    // סיום
+    progressTitle.textContent = `סיום: ${successCount} נשלחו, ${failedCount} נכשלו`;
+    progressBar.style.background = failedCount > 0 ? '#ffc107' : '#28a745';
+    addLog(`סה"כ: ${successCount} הצליחו, ${failedCount} נכשלו`, failedCount > 0);
+
+    btn.disabled = false;
+    btn.innerText = originalText;
+  }
+
+  async function sendAllToSingleEmail() {
+    const btn = document.getElementById('sendToSingleBtn');
+    const emailInput = document.getElementById('singleEmailInput');
+    const email = emailInput.value.trim();
+    const originalText = btn.innerText;
+    const guideIds = getDisplayedGuideIds();
+
+    if (!email) {
+      alert('יש להזין כתובת מייל');
+      emailInput.focus();
+      return;
+    }
+
+    if (!selectedYear || !selectedMonth) {
+      alert('יש לבחור חודש ושנה');
+      return;
+    }
+
+    if (guideIds.length === 0) {
+      alert('אין מדריכים לשליחה');
+      return;
+    }
+
+    if (!confirm(`לשלוח את דוחות ${guideIds.length} המדריכים לכתובת ${email}?`)) {
+      return;
+    }
+
+    btn.disabled = true;
+    btn.innerText = 'שולח...';
+
+    try {
+      const response = await fetch(`/api/send-guides-to-single-email?year=${selectedYear}&month=${selectedMonth}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email, guide_ids: guideIds })
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        alert(result.message);
+      } else {
+        alert('שגיאה: ' + (result.error || 'שגיאה לא ידועה'));
+      }
+    } catch (error) {
+      alert('שגיאת רשת: ' + error.message);
+    } finally {
+      btn.disabled = false;
+      btn.innerText = originalText;
+    }
+  }
+</script>
+{% endblock %}

@@ -396,6 +396,7 @@ def guide_view(
 
     # עיבוד שעות בתעריף משתנה לפי משמרת + תעריף
     variable_shifts = []
+    variable_rate_total_from_rows = 0.0  # סה"כ מחושב מהשורות המעוגלות
     for group_key, data in variable_by_shift.items():
         hours = round(data["minutes"] / 60, 2)
         payment = round(data["payment"], 1)
@@ -411,6 +412,7 @@ def guide_view(
             "overtime_payment": overtime_payment,
             "payment": payment
         })
+        variable_rate_total_from_rows += payment  # סכימת הערכים המעוגלים
 
     # שעות נוספות (125%)
     calc125_hours = round((monthly_totals.get('calc125', 0) or 0) / 60, 2)
@@ -597,11 +599,15 @@ def shifts_report_view(
                 SELECT
                     tr.id, tr.person_id, tr.apartment_id, tr.date,
                     tr.start_time, tr.end_time, tr.shift_type_id,
+                    tr.rate_apartment_type_id,
+                    a.apartment_type_id,
                     st.name AS shift_type_name,
-                    a.name AS apartment_name
+                    a.name AS apartment_name,
+                    rate_at.name AS rate_apartment_type_name
                 FROM time_reports tr
                 LEFT JOIN shift_types st ON tr.shift_type_id = st.id
                 LEFT JOIN apartments a ON tr.apartment_id = a.id
+                LEFT JOIN apartment_types rate_at ON rate_at.id = tr.rate_apartment_type_id
                 WHERE tr.person_id = %s
                   AND tr.date >= %s AND tr.date < %s
                   AND a.housing_array_id = %s
@@ -612,11 +618,15 @@ def shifts_report_view(
                 SELECT
                     tr.id, tr.person_id, tr.apartment_id, tr.date,
                     tr.start_time, tr.end_time, tr.shift_type_id,
+                    tr.rate_apartment_type_id,
+                    a.apartment_type_id,
                     st.name AS shift_type_name,
-                    a.name AS apartment_name
+                    a.name AS apartment_name,
+                    rate_at.name AS rate_apartment_type_name
                 FROM time_reports tr
                 LEFT JOIN shift_types st ON tr.shift_type_id = st.id
                 LEFT JOIN apartments a ON tr.apartment_id = a.id
+                LEFT JOIN apartment_types rate_at ON rate_at.id = tr.rate_apartment_type_id
                 WHERE tr.person_id = %s
                   AND tr.date >= %s AND tr.date < %s
                 ORDER BY tr.date, tr.start_time
@@ -641,6 +651,15 @@ def shifts_report_view(
         total_work_hours = 0.0
         total_standby_hours = 0.0
         standby_count = 0
+
+        def _build_apartment_display(r: dict) -> str:
+            """בונה שם דירה עם סוג תשלום שונה אם קיים."""
+            apt_name = r.get("apartment_name") or ""
+            rate_type_name = r.get("rate_apartment_type_name")
+            # הצג "(משולם כ: X)" רק אם סוג התשלום שונה מסוג הדירה
+            if rate_type_name and r.get("rate_apartment_type_id") != r.get("apartment_type_id"):
+                return f"{apt_name} (משולם כ: {rate_type_name})"
+            return apt_name
 
         for r in reports:
             r_date = r["date"]
@@ -726,7 +745,7 @@ def shifts_report_view(
                     shifts_data.append({
                         "date": r_date.strftime("%d/%m/%y") if first_segment else "",
                         "day": _get_hebrew_day_name(r_date) if first_segment else "",
-                        "apartment": r["apartment_name"] or "" if first_segment else "",
+                        "apartment": _build_apartment_display(r) if first_segment else "",
                         "shift_type": shift_name if first_segment else "",
                         "start_time": display_start,
                         "end_time": display_end,
@@ -782,7 +801,7 @@ def shifts_report_view(
                 shifts_data.append({
                     "date": r_date.strftime("%d/%m/%y"),
                     "day": _get_hebrew_day_name(r_date),
-                    "apartment": r["apartment_name"] or "",
+                    "apartment": _build_apartment_display(r),
                     "shift_type": shift_name,
                     "start_time": r["start_time"][:5] if r["start_time"] else "",
                     "end_time": r["end_time"][:5] if r["end_time"] else "",
@@ -806,7 +825,7 @@ def shifts_report_view(
                 shifts_data.append({
                     "date": r_date.strftime("%d/%m/%y"),
                     "day": _get_hebrew_day_name(r_date),
-                    "apartment": r["apartment_name"] or "",
+                    "apartment": _build_apartment_display(r),
                     "shift_type": shift_name,
                     "start_time": r["start_time"][:5] if r["start_time"] else "",
                     "end_time": r["end_time"][:5] if r["end_time"] else "",
@@ -848,8 +867,12 @@ def shifts_report_view(
             total_additions += amount
             # סיכום לפי סוג תשלום
             type_name = pc["component_type_name"] or "אחר"
-            # הוספת תיאור אם קיים
-            if pc["description"]:
+            # בדיקה אם זה נסיעות - אם כן, איחוד לשורה אחת ללא תיאור
+            is_travel = "נסיעות" in type_name or "נסיעה" in type_name
+            if is_travel:
+                # נסיעות - שורה אחת עם שם הסוג בלבד
+                key = type_name
+            elif pc["description"]:
                 key = f"{type_name} - {pc['description']}"
             else:
                 key = type_name
@@ -948,6 +971,7 @@ def shifts_report_view(
                 shift_names_with_multiple_rates.add(shift_name)
 
         variable_shifts = []
+        variable_rate_total_from_rows = 0.0  # סה"כ מחושב מהשורות המעוגלות
         for group_key, data in variable_by_shift.items():
             hours = round(data["minutes"] / 60, 2)
             payment = round(data["payment"], 1)
@@ -970,12 +994,13 @@ def shifts_report_view(
                 "overtime_payment": overtime_payment,
                 "payment": payment
             })
+            variable_rate_total_from_rows += payment  # סכימת הערכים המעוגלים
 
         # סיכום מ-monthly_totals (כמו בייצוא שכר)
         # סה"כ שכר מ-monthly_totals (מקור האמת לשכר)
         summary_total_salary = monthly_totals.get("rounded_total", 0)
-        # סה"כ תעריף משתנה - ישירות מ-monthly_totals (כמו בייצוא גשר)
-        variable_rate_total = round(monthly_totals.get("payment_calc_variable", 0) or 0, 1)
+        # סה"כ תעריף משתנה - סכום הערכים המעוגלים המוצגים בטבלה
+        variable_rate_total = round(variable_rate_total_from_rows, 1)
 
     return templates.TemplateResponse(
         "guide_shifts.html",
@@ -1043,10 +1068,405 @@ def shifts_report_pdf(
     )
 
 
+def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int) -> Optional[Dict]:
+    """
+    הכנת נתונים לדוח PDF של מדריך.
+
+    Args:
+        conn: חיבור לדאטאבייס
+        person_id: מזהה המדריך
+        year: שנה
+        month: חודש
+
+    Returns:
+        Dict עם כל הנתונים הנדרשים לתבנית guide_shifts_pdf.html, או None אם המדריך לא נמצא
+    """
+    import calendar
+    from core.time_utils import span_minutes, get_shabbat_times_cache
+    from core.history import get_minimum_wage_for_month
+
+    person = conn.execute(
+        "SELECT id, name, email, type FROM people WHERE id = %s",
+        (person_id,)
+    ).fetchone()
+
+    if not person:
+        return None
+
+    # תאריכי החודש
+    start_dt, end_dt = month_range_ts(year, month)
+    start_date = start_dt.date()
+    end_date = end_dt.date()
+
+    # שליפת משמרות
+    reports = conn.execute("""
+        SELECT
+            tr.id, tr.date, tr.start_time, tr.end_time, tr.shift_type_id,
+            tr.rate_apartment_type_id,
+            a.apartment_type_id,
+            st.name AS shift_type_name,
+            a.name AS apartment_name,
+            rate_at.name AS rate_apartment_type_name
+        FROM time_reports tr
+        LEFT JOIN shift_types st ON tr.shift_type_id = st.id
+        LEFT JOIN apartments a ON tr.apartment_id = a.id
+        LEFT JOIN apartment_types rate_at ON rate_at.id = tr.rate_apartment_type_id
+        WHERE tr.person_id = %s
+          AND tr.date >= %s AND tr.date < %s
+        ORDER BY tr.date, tr.start_time
+    """, (person_id, start_date, end_date)).fetchall()
+
+    # שליפת סגמנטים
+    shift_ids = list({r["shift_type_id"] for r in reports if r["shift_type_id"]})
+    segments_by_shift = {}
+    if shift_ids:
+        placeholders = ",".join(["%s"] * len(shift_ids))
+        segments = conn.execute(f"""
+            SELECT shift_type_id, segment_type, start_time, end_time
+            FROM shift_time_segments
+            WHERE shift_type_id IN ({placeholders})
+            ORDER BY shift_type_id, order_index
+        """, tuple(shift_ids)).fetchall()
+        for seg in segments:
+            segments_by_shift.setdefault(seg["shift_type_id"], []).append(seg)
+
+    # בניית שורות הדוח
+    shifts_data = []
+    total_work_hours = 0.0
+    standby_count = 0
+
+    def _build_apartment_display_simple(r: dict) -> str:
+        """בונה שם דירה עם סוג תשלום שונה אם קיים."""
+        apt_name = r.get("apartment_name") or ""
+        rate_type_name = r.get("rate_apartment_type_name")
+        if rate_type_name and r.get("rate_apartment_type_id") != r.get("apartment_type_id"):
+            return f"{apt_name} (משולם כ: {rate_type_name})"
+        return apt_name
+
+    for r in reports:
+        r_date = r["date"]
+        if isinstance(r_date, datetime):
+            r_date = r_date.date()
+
+        # עיבוד שם סוג משמרת (הסרת המילה "משמרת")
+        shift_name = r["shift_type_name"] or ""
+        if shift_name.startswith("משמרת "):
+            shift_name = shift_name[len("משמרת "):]
+
+        # בדיקה אם זו משמרת תגבור עם מקטעים
+        is_tagbor = "תגבור" in shift_name
+        segment_list = segments_by_shift.get(r["shift_type_id"], [])
+
+        if is_tagbor and segment_list and r["start_time"] and r["end_time"]:
+            # תצוגה מיוחדת למשמרת תגבור - שורה לכל מקטע
+            actual_start, actual_end = span_minutes(r["start_time"], r["end_time"])
+
+            # איסוף כל המקטעים החופפים עם סוג המקטע
+            overlapping_segments = []
+            for seg in segment_list:
+                seg_start, seg_end = span_minutes(seg["start_time"], seg["end_time"])
+                overlap_start = max(seg_start, actual_start)
+                overlap_end = min(seg_end, actual_end)
+
+                if overlap_end > overlap_start:
+                    overlapping_segments.append({
+                        "overlap_start": overlap_start,
+                        "overlap_end": overlap_end,
+                        "segment_type": seg.get("segment_type", "work"),
+                    })
+
+            # עיבוד המקטעים
+            first_segment = True
+            for idx, seg_data in enumerate(overlapping_segments):
+                is_last_segment = (idx == len(overlapping_segments) - 1)
+                overlap_start = seg_data["overlap_start"]
+                overlap_end = seg_data["overlap_end"]
+                segment_type = seg_data["segment_type"]
+
+                is_friday_tagbor = (r["shift_type_id"] == 108)
+                is_shabbat_tagbor = (r["shift_type_id"] == 109)
+
+                if first_segment and is_friday_tagbor:
+                    display_start = f"{(actual_start // 60) % 24:02d}:{actual_start % 60:02d}"
+                    calc_start = actual_start
+                else:
+                    display_start = f"{(overlap_start // 60) % 24:02d}:{overlap_start % 60:02d}"
+                    calc_start = overlap_start
+
+                if is_last_segment and is_shabbat_tagbor:
+                    display_end = f"{(actual_end // 60) % 24:02d}:{actual_end % 60:02d}"
+                    calc_end = actual_end
+                else:
+                    display_end = f"{(overlap_end // 60) % 24:02d}:{overlap_end % 60:02d}"
+                    calc_end = overlap_end
+
+                segment_minutes = calc_end - calc_start
+                segment_hours = round(segment_minutes / 60, 2)
+
+                if segment_type == "standby":
+                    work_hours = 0.0
+                    standby_hours = segment_hours
+                else:
+                    work_hours = segment_hours
+                    standby_hours = 0.0
+
+                total_work_hours += work_hours
+                if standby_hours > 0:
+                    standby_count += 1
+
+                shifts_data.append({
+                    "date": r_date.strftime("%d/%m/%y") if first_segment else "",
+                    "day": _get_hebrew_day_name(r_date) if first_segment else "",
+                    "apartment": _build_apartment_display_simple(r) if first_segment else "",
+                    "shift_type": shift_name if first_segment else "",
+                    "start_time": display_start,
+                    "end_time": display_end,
+                    "work_hours": work_hours,
+                    "standby_hours": standby_hours,
+                    "tagbor_group": True,
+                    "tagbor_first": first_segment,
+                    "tagbor_last": is_last_segment,
+                })
+                first_segment = False
+
+        elif r["shift_type_id"] == 107 and r["start_time"] and r["end_time"]:
+            # משמרת לילה - חישוב מיוחד
+            actual_start, actual_end = span_minutes(r["start_time"], r["end_time"])
+            FIRST_WORK_MINUTES = 120
+            STANDBY_END_MINUTES = 6 * 60 + 30
+
+            work_end_first = actual_start + FIRST_WORK_MINUTES
+            first_work_minutes = min(FIRST_WORK_MINUTES, actual_end - actual_start)
+
+            standby_start = work_end_first
+            if actual_end < actual_start:
+                actual_end_adjusted = actual_end + 24 * 60
+            else:
+                actual_end_adjusted = actual_end
+
+            if actual_start >= 12 * 60:
+                standby_end_target = STANDBY_END_MINUTES + 24 * 60
+            else:
+                standby_end_target = STANDBY_END_MINUTES
+
+            standby_end = min(standby_end_target, actual_end_adjusted)
+            standby_minutes = max(0, standby_end - standby_start)
+
+            morning_work_start = standby_end_target
+            morning_work_minutes = max(0, actual_end_adjusted - morning_work_start)
+
+            work_hours = round((first_work_minutes + morning_work_minutes) / 60, 2)
+            standby_hours = round(standby_minutes / 60, 2)
+
+            total_work_hours += work_hours
+            if standby_hours > 0:
+                standby_count += 1
+
+            shifts_data.append({
+                "date": r_date.strftime("%d/%m/%y"),
+                "day": _get_hebrew_day_name(r_date),
+                "apartment": _build_apartment_display_simple(r),
+                "shift_type": shift_name,
+                "start_time": r["start_time"][:5] if r["start_time"] else "",
+                "end_time": r["end_time"][:5] if r["end_time"] else "",
+                "work_hours": round(work_hours, 2),
+                "standby_hours": round(standby_hours, 2),
+            })
+        else:
+            # תצוגה רגילה
+            work_hours, standby_hours = 0.0, 0.0
+            if r["start_time"] and r["end_time"]:
+                work_hours, standby_hours = _calculate_segment_hours(
+                    r["start_time"], r["end_time"],
+                    r["shift_type_id"], segments_by_shift
+                )
+
+            total_work_hours += work_hours
+            if standby_hours > 0:
+                standby_count += 1
+
+            shifts_data.append({
+                "date": r_date.strftime("%d/%m/%y"),
+                "day": _get_hebrew_day_name(r_date),
+                "apartment": _build_apartment_display_simple(r),
+                "shift_type": shift_name,
+                "start_time": r["start_time"][:5] if r["start_time"] else "",
+                "end_time": r["end_time"][:5] if r["end_time"] else "",
+                "work_hours": round(work_hours, 2),
+                "standby_hours": round(standby_hours, 2),
+            })
+
+    # שליפת תשלומים נוספים
+    payment_comps = conn.execute("""
+        SELECT
+            pc.quantity, pc.rate, pc.description,
+            pct.name AS component_type_name
+        FROM payment_components pc
+        LEFT JOIN payment_component_types pct ON pc.component_type_id = pct.id
+        WHERE pc.person_id = %s
+          AND pc.date >= %s AND pc.date < %s
+        ORDER BY pc.date
+    """, (person_id, start_date, end_date)).fetchall()
+
+    payments_by_type: Dict[str, float] = {}
+    total_additions = 0.0
+    total_additions_no_travel = 0.0
+    for pc in payment_comps:
+        # תעריפים באגורות - מחלקים ב-100
+        amount = (pc["quantity"] * pc["rate"]) / 100
+        total_additions += amount
+        type_name = pc["component_type_name"] or "אחר"
+        # בדיקה אם זה נסיעות - אם כן, איחוד לשורה אחת ללא תיאור
+        is_travel = "נסיעות" in type_name or "נסיעה" in type_name
+        if is_travel:
+            # נסיעות - שורה אחת עם שם הסוג בלבד
+            key = type_name
+        elif pc["description"]:
+            key = f"{type_name} - {pc['description']}"
+        else:
+            key = type_name
+        payments_by_type[key] = payments_by_type.get(key, 0) + amount
+        # חישוב תוספות ללא נסיעות
+        if not is_travel:
+            total_additions_no_travel += amount
+
+    payments_data = [
+        {"description": desc, "amount": round(amt, 2)}
+        for desc, amt in payments_by_type.items()
+    ]
+
+    # חישוב תעריפים משתנים מ-daily_segments
+    MINIMUM_WAGE = get_minimum_wage_for_month(conn.conn, year, month)
+    shabbat_cache = get_shabbat_times_cache(conn.conn)
+
+    daily_segments, _ = get_daily_segments_data(
+        conn, person_id, year, month, shabbat_cache, MINIMUM_WAGE
+    )
+    monthly_totals = aggregate_daily_segments_to_monthly(
+        conn, daily_segments, person_id, year, month, MINIMUM_WAGE
+    )
+
+    variable_by_shift = {}
+    for day in daily_segments:
+        for chain in day.get("chains", []):
+            chain_shift_name = chain.get("shift_name", "") or ""
+            chain_rate = chain.get("effective_rate", MINIMUM_WAGE) or MINIMUM_WAGE
+
+            if not chain_shift_name:
+                continue
+
+            is_special_hourly = chain.get("is_special_hourly", False)
+            is_variable_rate = is_special_hourly or abs(chain_rate - MINIMUM_WAGE) > 0.01
+
+            if is_variable_rate:
+                calc100 = chain.get("calc100", 0) or 0
+                calc125 = chain.get("calc125", 0) or 0
+                calc150 = chain.get("calc150", 0) or 0
+                calc150_shabbat = chain.get("calc150_shabbat", 0) or 0
+                calc175 = chain.get("calc175", 0) or 0
+                calc200 = chain.get("calc200", 0) or 0
+                total_minutes = calc100 + calc125 + calc150 + calc175 + calc200
+                shabbat_minutes = calc150_shabbat + calc175 + calc200
+
+                if total_minutes <= 0:
+                    continue
+
+                rounded_rate = round(chain_rate, 2)
+                h100 = round(calc100 / 60, 2)
+                h125 = round(calc125 / 60, 2)
+                h150 = round(calc150 / 60, 2)
+                h175 = round(calc175 / 60, 2)
+                h200 = round(calc200 / 60, 2)
+
+                gesher_payment = (
+                    h100 * 1.0 * rounded_rate +
+                    h125 * 1.25 * rounded_rate +
+                    h150 * 1.5 * rounded_rate +
+                    h175 * 1.75 * rounded_rate +
+                    h200 * 2.0 * rounded_rate +
+                    (chain.get("escort_bonus_pay", 0) or 0)
+                )
+
+                group_key = (chain_shift_name, rounded_rate)
+                if group_key not in variable_by_shift:
+                    variable_by_shift[group_key] = {
+                        "shift_name": chain_shift_name,
+                        "minutes": 0,
+                        "shabbat_minutes": 0,
+                        "payment": 0,
+                        "rate": rounded_rate
+                    }
+                variable_by_shift[group_key]["minutes"] += total_minutes
+                variable_by_shift[group_key]["shabbat_minutes"] += shabbat_minutes
+                variable_by_shift[group_key]["payment"] += gesher_payment
+
+    # בדיקה אילו משמרות יש להן תעריפים שונים
+    shift_names_with_multiple_rates = set()
+    shift_name_rates = {}
+    for (shift_name, rate), data in variable_by_shift.items():
+        if shift_name not in shift_name_rates:
+            shift_name_rates[shift_name] = set()
+        shift_name_rates[shift_name].add(rate)
+    for shift_name, rates in shift_name_rates.items():
+        if len(rates) > 1:
+            shift_names_with_multiple_rates.add(shift_name)
+
+    variable_shifts = []
+    variable_rate_total_from_rows = 0.0  # סה"כ מחושב מהשורות המעוגלות
+    for group_key, data in variable_by_shift.items():
+        hours = round(data["minutes"] / 60, 2)
+        payment = round(data["payment"], 1)
+        rate = data["rate"]
+        base_shift_name = data["shift_name"]
+
+        if base_shift_name in shift_names_with_multiple_rates:
+            is_shabbat = data["shabbat_minutes"] > (data["minutes"] * 0.5)
+            display_name = f"{base_shift_name} (שבת)" if is_shabbat else f"{base_shift_name} (חול)"
+        else:
+            display_name = base_shift_name
+
+        base_payment = round(hours * rate, 2)
+        overtime_payment = round(payment - base_payment, 1)
+        variable_shifts.append({
+            "shift_name": display_name,
+            "hours": hours,
+            "rate": rate,
+            "overtime_payment": overtime_payment,
+            "payment": payment
+        })
+        variable_rate_total_from_rows += payment  # סכימת הערכים המעוגלים
+
+    # חישוב תאריכי תקופה
+    last_day = calendar.monthrange(year, month)[1]
+    period_start = f"01/{month:02d}/{str(year)[2:]}"
+    period_end = f"{last_day}/{month:02d}/{str(year)[2:]}"
+    generation_time = datetime.now(config.LOCAL_TZ).strftime("%H:%M:%S %d.%m.%Y")
+
+    summary_total_salary = monthly_totals.get("rounded_total", 0)
+    # סה"כ תעריף משתנה - סכום הערכים המעוגלים המוצגים בטבלה
+    variable_rate_total = round(variable_rate_total_from_rows, 1)
+
+    return {
+        "person": dict(person),
+        "shifts_data": shifts_data,
+        "payments_data": payments_data,
+        "total_work_hours": round(total_work_hours, 2),
+        "standby_count": standby_count,
+        "total_additions": round(total_additions, 2),
+        "total_additions_no_travel": round(total_additions_no_travel, 2),
+        "total_salary": round(summary_total_salary, 2),
+        "period_start": period_start,
+        "period_end": period_end,
+        "generation_time": generation_time,
+        "variable_shifts": variable_shifts,
+        "variable_rate_total": variable_rate_total,
+    }
+
+
 def _generate_shifts_pdf(person_id: int, year: int, month: int, session_token: Optional[str] = None) -> Optional[bytes]:
     """
     יצירת PDF לדוח משמרות באמצעות Edge/Chrome headless.
-    מרנדר תבנית PDF ייעודית ישירות ללא שימוש ב-HTTP.
+    משתמש ב-prepare_guide_pdf_data להכנת הנתונים.
 
     Args:
         person_id: מזהה המדריך
@@ -1066,387 +1486,18 @@ def _generate_shifts_pdf(person_id: int, year: int, month: int, session_token: O
     try:
         logger.info(f"Generating shifts PDF for person_id={person_id}, {month}/{year}")
 
-        # שליפת נתונים ישירות מהדאטאבייס
+        # הכנת נתונים באמצעות הפונקציה המשותפת
         with get_conn() as conn:
-            person = conn.execute(
-                "SELECT id, name FROM people WHERE id = %s",
-                (person_id,)
-            ).fetchone()
+            pdf_data = prepare_guide_pdf_data(conn, person_id, year, month)
 
-            if not person:
-                logger.error(f"Person not found: {person_id}")
-                return None
-
-            # תאריכי החודש
-            start_dt, end_dt = month_range_ts(year, month)
-            start_date = start_dt.date()
-            end_date = end_dt.date()
-
-            # שליפת משמרות
-            reports = conn.execute("""
-                SELECT
-                    tr.id, tr.date, tr.start_time, tr.end_time, tr.shift_type_id,
-                    st.name AS shift_type_name,
-                    a.name AS apartment_name
-                FROM time_reports tr
-                LEFT JOIN shift_types st ON tr.shift_type_id = st.id
-                LEFT JOIN apartments a ON tr.apartment_id = a.id
-                WHERE tr.person_id = %s
-                  AND tr.date >= %s AND tr.date < %s
-                ORDER BY tr.date, tr.start_time
-            """, (person_id, start_date, end_date)).fetchall()
-
-            # שליפת סגמנטים
-            shift_ids = list({r["shift_type_id"] for r in reports if r["shift_type_id"]})
-            segments_by_shift = {}
-            if shift_ids:
-                placeholders = ",".join(["%s"] * len(shift_ids))
-                segments = conn.execute(f"""
-                    SELECT shift_type_id, segment_type, start_time, end_time
-                    FROM shift_time_segments
-                    WHERE shift_type_id IN ({placeholders})
-                    ORDER BY shift_type_id, order_index
-                """, tuple(shift_ids)).fetchall()
-                for seg in segments:
-                    segments_by_shift.setdefault(seg["shift_type_id"], []).append(seg)
-
-            # בניית שורות הדוח
-            shifts_data = []
-            total_work_hours = 0.0
-            standby_count = 0
-
-            for r in reports:
-                r_date = r["date"]
-                if isinstance(r_date, datetime):
-                    r_date = r_date.date()
-
-                # עיבוד שם סוג משמרת (הסרת המילה "משמרת")
-                shift_name = r["shift_type_name"] or ""
-                if shift_name.startswith("משמרת "):
-                    shift_name = shift_name[len("משמרת "):]
-
-                # בדיקה אם זו משמרת תגבור עם מקטעים
-                is_tagbor = "תגבור" in shift_name
-                segment_list = segments_by_shift.get(r["shift_type_id"], [])
-
-                if is_tagbor and segment_list and r["start_time"] and r["end_time"]:
-                    # תצוגה מיוחדת למשמרת תגבור - שורה לכל מקטע
-                    from core.time_utils import span_minutes
-                    actual_start, actual_end = span_minutes(r["start_time"], r["end_time"])
-
-                    # איסוף כל המקטעים החופפים עם סוג המקטע
-                    overlapping_segments = []
-                    for seg in segment_list:
-                        seg_start, seg_end = span_minutes(seg["start_time"], seg["end_time"])
-                        overlap_start = max(seg_start, actual_start)
-                        overlap_end = min(seg_end, actual_end)
-
-                        if overlap_end > overlap_start:
-                            overlapping_segments.append({
-                                "overlap_start": overlap_start,
-                                "overlap_end": overlap_end,
-                                "segment_type": seg.get("segment_type", "work"),
-                            })
-
-                    # עיבוד המקטעים
-                    first_segment = True
-                    for i, seg_data in enumerate(overlapping_segments):
-                        is_last_segment = (i == len(overlapping_segments) - 1)
-                        overlap_start = seg_data["overlap_start"]
-                        overlap_end = seg_data["overlap_end"]
-                        segment_type = seg_data["segment_type"]
-
-                        # המרת דקות לשעה:דקה לתצוגה
-                        # תגבור שישי (108): שעת התחלה מהדיווח, שעת סיום מהמקטע
-                        # תגבור שבת/חג (109): שעות מהמקטע, מקטע אחרון - סיום מהדיווח
-                        is_friday_tagbor = (r["shift_type_id"] == 108)
-                        is_shabbat_tagbor = (r["shift_type_id"] == 109)
-
-                        if first_segment and is_friday_tagbor:
-                            display_start = f"{(actual_start // 60) % 24:02d}:{actual_start % 60:02d}"
-                            calc_start = actual_start
-                        else:
-                            display_start = f"{(overlap_start // 60) % 24:02d}:{overlap_start % 60:02d}"
-                            calc_start = overlap_start
-
-                        # תגבור שבת/חג (109): מקטע אחרון - שעת סיום מהדיווח
-                        # תגבור שישי (108): שעת סיום תמיד מהמקטע
-                        if is_last_segment and is_shabbat_tagbor:
-                            display_end = f"{(actual_end // 60) % 24:02d}:{actual_end % 60:02d}"
-                            calc_end = actual_end
-                        else:
-                            display_end = f"{(overlap_end // 60) % 24:02d}:{overlap_end % 60:02d}"
-                            calc_end = overlap_end
-
-                        # חישוב שעות לפי הזמנים המוצגים (לא לפי החפיפה)
-                        segment_minutes = calc_end - calc_start
-                        segment_hours = round(segment_minutes / 60, 2)
-
-                        # חלוקה לעבודה/כוננות לפי סוג המקטע
-                        if segment_type == "standby":
-                            work_hours = 0.0
-                            standby_hours = segment_hours
-                        else:
-                            work_hours = segment_hours
-                            standby_hours = 0.0
-
-                        # צבירת סה"כ
-                        total_work_hours += work_hours
-                        if standby_hours > 0:
-                            standby_count += 1
-
-                        shifts_data.append({
-                            "date": r_date.strftime("%d/%m/%y") if first_segment else "",
-                            "day": _get_hebrew_day_name(r_date) if first_segment else "",
-                            "apartment": r["apartment_name"] or "" if first_segment else "",
-                            "shift_type": shift_name if first_segment else "",
-                            "start_time": display_start,
-                            "end_time": display_end,
-                            "work_hours": work_hours,
-                            "standby_hours": standby_hours,
-                            "tagbor_group": True,
-                            "tagbor_first": first_segment,
-                            "tagbor_last": is_last_segment,
-                        })
-                        first_segment = False
-                elif r["shift_type_id"] == 107 and r["start_time"] and r["end_time"]:
-                    # משמרת לילה (ID 107) - חישוב מיוחד לפי אלגוריתם קבוע
-                    # 2 שעות עבודה ראשונות, כוננות עד 06:30, עבודה אחרי 06:30
-                    from core.time_utils import span_minutes
-                    actual_start, actual_end = span_minutes(r["start_time"], r["end_time"])
-
-                    FIRST_WORK_MINUTES = 120  # 2 שעות
-                    STANDBY_END_MINUTES = 6 * 60 + 30  # 06:30
-
-                    # שלב 1: עבודה ראשונה (2 שעות מתחילת המשמרת)
-                    work_end_first = actual_start + FIRST_WORK_MINUTES
-                    first_work_minutes = min(FIRST_WORK_MINUTES, actual_end - actual_start)
-
-                    # שלב 2: כוננות (מסוף עבודה ראשונה עד 06:30)
-                    standby_start = work_end_first
-                    if actual_end < actual_start:  # עובר חצות
-                        actual_end_adjusted = actual_end + 24 * 60
-                    else:
-                        actual_end_adjusted = actual_end
-
-                    if actual_start >= 12 * 60:  # התחילה אחרי 12:00
-                        standby_end_target = STANDBY_END_MINUTES + 24 * 60  # 06:30 למחרת
-                    else:
-                        standby_end_target = STANDBY_END_MINUTES
-
-                    standby_end = min(standby_end_target, actual_end_adjusted)
-                    standby_minutes = max(0, standby_end - standby_start)
-
-                    # שלב 3: עבודה בוקר (מ-06:30 עד סיום)
-                    morning_work_start = standby_end_target
-                    morning_work_minutes = max(0, actual_end_adjusted - morning_work_start)
-
-                    # סיכום
-                    work_hours = round((first_work_minutes + morning_work_minutes) / 60, 2)
-                    standby_hours = round(standby_minutes / 60, 2)
-
-                    total_work_hours += work_hours
-                    if standby_hours > 0:
-                        standby_count += 1
-
-                    shifts_data.append({
-                        "date": r_date.strftime("%d/%m/%y"),
-                        "day": _get_hebrew_day_name(r_date),
-                        "apartment": r["apartment_name"] or "",
-                        "shift_type": shift_name,
-                        "start_time": r["start_time"][:5] if r["start_time"] else "",
-                        "end_time": r["end_time"][:5] if r["end_time"] else "",
-                        "work_hours": round(work_hours, 2),
-                        "standby_hours": round(standby_hours, 2),
-                    })
-                else:
-                    # תצוגה רגילה - שורה אחת
-                    work_hours, standby_hours = 0.0, 0.0
-                    if r["start_time"] and r["end_time"]:
-                        work_hours, standby_hours = _calculate_segment_hours(
-                            r["start_time"], r["end_time"],
-                            r["shift_type_id"], segments_by_shift
-                        )
-
-                    total_work_hours += work_hours
-                    if standby_hours > 0:
-                        standby_count += 1
-
-                    shifts_data.append({
-                        "date": r_date.strftime("%d/%m/%y"),
-                        "day": _get_hebrew_day_name(r_date),
-                        "apartment": r["apartment_name"] or "",
-                        "shift_type": shift_name,
-                        "start_time": r["start_time"][:5] if r["start_time"] else "",
-                        "end_time": r["end_time"][:5] if r["end_time"] else "",
-                        "work_hours": round(work_hours, 2),
-                        "standby_hours": round(standby_hours, 2),
-                    })
-
-            # שליפת תשלומים נוספים
-            payment_comps = conn.execute("""
-                SELECT
-                    pc.quantity, pc.rate, pc.description,
-                    pct.name AS component_type_name
-                FROM payment_components pc
-                LEFT JOIN payment_component_types pct ON pc.component_type_id = pct.id
-                WHERE pc.person_id = %s
-                  AND pc.date >= %s AND pc.date < %s
-                ORDER BY pc.date
-            """, (person_id, start_date, end_date)).fetchall()
-
-            # סיכום תשלומים לפי סוג
-            payments_by_type: Dict[str, float] = {}
-            total_additions = 0.0
-            for pc in payment_comps:
-                amount = (pc["quantity"] * pc["rate"]) / 100
-                total_additions += amount
-                type_name = pc["component_type_name"] or "אחר"
-                if pc["description"]:
-                    key = f"{type_name} - {pc['description']}"
-                else:
-                    key = type_name
-                payments_by_type[key] = payments_by_type.get(key, 0) + amount
-
-            payments_data = [
-                {"description": desc, "amount": round(amt, 2)}
-                for desc, amt in payments_by_type.items()
-            ]
-
-            # חישוב שעות בתעריף משתנה
-            MINIMUM_WAGE = get_minimum_wage_for_month(conn.conn, year, month)
-            shabbat_cache = get_shabbat_times_cache(conn.conn)
-            daily_segments, _ = get_daily_segments_data(
-                conn, person_id, year, month, shabbat_cache, MINIMUM_WAGE
-            )
-            monthly_totals = aggregate_daily_segments_to_monthly(
-                conn, daily_segments, person_id, year, month, MINIMUM_WAGE
-            )
-
-            variable_by_shift = {}
-            for day in daily_segments:
-                for chain in day.get("chains", []):
-                    chain_shift_name = chain.get("shift_name", "") or ""
-                    chain_rate = chain.get("effective_rate", MINIMUM_WAGE) or MINIMUM_WAGE
-
-                    if not chain_shift_name:
-                        continue
-
-                    is_special_hourly = chain.get("is_special_hourly", False)
-                    is_variable_rate = is_special_hourly or abs(chain_rate - MINIMUM_WAGE) > 0.01
-
-                    if is_variable_rate:
-                        calc100 = chain.get("calc100", 0) or 0
-                        calc125 = chain.get("calc125", 0) or 0
-                        calc150 = chain.get("calc150", 0) or 0  # שדה משולב - כמו ב-aggregate
-                        calc150_shabbat = chain.get("calc150_shabbat", 0) or 0
-                        calc175 = chain.get("calc175", 0) or 0
-                        calc200 = chain.get("calc200", 0) or 0
-                        total_minutes = calc100 + calc125 + calc150 + calc175 + calc200
-                        shabbat_minutes = calc150_shabbat + calc175 + calc200
-
-                        if total_minutes <= 0:
-                            continue
-
-                        rounded_rate = round(chain_rate, 2)
-
-                        # חישוב תשלום בפורמולת גשר - עיגול לכל רכיב בנפרד (בדיוק כמו aggregate)
-                        h100 = round(calc100 / 60, 2)
-                        h125 = round(calc125 / 60, 2)
-                        h150 = round(calc150 / 60, 2)
-                        h175 = round(calc175 / 60, 2)
-                        h200 = round(calc200 / 60, 2)
-
-                        gesher_payment = (
-                            h100 * 1.0 * rounded_rate +
-                            h125 * 1.25 * rounded_rate +
-                            h150 * 1.5 * rounded_rate +
-                            h175 * 1.75 * rounded_rate +
-                            h200 * 2.0 * rounded_rate +
-                            (chain.get("escort_bonus_pay", 0) or 0)
-                        )
-
-                        group_key = (chain_shift_name, rounded_rate)
-
-                        if group_key not in variable_by_shift:
-                            variable_by_shift[group_key] = {
-                                "shift_name": chain_shift_name,
-                                "minutes": 0,
-                                "shabbat_minutes": 0,
-                                "payment": 0,
-                                "rate": rounded_rate
-                            }
-                        variable_by_shift[group_key]["minutes"] += total_minutes
-                        variable_by_shift[group_key]["shabbat_minutes"] += shabbat_minutes
-                        variable_by_shift[group_key]["payment"] += gesher_payment
-
-            # בדיקה אילו משמרות יש להן תעריפים שונים
-            shift_names_with_multiple_rates = set()
-            shift_name_rates = {}
-            for (shift_name, rate), data in variable_by_shift.items():
-                if shift_name not in shift_name_rates:
-                    shift_name_rates[shift_name] = set()
-                shift_name_rates[shift_name].add(rate)
-            for shift_name, rates in shift_name_rates.items():
-                if len(rates) > 1:
-                    shift_names_with_multiple_rates.add(shift_name)
-
-            variable_shifts = []
-            for group_key, data in variable_by_shift.items():
-                hours = round(data["minutes"] / 60, 2)
-                payment = round(data["payment"], 1)
-                rate = data["rate"]
-                base_shift_name = data["shift_name"]
-
-                # הוספת סיומת אם יש תעריפים שונים לאותה משמרת
-                if base_shift_name in shift_names_with_multiple_rates:
-                    is_shabbat = data["shabbat_minutes"] > (data["minutes"] * 0.5)
-                    display_name = f"{base_shift_name} (שבת)" if is_shabbat else f"{base_shift_name} (חול)"
-                else:
-                    display_name = base_shift_name
-
-                base_payment = round(hours * rate, 2)
-                overtime_payment = round(payment - base_payment, 1)
-                variable_shifts.append({
-                    "shift_name": display_name,
-                    "hours": hours,
-                    "rate": rate,
-                    "overtime_payment": overtime_payment,
-                    "payment": payment
-                })
+        if not pdf_data:
+            logger.error(f"Person not found: {person_id}")
+            return None
 
         # רנדור התבנית
         env = Environment(loader=FileSystemLoader(str(config.TEMPLATES_DIR)))
         template = env.get_template("guide_shifts_pdf.html")
-
-        # חישוב תאריכי תקופה
-        import calendar
-        last_day = calendar.monthrange(year, month)[1]
-        period_start = f"01/{month:02d}/{str(year)[2:]}"
-        period_end = f"{last_day}/{month:02d}/{str(year)[2:]}"
-
-        # זמן הפקה
-        generation_time = datetime.now(config.LOCAL_TZ).strftime("%H:%M:%S %d.%m.%Y")
-
-        # סה"כ שכר מ-monthly_totals (מקור האמת לשכר)
-        summary_total_salary = monthly_totals.get("rounded_total", 0)
-        # סה"כ תעריף משתנה - ישירות מ-monthly_totals (כמו בייצוא גשר)
-        variable_rate_total = round(monthly_totals.get("payment_calc_variable", 0) or 0, 1)
-
-        html_content = template.render(
-            person=person,
-            shifts_data=shifts_data,
-            payments_data=payments_data,
-            total_work_hours=round(total_work_hours, 2),  # מהטבלה
-            standby_count=standby_count,  # מהטבלה
-            total_additions=round(total_additions, 2),  # מהטבלה
-            total_salary=round(summary_total_salary, 2),  # ממקור אחר
-            period_start=period_start,
-            period_end=period_end,
-            generation_time=generation_time,
-            variable_shifts=variable_shifts,
-            variable_rate_total=variable_rate_total,  # סה"כ מייצוא גשר
-        )
+        html_content = template.render(**pdf_data)
 
         # שמירה לקובץ זמני
         fd, temp_html_path = tempfile.mkstemp(suffix='.html')
@@ -1589,6 +1640,9 @@ async def shifts_report_email(
 בברכה,
 מדור שכר
 צהר הלב
+
+<span style="color: #888; font-size: 11px;">─────────────────────────────</span>
+<span style="color: red; font-size: 11px;">הודעה זו נשלחה באופן אוטומטי. אין להשיב למייל זה.</span>
 """
                 pdf_filename = f"דוח_משמרות_{person['name']}_{m:02d}_{y}.pdf"
 

@@ -46,7 +46,7 @@ def get_active_guides(housing_array_id: Optional[int] = None) -> List[Dict[str, 
             # סינון מדריכים לפי מערך דיור שלהם
             cursor.execute(
                 """
-                SELECT id, name, type, is_active, start_date
+                SELECT id, name, type, is_active, start_date, email
                 FROM people
                 WHERE is_active::integer = 1
                   AND housing_array_id = %s
@@ -57,7 +57,7 @@ def get_active_guides(housing_array_id: Optional[int] = None) -> List[Dict[str, 
         else:
             cursor.execute(
                 """
-                SELECT id, name, type, is_active, start_date
+                SELECT id, name, type, is_active, start_date, email
                 FROM people
                 WHERE is_active::integer = 1
                 ORDER BY name

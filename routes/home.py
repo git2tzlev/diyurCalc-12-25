@@ -12,7 +12,7 @@ from fastapi import Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from core.config import config
-from core.database import get_conn, get_housing_array_filter
+from core.database import get_conn, get_housing_array_filter, get_default_period
 from core.logic import get_active_guides
 from utils.utils import month_range_ts, available_months_from_db, format_currency, human_date
 
@@ -46,7 +46,13 @@ def home(
 
     if months_all:
         if month is None or year is None:
-            selected_year, selected_month = months_all[-1]
+            # נסה לקרוא מהעוגייה, אחרת חודש קודם
+            default_year, default_month = get_default_period(request)
+            # בדוק שהחודש קיים בנתונים
+            if (default_year, default_month) in months_all:
+                selected_year, selected_month = default_year, default_month
+            else:
+                selected_year, selected_month = months_all[-1]
         else:
             selected_year, selected_month = year, month
     else:

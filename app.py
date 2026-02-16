@@ -30,6 +30,7 @@ from core.logic import (
 )
 from utils.utils import human_date, format_currency, format_currency_total
 from routes.home import home
+from routes.reports import reports_management
 from routes.guide import (
     simple_summary_view, guide_view, shifts_report_view,
     shifts_report_pdf, shifts_report_email
@@ -55,6 +56,8 @@ from routes.email import (
     send_guide_email_route,
     send_all_guides_email_route,
     send_all_to_single_email_route,
+    send_selected_guides_emails_route,
+    send_selected_guides_to_single_email_route,
 )
 from routes.stats import (
     stats_page,
@@ -293,6 +296,12 @@ def logout_route(request: Request):
 def home_route(request: Request, month: int | None = None, year: int | None = None, q: str | None = None):
     """Home page route."""
     return home(request, month, year, q)
+
+
+@app.get("/reports", response_class=HTMLResponse)
+def reports_route(request: Request, month: int | None = None, year: int | None = None, housing_array_id: int | None = None):
+    """Reports management page - send guide reports via email."""
+    return reports_management(request, month, year, housing_array_id)
 
 
 @app.get("/guide", include_in_schema=False)
@@ -586,6 +595,18 @@ async def send_all_to_single_email_api(request: Request, year: int, month: int):
     return await send_all_to_single_email_route(request, year, month)
 
 
+@app.post("/api/send-guides-emails")
+async def send_selected_guides_emails_api(request: Request, year: int, month: int):
+    """שליחת דוחות למדריכים נבחרים בלבד."""
+    return await send_selected_guides_emails_route(request, year, month)
+
+
+@app.post("/api/send-guides-to-single-email")
+async def send_selected_guides_to_single_email_api(request: Request, year: int, month: int):
+    """שליחת דוחות מדריכים נבחרים למייל אחד."""
+    return await send_selected_guides_to_single_email_route(request, year, month)
+
+
 @app.post("/api/toggle-demo-mode")
 async def toggle_demo_mode(request: Request):
     """Toggle between demo and production database."""
@@ -697,6 +718,30 @@ def housing_array_status(request: Request):
         "housing_array_id": current_id,
         "housing_array_name": current_name
     }
+
+
+@app.post("/api/set-selected-period")
+async def set_selected_period_api(request: Request):
+    """שומר את החודש והשנה שנבחרו בעוגייה."""
+    try:
+        body = await request.json()
+        year = body.get("year")
+        month = body.get("month")
+    except Exception:
+        return JSONResponse({"success": False, "error": "Invalid request"}, status_code=400)
+
+    if not year or not month:
+        return JSONResponse({"success": False, "error": "Missing year or month"}, status_code=400)
+
+    response = JSONResponse({"success": True, "year": year, "month": month})
+    response.set_cookie(
+        key="selected_period",
+        value=f"{year}-{month}",
+        max_age=86400 * 365,  # שנה
+        httponly=False,
+        samesite="lax"
+    )
+    return response
 
 
 @app.on_event("startup")

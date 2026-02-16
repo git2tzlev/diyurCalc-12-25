@@ -12,7 +12,7 @@ from fastapi import Request, HTTPException
 from fastapi.responses import HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
 from core.config import config
-from core.database import get_conn, get_housing_array_filter
+from core.database import get_conn, get_housing_array_filter, get_default_period
 from services import gesher_exporter
 
 
@@ -159,11 +159,12 @@ def export_gesher_preview(
     show_zero: Optional[str] = None
 ) -> HTMLResponse:
     """תצוגה מקדימה של ייצוא גשר"""
-    now = datetime.now()
-    if year is None:
-        year = now.year
-    if month is None:
-        month = now.month
+    if year is None or month is None:
+        default_year, default_month = get_default_period(request)
+        if year is None:
+            year = default_year
+        if month is None:
+            month = default_month
 
     show_zero_flag = show_zero == "1"
 

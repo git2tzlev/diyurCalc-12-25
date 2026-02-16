@@ -223,6 +223,7 @@
         <a href="/">מדריכים - דוח שעות</a>
         <a href="/summary" style="font-weight: normal; opacity: 0.9; font-size: 0.9em; background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px;">סיכום שכר כללי</a>
         <a href="/stats" style="font-weight: normal; opacity: 0.9; font-size: 0.9em; background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px;">סטטיסטיקות</a>
+        <a href="/reports" style="font-weight: normal; opacity: 0.9; font-size: 0.9em; background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px;">ניהול דוחות</a>
         {% if request.state.current_user and request.state.current_user.role == 'super_admin' %}
         <a href="/admin/payment-codes" style="font-weight: normal; opacity: 0.9; font-size: 0.9em; background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px;">ניהול סמלי שכר</a>
         <a href="/admin/email-settings" style="font-weight: normal; opacity: 0.9; font-size: 0.9em; background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px;">⚙️ הגדרות מייל</a>
@@ -339,7 +340,39 @@
         const isDemo = document.cookie.split('; ').find(row => row.startsWith('demo_mode='))?.split('=')[1] === 'true';
         updateDemoUI(isDemo);
         loadHousingArrays();
+        setupPeriodSaving();
     });
+
+    // Save selected period to cookie when month/year changes
+    function setupPeriodSaving() {
+        const monthSelect = document.getElementById('month');
+        const yearSelect = document.getElementById('year');
+
+        if (monthSelect && yearSelect) {
+            // Save when form submits or when values change
+            const saveSelectedPeriod = function() {
+                const month = monthSelect.value;
+                const year = yearSelect.value;
+                if (month && year) {
+                    fetch('/api/set-selected-period', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ year: parseInt(year), month: parseInt(month) })
+                    }).catch(err => console.error('Failed to save period:', err));
+                }
+            };
+
+            // Save before form submit
+            const form = monthSelect.closest('form');
+            if (form) {
+                form.addEventListener('submit', saveSelectedPeriod);
+            }
+
+            // Also save on change (for auto-submit forms)
+            monthSelect.addEventListener('change', saveSelectedPeriod);
+            yearSelect.addEventListener('change', saveSelectedPeriod);
+        }
+    }
 
     // Housing array filter functionality
     async function loadHousingArrays() {
