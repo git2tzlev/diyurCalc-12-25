@@ -33,7 +33,7 @@ from routes.home import home
 from routes.reports import reports_management
 from routes.guide import (
     simple_summary_view, guide_view, shifts_report_view,
-    shifts_report_pdf, shifts_report_email
+    shifts_report_pdf, shifts_report_email, chains_report_email
 )
 from routes.admin import (
     manage_payment_codes, update_payment_codes,
@@ -342,6 +342,16 @@ async def shifts_report_email_route(request: Request, person_id: int, year: int,
         return await shifts_report_email(request, person_id, year, month)
     except Exception as e:
         logger.error(f"Unhandled error in shifts_report_email_route: {e}", exc_info=True)
+        return JSONResponse({"success": False, "error": f"שגיאה לא צפויה: {str(e)}"})
+
+
+@app.post("/api/send-chains-email/{person_id}")
+async def chains_report_email_route(request: Request, person_id: int, year: int, month: int):
+    """Send chains report via email as PDF."""
+    try:
+        return await chains_report_email(request, person_id, year, month)
+    except Exception as e:
+        logger.error(f"Unhandled error in chains_report_email_route: {e}", exc_info=True)
         return JSONResponse({"success": False, "error": f"שגיאה לא צפויה: {str(e)}"})
 
 

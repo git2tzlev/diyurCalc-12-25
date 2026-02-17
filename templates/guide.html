@@ -1,10 +1,10 @@
 {% extends "base.html" %}
 {% block content %}
 <style>
-  /* Print styles for compact A4 layout */
+  /* Print styles for compact A4 landscape layout */
   @media print {
     @page {
-      size: A4;
+      size: A4 landscape;
       margin: 0.5cm;
 
       @bottom-center {
@@ -91,6 +91,7 @@
       border-collapse: collapse;
       margin-bottom: 3px;
       page-break-inside: avoid;
+      table-layout: auto !important;
     }
 
     table th {
@@ -101,6 +102,7 @@
       border: 0.5px solid #000;
       text-align: center;
       line-height: 1.1;
+      white-space: nowrap;
     }
 
     table td {
@@ -109,60 +111,6 @@
       border: 0.5px solid #ccc;
       text-align: center;
       line-height: 1.1;
-    }
-
-    /* Make table fit better */
-    table th:nth-child(1),
-    table td:nth-child(1) {
-      width: 8%;
-    }
-
-    table th:nth-child(2),
-    table td:nth-child(2) {
-      width: 8%;
-    }
-
-    table th:nth-child(3),
-    table td:nth-child(3) {
-      width: 10%;
-    }
-
-    table th:nth-child(4),
-    table td:nth-child(4) {
-      width: 8%;
-    }
-
-    table th:nth-child(5),
-    table td:nth-child(5) {
-      width: 7%;
-    }
-
-    table th:nth-child(6),
-    table td:nth-child(6) {
-      width: 8%;
-    }
-
-    table th:nth-child(7),
-    table td:nth-child(7) {
-      width: 15%;
-    }
-
-    table th:nth-child(8),
-    table td:nth-child(8),
-    table th:nth-child(9),
-    table td:nth-child(9),
-    table th:nth-child(10),
-    table td:nth-child(10),
-    table th:nth-child(11),
-    table td:nth-child(11),
-    table th:nth-child(12),
-    table td:nth-child(12) {
-      width: 6%;
-    }
-
-    table th:nth-child(13),
-    table td:nth-child(13) {
-      width: 7%;
     }
 
     /* Summary row in table */
@@ -223,11 +171,10 @@
       content: none !important;
     }
 
-    /* Ensure text fits */
+    /* Allow text to wrap in print */
     td {
       white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      overflow: visible;
     }
 
     /* Compact segment details */
@@ -707,13 +654,26 @@
             <button type="button" onclick="printReport()" class="no-print"
               style="background: #007bff; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">🖨️
               הדפס דוח</button>
-            <button type="button" id="sendEmailBtn" onclick="sendEmail()" class="no-print"
-              data-person-id="{{ person.id }}"
-              data-year="{{ selected_year }}"
-              data-month="{{ selected_month }}"
-              data-email="{{ person.email or '' }}"
-              style="background: #28a745; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">📧
-              שלח במייל</button>
+            <button type="button" onclick="document.getElementById('emailModal').style.display='flex'"
+              style="background: #059669; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">
+              שלח במייל PDF</button>
+          </div>
+        </div>
+
+        <!-- מודאל שליחת מייל -->
+        <div id="emailModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:1000; justify-content:center; align-items:center;">
+          <div style="background:#fff; border-radius:10px; padding:24px; min-width:350px; direction:rtl; box-shadow:0 4px 20px rgba(0,0,0,0.3);">
+            <h3 style="margin:0 0 16px; font-size:16px;">שליחת דוח רצפים במייל</h3>
+            <label style="font-size:13px; font-weight:600;">כתובת מייל:</label>
+            <input type="email" id="chainsEmailInput" placeholder="example@mail.com"
+              style="width:100%; padding:8px 10px; border:1px solid #ccc; border-radius:6px; margin:8px 0 16px; font-size:14px; direction:ltr; text-align:left;">
+            <div id="chainsEmailStatus" style="display:none; padding:8px; border-radius:6px; margin-bottom:12px; font-size:13px;"></div>
+            <div style="display:flex; gap:8px; justify-content:flex-end;">
+              <button type="button" onclick="document.getElementById('emailModal').style.display='none'"
+                style="padding:8px 16px; border:1px solid #ccc; background:#fff; border-radius:6px; cursor:pointer;">ביטול</button>
+              <button type="button" id="chainsEmailSendBtn" onclick="sendChainsEmail()"
+                style="padding:8px 16px; background:#059669; color:#fff; border:none; border-radius:6px; cursor:pointer;">שלח</button>
+            </div>
           </div>
         </div>
         {% if daily_segments %}
@@ -1819,52 +1779,59 @@
     }
   }
 
-  async function sendEmail() {
-    const btn = document.getElementById('sendEmailBtn');
-    const originalText = btn.innerText;
-    const defaultEmail = btn.dataset.email || '';
 
-    // Prompt for email with default value
-    const targetEmail = prompt('לאיזה מייל לשלוח את הדוח?', defaultEmail);
+  async function sendChainsEmail() {
+    const emailInput = document.getElementById('chainsEmailInput');
+    const statusDiv = document.getElementById('chainsEmailStatus');
+    const sendBtn = document.getElementById('chainsEmailSendBtn');
+    const email = emailInput.value.trim();
 
-    // User cancelled or empty input
-    if (targetEmail === null) {
+    if (!email) {
+      statusDiv.style.display = 'block';
+      statusDiv.style.background = '#fef2f2';
+      statusDiv.style.color = '#991b1b';
+      statusDiv.textContent = 'יש להזין כתובת מייל';
       return;
     }
 
-    if (!targetEmail.trim()) {
-      alert('יש להזין כתובת מייל');
-      return;
-    }
-
-    btn.disabled = true;
-    btn.innerText = 'שולח...';
+    sendBtn.disabled = true;
+    sendBtn.textContent = 'שולח...';
+    statusDiv.style.display = 'block';
+    statusDiv.style.background = '#eff6ff';
+    statusDiv.style.color = '#1e40af';
+    statusDiv.textContent = 'יוצר PDF ושולח מייל...';
 
     try {
-      const personId = btn.dataset.personId;
-      const year = btn.dataset.year;
-      const month = btn.dataset.month;
-
-      const response = await fetch(`/api/send-guide-email/${personId}?year=${year}&month=${month}`, {
+      const personId = {{ person['id'] }};
+      const month = {{ selected_month }};
+      const year = {{ selected_year }};
+      const response = await fetch(`/api/send-chains-email/${personId}?year=${year}&month=${month}`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ email: targetEmail.trim() })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email })
       });
+      const data = await response.json();
 
-      const result = await response.json();
-
-      if (result.success) {
-        alert(result.message || 'המייל נשלח בהצלחה!');
+      if (data.success) {
+        statusDiv.style.background = '#f0fdf4';
+        statusDiv.style.color = '#166534';
+        statusDiv.textContent = data.message || 'המייל נשלח בהצלחה!';
+        setTimeout(() => {
+          document.getElementById('emailModal').style.display = 'none';
+          statusDiv.style.display = 'none';
+        }, 2000);
       } else {
-        alert('שגיאה: ' + (result.error || 'שגיאה לא ידועה'));
+        statusDiv.style.background = '#fef2f2';
+        statusDiv.style.color = '#991b1b';
+        statusDiv.textContent = data.error || 'שגיאה בשליחת המייל';
       }
-    } catch (error) {
-      alert('שגיאת רשת: ' + error.message);
+    } catch (err) {
+      statusDiv.style.background = '#fef2f2';
+      statusDiv.style.color = '#991b1b';
+      statusDiv.textContent = 'שגיאת תקשורת: ' + err.message;
     } finally {
-      btn.disabled = false;
-      btn.innerText = originalText;
+      sendBtn.disabled = false;
+      sendBtn.textContent = 'שלח';
     }
   }
 

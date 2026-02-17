@@ -244,64 +244,39 @@ def send_test_email(conn, to_email: str) -> Dict[str, Any]:
         return {"success": False, "error": f"שגיאה: {str(e)}"}
 
 
-def generate_guide_pdf(conn, person_id: int, year: int, month: int) -> Optional[bytes]:
-    """Generate PDF for guide report using Headless Edge over local file."""
+def generate_guide_pdf(person_id: int, year: int, month: int) -> Optional[bytes]:
+    """יצירת PDF לדוח מדריך באמצעות רינדור ישיר של התבנית ו-Edge/Chrome headless."""
     import subprocess
     import tempfile
-    import os
-    import re
     import time
-    from fastapi.testclient import TestClient
-    from core.config import config
-
-    # Import app inside function to avoid circular dependency
-    try:
-        from app import app
-    except ImportError:
-        logger.error("Could not import app for PDF generation")
-        return None
+    from jinja2 import Environment, FileSystemLoader
+    from routes.guide import prepare_guide_pdf_data
 
     temp_html_path = None
     temp_pdf_path = None
-    process = None
 
     try:
-        # 1. Render HTML using TestClient (internal execution, no network deadlock)
-        client = TestClient(app)
-        response = client.get(f"/guide/{person_id}?year={year}&month={month}")
+        # 1. הכנת נתונים - חיבור DB קצר, משתחרר לפני יצירת PDF
+        with get_conn() as conn:
+            pdf_data = prepare_guide_pdf_data(conn, person_id, year, month)
+        if not pdf_data:
+            raise ValueError(f"לא נמצאו נתונים למדריך {person_id}")
 
-        if response.status_code != 200:
-            logger.error(f"Failed to render guide page: {response.status_code}")
-            return None
+        # 2. רינדור ויצירת PDF - ללא חיבור DB
+        env = Environment(loader=FileSystemLoader(str(config.TEMPLATES_DIR)))
+        template = env.get_template("guide_shifts_pdf.html")
+        html_content = template.render(**pdf_data)
 
-        html_content = response.text
-
-        # 2. Fix static assets for file:// access
-        # Convert /static/path to file:///absolute/path/static/path
-        if config.STATIC_DIR:
-            static_base_uri = config.STATIC_DIR.as_uri()
-            # Ensure it ends with / if needed, though as_uri usually doesn't for dirs?
-            # actually as_uri on Windows path might be file:///C:/.../static
-            # We want to replace all "/static/" references.
-
-            # Simple replace: href="/static/css..." -> href="file:///.../static/css..."
-            # We strip the leading slash from the uri if present in replacement
-            # static_base_uri usually looks like 'file:///F:/.../static'
-
-            html_content = html_content.replace('"/static/', f'"{static_base_uri}/')
-            html_content = html_content.replace("'/static/", f"'{static_base_uri}/")
-
-        # 3. Save to temp HTML file
+        # 2. שמירה לקובץ זמני
         fd, temp_html_path = tempfile.mkstemp(suffix='.html')
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
             f.write(html_content)
 
-        # 4. Prepare temp PDF path
+        # 3. הכנת נתיב PDF זמני
         fd_pdf, temp_pdf_path = tempfile.mkstemp(suffix='.pdf')
-        os.close(fd_pdf) # Just reserve the name
+        os.close(fd_pdf)
 
-        # 5. Find Browser (Edge or Chrome)
-        # We try standard paths for both
+        # 4. חיפוש דפדפן (Edge או Chrome)
         browser_paths = [
             r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
             r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
@@ -316,8 +291,7 @@ def generate_guide_pdf(conn, person_id: int, year: int, month: int) -> Optional[
                 break
 
         if not browser_exe:
-            logger.error("No suitable browser (Edge/Chrome) found for PDF generation")
-            return None
+            raise FileNotFoundError("דפדפן Edge/Chrome לא נמצא בשרת")
 
         cmd = [
             browser_exe,
@@ -330,10 +304,8 @@ def generate_guide_pdf(conn, person_id: int, year: int, month: int) -> Optional[
             temp_html_path
         ]
 
-        logger.info(f"Generating PDF using browser from local file: {temp_html_path}")
-        logger.info(f"Running browser command: {cmd}")
+        logger.info(f"Generating PDF for person_id={person_id}")
 
-        # Use Popen for better process control
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -341,67 +313,40 @@ def generate_guide_pdf(conn, person_id: int, year: int, month: int) -> Optional[
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
         )
 
-        # Wait for process to complete with timeout
         try:
             stdout, stderr = process.communicate(timeout=45)
             return_code = process.returncode
         except subprocess.TimeoutExpired:
-            logger.error("Browser process timed out after 45 seconds")
             process.kill()
             process.wait()
-            return None
+            raise TimeoutError("הדפדפן לא סיים תוך 45 שניות")
         finally:
-            # Ensure process is terminated
             if process.poll() is None:
-                logger.warning("Browser process still running, terminating...")
                 process.terminate()
                 try:
                     process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    logger.warning("Browser process did not terminate, killing...")
                     process.kill()
                     process.wait()
 
-        logger.info(f"Browser return code: {return_code}")
-        if stdout:
-            logger.info(f"Browser stdout: {stdout.decode('utf-8', errors='ignore')}")
-        if stderr:
-            logger.info(f"Browser stderr: {stderr.decode('utf-8', errors='ignore')}")
+        if return_code != 0:
+            logger.error(f"Browser PDF error: {stderr.decode('utf-8', errors='ignore')}")
 
-        # Wait for browser to fully release file handles (Windows-specific issue)
-        logger.debug("Waiting for browser to release file handles...")
+        # המתנה לשחרור קבצים (בעיית Windows)
         time.sleep(2)
 
-        # Check PDF before cleanup
-        pdf_exists = os.path.exists(temp_pdf_path)
-        pdf_size = os.path.getsize(temp_pdf_path) if pdf_exists else 0
-        logger.info(f"PDF check - exists: {pdf_exists}, size: {pdf_size}, path: {temp_pdf_path}")
-
-        if return_code != 0:
-            logger.error(f"Browser PDF generation error: {stderr.decode('utf-8', errors='ignore')}")
-            # Continue to check if file exists anyway
-
-        if pdf_exists and pdf_size > 0:
+        if os.path.exists(temp_pdf_path) and os.path.getsize(temp_pdf_path) > 0:
             with open(temp_pdf_path, "rb") as f:
                 pdf_bytes = f.read()
             logger.info(f"PDF generated successfully, size: {len(pdf_bytes)} bytes")
             return pdf_bytes
-        else:
-            logger.error("PDF file was not created or is empty")
-            return None
 
-    except Exception as e:
-        logger.error(f"Error generating PDF: {e}", exc_info=True)
-        return None
+        raise RuntimeError("קובץ PDF לא נוצר או ריק")
 
     finally:
-        # Cleanup temp files with retry mechanism
         if temp_html_path:
-            logger.debug(f"Cleaning up HTML temp file: {temp_html_path}")
             safe_delete_file(temp_html_path, initial_wait=1.0)
-
         if temp_pdf_path:
-            logger.debug(f"Cleaning up PDF temp file: {temp_pdf_path}")
             safe_delete_file(temp_pdf_path, initial_wait=1.0)
 
 
@@ -505,9 +450,13 @@ def send_guide_email(conn, person_id: int, year: int, month: int, custom_email: 
             return {"success": False, "error": f"למדריך {person['name']} אין כתובת מייל"}
 
         # Generate PDF
-        pdf_bytes = generate_guide_pdf(conn, person_id, year, month)
+        try:
+            pdf_bytes = generate_guide_pdf(conn, person_id, year, month)
+        except Exception as pdf_err:
+            logger.error(f"PDF generation failed for {person['name']}: {pdf_err}", exc_info=True)
+            return {"success": False, "error": f"שגיאה ביצירת PDF: {pdf_err}"}
         if not pdf_bytes:
-            return {"success": False, "error": "שגיאה ביצירת PDF"}
+            return {"success": False, "error": "שגיאה ביצירת PDF: קובץ ריק"}
 
         # Prepare email content
         subject = f"דוח פירוט שעות עבודה כנספח לתלוש השכר חודש {month:02d}/{year}"

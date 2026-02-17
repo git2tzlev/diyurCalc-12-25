@@ -242,3 +242,197 @@ async def unlock_month_api(request: Request) -> JSONResponse:
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
+async def update_shift_type_rate(request: Request, shift_type_id: int) -> JSONResponse:
+    """עדכון תעריף סוג משמרת עם שמירת היסטוריה."""
+    from core.history import save_shift_rate_to_history, is_month_locked
+    from datetime import datetime
+
+    try:
+        data = await request.json()
+        new_rate = data.get("rate")
+        new_is_minimum_wage = data.get("is_minimum_wage", True)
+
+        current_month = datetime.now().month
+        current_year = datetime.now().year
+
+        with get_conn() as conn:
+            if is_month_locked(conn.conn, current_year, current_month):
+                return JSONResponse(
+                    {"success": False, "error": "החודש נעול לעריכה"},
+                    status_code=400
+                )
+
+            cursor = conn.execute(
+                "SELECT rate, is_minimum_wage FROM shift_types WHERE id = %s",
+                (shift_type_id,)
+            )
+            current = cursor.fetchone()
+
+            if not current:
+                return JSONResponse(
+                    {"success": False, "error": "סוג משמרת לא נמצא"},
+                    status_code=404
+                )
+
+            current_rate = current["rate"]
+            current_is_minimum_wage = current["is_minimum_wage"]
+
+            if current_rate != new_rate or current_is_minimum_wage != new_is_minimum_wage:
+                save_shift_rate_to_history(
+                    conn.conn,
+                    shift_type_id,
+                    current_year,
+                    current_month,
+                    current_rate,
+                    current_is_minimum_wage
+                )
+
+            conn.execute("""
+                UPDATE shift_types
+                SET rate = %s, is_minimum_wage = %s
+                WHERE id = %s
+            """, (new_rate, new_is_minimum_wage, shift_type_id))
+            conn.commit()
+
+        return JSONResponse({
+            "success": True,
+            "message": "התעריף עודכן בהצלחה"
+        })
+
+    except Exception as e:
+        logger.error(f"Error updating shift type rate: {e}", exc_info=True)
+        return JSONResponse(
+            {"success": False, "error": str(e)},
+            status_code=500
+        )
+
+
+async def update_shift_segment(request: Request, segment_id: int) -> JSONResponse:
+    """עדכון מקטע זמן משמרת עם שמירת היסטוריה."""
+    from core.history import save_segment_to_history, is_month_locked
+    from datetime import datetime
+
+    try:
+        data = await request.json()
+        new_wage_percent = data.get("wage_percent")
+        new_segment_type = data.get("segment_type")
+        new_start_time = data.get("start_time")
+        new_end_time = data.get("end_time")
+        new_order_index = data.get("order_index")
+
+        current_month = datetime.now().month
+        current_year = datetime.now().year
+
+        with get_conn() as conn:
+            if is_month_locked(conn.conn, current_year, current_month):
+                return JSONResponse(
+                    {"success": False, "error": "החודש נעול לעריכה"},
+                    status_code=400
+                )
+
+            cursor = conn.execute(
+                """SELECT id, shift_type_id, wage_percent, segment_type,
+                          start_time, end_time, order_index
+                   FROM shift_time_segments WHERE id = %s""",
+                (segment_id,)
+            )
+            current = cursor.fetchone()
+
+            if not current:
+                return JSONResponse(
+                    {"success": False, "error": "מקטע משמרת לא נמצא"},
+                    status_code=404
+                )
+
+            if new_wage_percent is None:
+                new_wage_percent = current["wage_percent"]
+            if new_segment_type is None:
+                new_segment_type = current["segment_type"]
+            if new_start_time is None:
+                new_start_time = current["start_time"]
+            if new_end_time is None:
+                new_end_time = current["end_time"]
+            if new_order_index is None:
+                new_order_index = current["order_index"]
+
+            has_change = (
+                current["wage_percent"] != new_wage_percent or
+                current["segment_type"] != new_segment_type or
+                current["start_time"] != new_start_time or
+                current["end_time"] != new_end_time or
+                current["order_index"] != new_order_index
+            )
+
+            if has_change:
+                save_segment_to_history(
+                    conn.conn,
+                    segment_id=segment_id,
+                    shift_type_id=current["shift_type_id"],
+                    year=current_year,
+                    month=current_month,
+                    wage_percent=current["wage_percent"],
+                    segment_type=current["segment_type"],
+                    start_time=current["start_time"],
+                    end_time=current["end_time"],
+                    order_index=current["order_index"]
+                )
+
+                conn.execute("""
+                    UPDATE shift_time_segments
+                    SET wage_percent = %s, segment_type = %s,
+                        start_time = %s, end_time = %s, order_index = %s
+                    WHERE id = %s
+                """, (new_wage_percent, new_segment_type, new_start_time,
+                      new_end_time, new_order_index, segment_id))
+                conn.commit()
+
+        return JSONResponse({
+            "success": True,
+            "message": "המקטע עודכן בהצלחה"
+        })
+
+    except Exception as e:
+        logger.error(f"Error updating shift segment: {e}", exc_info=True)
+        return JSONResponse(
+            {"success": False, "error": str(e)},
+            status_code=500
+        )
+
+
+async def save_all_segments_history_for_month(request: Request) -> JSONResponse:
+    """שמירת כל מקטעי הזמן להיסטוריה עבור חודש מסוים."""
+    from core.history import save_all_segments_to_history, is_month_locked
+
+    try:
+        data = await request.json()
+        year = data.get("year")
+        month = data.get("month")
+        created_by = data.get("created_by", 1)
+
+        if not year or not month:
+            return JSONResponse(
+                {"success": False, "error": "year and month are required"},
+                status_code=400
+            )
+
+        with get_conn() as conn:
+            locked = is_month_locked(conn.conn, year, month)
+            success = save_all_segments_to_history(conn.conn, year, month, created_by)
+
+        if success:
+            msg = f"היסטוריית מקטעים נשמרה לחודש {month}/{year}"
+            if locked:
+                msg += " (החודש נעול)"
+            return JSONResponse({"success": True, "message": msg})
+        else:
+            return JSONResponse(
+                {"success": False, "error": "שגיאה בשמירת היסטוריה"},
+                status_code=500
+            )
+
+    except Exception as e:
+        logger.error(f"Error saving segments history: {e}", exc_info=True)
+        return JSONResponse(
+            {"success": False, "error": str(e)},
+            status_code=500
+        )

@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+  <meta charset="UTF-8">
+  <title>דוח פירוט רצפים</title>
+  <style>
+    @page {
+      size: A4 landscape;
+      margin: 0.5cm;
+    }
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: Arial, sans-serif;
+      direction: rtl;
+      padding: 10px 15px;
+      background: #fff;
+      color: #222;
+      font-size: 9px;
+    }
+
+    /* כותרת עליונה */
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 2px solid #1a5276;
+      padding-bottom: 5px;
+      margin-bottom: 10px;
+    }
+    .header h1 {
+      font-size: 14pt;
+      text-align: center;
+      flex-grow: 1;
+      margin: 0;
+      color: #1a5276;
+    }
+    .meirav-box {
+      font-size: 11pt;
+      font-weight: bold;
+      border: 2px solid #1a5276;
+      padding: 2px 8px;
+      min-width: 80px;
+      text-align: center;
+      color: #1a5276;
+      border-radius: 3px;
+    }
+
+    /* כותרת יום */
+    .day-header {
+      font-size: 9pt;
+      margin: 8px 0 2px 0;
+      font-weight: bold;
+      color: #1a5276;
+      border-right: 3px solid #2980b9;
+      padding-right: 6px;
+    }
+    .day-section {
+      margin-bottom: 6px;
+      page-break-inside: avoid;
+    }
+
+    /* טבלאות */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 2px;
+      table-layout: auto;
+    }
+    th {
+      background: #2c3e50;
+      color: #fff;
+      font-weight: bold;
+      padding: 3px 4px;
+      border: 1px solid #2c3e50;
+      text-align: center;
+      font-size: 7pt;
+      white-space: nowrap;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    td {
+      padding: 2px 3px;
+      border: 1px solid #ddd;
+      text-align: center;
+      font-size: 7pt;
+      white-space: nowrap;
+      color: #333;
+    }
+
+    /* שורות רגילות - רקע לבן נקי */
+    tbody tr {
+      background: #fff;
+    }
+
+    /* כוננות - בורדר שמאלי עדין */
+    .row-standby td {
+      color: #888;
+      font-style: italic;
+    }
+
+    /* חופשה */
+    .row-vacation td {
+      color: #2e7d32;
+      font-style: italic;
+    }
+
+    /* שורת סיכום יומי */
+    .summary-row {
+      background: #eaf2f8 !important;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .summary-row td {
+      padding: 3px 4px;
+      font-weight: bold;
+      border: 1px solid #aaa;
+      color: #1a5276;
+    }
+    .summary-row td.payment-cell {
+      font-size: 8pt;
+      color: #1a365d;
+    }
+
+    /* סיכום חודשי */
+    .monthly-summary {
+      margin-top: 12px;
+      page-break-before: auto;
+    }
+    .monthly-summary .day-header {
+      font-size: 10pt;
+      border-bottom: 2px solid #1a5276;
+      border-right: none;
+      padding-right: 0;
+      padding-bottom: 3px;
+      margin-bottom: 4px;
+    }
+    .monthly-summary th {
+      font-size: 8pt;
+      padding: 4px 6px;
+    }
+    .monthly-summary td {
+      font-size: 8pt;
+      padding: 4px 6px;
+      font-weight: bold;
+    }
+
+    /* פוטר */
+    .footer {
+      text-align: center;
+      margin-top: 15px;
+      padding-top: 6px;
+      border-top: 1px solid #ddd;
+      font-size: 7px;
+      color: #999;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <img src="/static/logo_tzohar.jpg" style="height: 30px; width: auto;" alt="Logo" />
+    <h1>דוח פירוט רצפים - {{ person['name'] }} - {{ "%02d"|format(selected_month) }}/{{ selected_year }}</h1>
+    {% if person['meirav_code'] %}
+    <div class="meirav-box">מירב: {{ person['meirav_code'] }}</div>
+    {% else %}
+    <div style="width: 80px;"></div>
+    {% endif %}
+  </div>
+
+  {% for day in daily_segments %}
+  {% if day.chains and day.chains|length > 0 %}
+  <div class="day-section">
+    <div class="day-header">{{ day.day }} ({{ day.day_name }}, {{ day.hebrew_date }})</div>
+    <table>
+      <thead>
+        <tr>
+          <th>התחלה</th>
+          <th>סיום</th>
+          <th>דירה</th>
+          <th>מערך</th>
+          <th>סוג</th>
+          <th>בסיס</th>
+          <th>סוג</th>
+          <th>משמרת</th>
+          <th>שעות</th>
+          <th>תשלום</th>
+          <th>פירוט</th>
+          <th>100%</th>
+          <th>125%</th>
+          <th>150%</th>
+          <th>175%</th>
+          <th>200%</th>
+          <th>הערה</th>
+        </tr>
+      </thead>
+      <tbody>
+        {# איחוד שורות רציפות עם אותה דירה, תעריף ומשמרת #}
+        {% set ns = namespace(merged_chains=[]) %}
+        {% for chain in day.chains %}
+        {% set rate_key = '' %}
+        {% if chain.type == 'standby' %}
+        {% set rate_key = 'standby' %}
+        {% elif chain.type == 'vacation' %}
+        {% set rate_key = 'vacation' %}
+        {% elif chain.type == 'sick' %}
+        {% set rate_key = 'sick' %}
+        {% elif chain.calc200 and chain.calc200 > 0 %}
+        {% set rate_key = '200' %}
+        {% elif chain.calc175 and chain.calc175 > 0 %}
+        {% set rate_key = '175' %}
+        {% elif chain.calc150 and chain.calc150 > 0 %}
+        {% set rate_key = '150' %}
+        {% elif chain.calc125 and chain.calc125 > 0 %}
+        {% set rate_key = '125' %}
+        {% else %}
+        {% set rate_key = '100' %}
+        {% endif %}
+        {% set group_key = (chain.apartment_name or '-') ~ '|' ~ rate_key ~ '|' ~ (chain.shift_name or '-') %}
+
+        {% set can_merge = false %}
+        {% if ns.merged_chains|length > 0 %}
+        {% set last = ns.merged_chains[-1] %}
+        {% if last.group_key == group_key and last.end_time == chain.start_time %}
+        {% set can_merge = true %}
+        {% endif %}
+        {% endif %}
+
+        {% if can_merge %}
+        {% set existing = ns.merged_chains[-1] %}
+        {% set _ = existing.update({
+        'end_time': chain.end_time,
+        'total_minutes': existing.total_minutes + chain.total_minutes,
+        'payment': existing.payment + chain.payment,
+        'calc100': existing.calc100 + (chain.calc100 or 0),
+        'calc125': existing.calc125 + (chain.calc125 or 0),
+        'calc150': existing.calc150 + (chain.calc150 or 0),
+        'calc175': existing.calc175 + (chain.calc175 or 0),
+        'calc200': existing.calc200 + (chain.calc200 or 0)
+        }) %}
+        {% set _ = existing.segments.extend(chain.segments or []) %}
+        {% if chain.break_reason and chain.break_reason != 'כוננות' and chain.break_reason != 'חופשה' %}
+        {% set _ = existing.update({'break_reason': chain.break_reason}) %}
+        {% endif %}
+        {% else %}
+        {% set new_group = {
+        'group_key': group_key,
+        'rate_key': rate_key,
+        'start_time': chain.start_time,
+        'end_time': chain.end_time,
+        'apartment_name': chain.apartment_name,
+        'apartment_type_name': chain.apartment_type_name,
+        'rate_apartment_type_name': chain.rate_apartment_type_name,
+        'apartment_type_change_date': chain.apartment_type_change_date,
+        'housing_array_name': chain.housing_array_name,
+        'effective_rate': chain.effective_rate,
+        'shift_type': chain.shift_type,
+        'shift_name': chain.shift_name,
+        'type': chain.type,
+        'total_minutes': chain.total_minutes or 0,
+        'payment': chain.payment or 0,
+        'calc100': chain.calc100 or 0,
+        'calc125': chain.calc125 or 0,
+        'calc150': chain.calc150 or 0,
+        'calc175': chain.calc175 or 0,
+        'calc200': chain.calc200 or 0,
+        'segments': (chain.segments or [])|list,
+        'break_reason': chain.break_reason if (chain.break_reason and chain.break_reason != 'כוננות' and
+        chain.break_reason != 'חופשה') else '',
+        'from_prev_day': chain.from_prev_day
+        } %}
+        {% set _ = ns.merged_chains.append(new_group) %}
+        {% endif %}
+        {% endfor %}
+
+        {% for chain in ns.merged_chains %}
+        <tr class="{% if chain.type == 'standby' %}row-standby{% elif chain.type == 'vacation' %}row-vacation{% endif %}">
+          <td>{{ chain.start_time }}</td>
+          <td>{{ chain.end_time }}</td>
+          <td>{{ chain.apartment_name or '-' }}</td>
+          <td>{{ chain.housing_array_name or '-' }}</td>
+          <td>{{ (chain.apartment_type_name or '-')|replace('דירה ', '') }}</td>
+          <td>{% if chain.type == 'standby' %}-{% else %}{{ "%.2f"|format(chain.effective_rate or 0) }}{% endif %}</td>
+          <td>
+            {% if chain.shift_type %}{{ chain.shift_type }}{% elif chain.type == 'standby' %}כוננות{% elif chain.type == 'vacation' %}חופשה{% else %}עבודה{% endif %}
+          </td>
+          <td>{{ chain.shift_name or '-' }}</td>
+          <td>{{ (chain.total_minutes | float / 60) | round(2) }}</td>
+          <td>{% if chain.type == 'standby' %}-{% else %}{{ "%.2f"|format(chain.payment) }}{% endif %}</td>
+          <td>
+            {% if chain.type == 'standby' %}-{% else %}{{ chain.start_time }}-{{ chain.end_time }}{% endif %}
+          </td>
+          {% if chain.type == 'standby' %}
+          <td>-</td><td>-</td><td>-</td><td>-</td><td>-</td>
+          {% elif chain.type == 'vacation' %}
+          <td colspan="5" style="text-align: center;">-</td>
+          {% else %}
+          <td>{% if chain.rate_key == '100' %}{{ (chain.calc100 | float / 60) | round(2) }}{% else %}0.0{% endif %}</td>
+          <td>{% if chain.rate_key == '125' %}{{ (chain.calc125 | float / 60) | round(2) }}{% else %}0.0{% endif %}</td>
+          <td>{% if chain.rate_key == '150' %}{{ (chain.calc150 | float / 60) | round(2) }}{% else %}0.0{% endif %}</td>
+          <td>{% if chain.rate_key == '175' %}{{ (chain.calc175 | float / 60) | round(2) }}{% else %}0.0{% endif %}</td>
+          <td>{% if chain.rate_key == '200' %}{{ (chain.calc200 | float / 60) | round(2) }}{% else %}0.0{% endif %}</td>
+          {% endif %}
+          <td>{{ chain.break_reason or '' }}</td>
+        </tr>
+        {% endfor %}
+
+        <tr class="summary-row">
+          <td colspan="7" style="text-align: right;">סיכום:</td>
+          <td></td>
+          <td>{{ (day.total_minutes_no_standby | float / 60) | round(2) }}</td>
+          <td class="payment-cell">{{ "%.2f"|format((day.payment or 0) + (day.standby_payment or 0)) }}</td>
+          <td>{{ "%.2f"|format(day.standby_payment or 0) }}</td>
+          <td>{{ (day.calc100 | float / 60) | round(2) }}</td>
+          <td>{{ (day.calc125 | float / 60) | round(2) }}</td>
+          <td>{{ (day.calc150 | float / 60) | round(2) }}</td>
+          <td>{{ (day.calc175 | float / 60) | round(2) }}</td>
+          <td>{{ (day.calc200 | float / 60) | round(2) }}</td>
+          <td></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+  {% endfor %}
+
+  {% if daily_segments or (monthly_totals.total_payment or 0) > 0 %}
+  <div class="monthly-summary">
+    <div class="day-header">סיכום חודשי - {{ person['name'] }}</div>
+    <table style="width: auto;">
+      <thead>
+        <tr>
+          <th style="min-width: 100px;">סיכום</th>
+          <th>סה"כ שעות</th>
+          <th>תשלום</th>
+          <th>כוננות</th>
+          <th>100%</th>
+          <th>125%</th>
+          <th>150%</th>
+          <th>175%</th>
+          <th>200%</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="summary-row">
+          <td style="text-align: right;">סה"כ חודשי</td>
+          <td>{{ (monthly_totals.total_hours | float / 60) | round(2) }}</td>
+          <td class="payment-cell">{{ "%.2f"|format(monthly_totals.rounded_total or monthly_totals.total_payment or 0) }}</td>
+          <td>{{ monthly_totals.standby or 0 }}</td>
+          <td>{{ (monthly_totals.calc100 | float / 60) | round(2) }}</td>
+          <td>{{ (monthly_totals.calc125 | float / 60) | round(2) }}</td>
+          <td>{{ (monthly_totals.calc150 | float / 60) | round(2) }}</td>
+          <td>{{ (monthly_totals.calc175 | float / 60) | round(2) }}</td>
+          <td>{{ (monthly_totals.calc200 | float / 60) | round(2) }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  <div class="footer">
+    הופק ע"י מערכת DiyurClock | {{ generation_time }}
+  </div>
+</body>
+</html>

@@ -1670,3 +1670,221 @@ async def shifts_report_email(
     except Exception as e:
         logger.error(f"Error in shifts_report_email execution: {e}", exc_info=True)
         return JSONResponse({"success": False, "error": f"שגיאה בשליחת המייל: {str(e)}"})
+
+
+def _prepare_chains_pdf_data(conn, person_id: int, year: int, month: int) -> Optional[dict]:
+    """הכנת נתונים לתבנית PDF של דוח רצפים."""
+    person = conn.execute(
+        """
+        SELECT p.id, p.name, p.type, p.email, p.meirav_code
+        FROM people p WHERE p.id = %s
+        """,
+        (person_id,),
+    ).fetchone()
+    if not person:
+        return None
+
+    MINIMUM_WAGE = get_minimum_wage_for_month(conn.conn, year, month)
+    shabbat_cache = get_shabbat_times_cache(conn.conn)
+    daily_segments, _ = get_daily_segments_data(conn, person_id, year, month, shabbat_cache, MINIMUM_WAGE)
+    monthly_totals = aggregate_daily_segments_to_monthly(conn, daily_segments, person_id, year, month, MINIMUM_WAGE)
+
+    return {
+        "person": person,
+        "daily_segments": daily_segments,
+        "monthly_totals": monthly_totals,
+        "selected_month": month,
+        "selected_year": year,
+        "generation_time": datetime.now().strftime("%d/%m/%Y %H:%M"),
+    }
+
+
+def _generate_chains_pdf(person_id: int, year: int, month: int) -> Optional[bytes]:
+    """יצירת PDF לדוח רצפים באמצעות Edge/Chrome headless."""
+    import subprocess
+    import tempfile
+    import os
+    import time as time_module
+    from jinja2 import Environment, FileSystemLoader
+
+    temp_html_path = None
+    temp_pdf_path = None
+
+    try:
+        logger.info(f"Generating chains PDF for person_id={person_id}, {month}/{year}")
+
+        with get_conn() as conn:
+            pdf_data = _prepare_chains_pdf_data(conn, person_id, year, month)
+
+        if not pdf_data:
+            logger.error(f"Person not found: {person_id}")
+            return None
+
+        env = Environment(loader=FileSystemLoader(str(config.TEMPLATES_DIR)))
+        template = env.get_template("guide_chains_pdf.html")
+        html_content = template.render(**pdf_data)
+
+        fd, temp_html_path = tempfile.mkstemp(suffix='.html')
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.write(html_content)
+
+        fd_pdf, temp_pdf_path = tempfile.mkstemp(suffix='.pdf')
+        os.close(fd_pdf)
+
+        browser_paths = [
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
+        ]
+
+        browser_exe = None
+        for path in browser_paths:
+            if os.path.exists(path):
+                browser_exe = path
+                break
+
+        if not browser_exe:
+            logger.error("No suitable browser found for PDF generation")
+            return None
+
+        cmd = [
+            browser_exe,
+            "--headless",
+            "--disable-gpu",
+            "--run-all-compositor-stages-before-draw",
+            "--virtual-time-budget=10000",
+            "--no-pdf-header-footer",
+            f"--print-to-pdf={temp_pdf_path}",
+            temp_html_path
+        ]
+
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+        )
+
+        try:
+            stdout, stderr = process.communicate(timeout=45)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            return None
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+
+        time_module.sleep(2)
+
+        if os.path.exists(temp_pdf_path) and os.path.getsize(temp_pdf_path) > 0:
+            with open(temp_pdf_path, "rb") as f:
+                return f.read()
+        return None
+
+    except Exception as e:
+        logger.error(f"Error generating chains PDF: {e}", exc_info=True)
+        return None
+
+    finally:
+        from services.email_service import safe_delete_file
+        if temp_html_path:
+            safe_delete_file(temp_html_path, initial_wait=1.0)
+        if temp_pdf_path:
+            safe_delete_file(temp_pdf_path, initial_wait=1.0)
+
+
+async def chains_report_email(
+    request: Request,
+    person_id: int,
+    year: int,
+    month: int
+) -> JSONResponse:
+    """שליחת דוח רצפים במייל כ-PDF."""
+    import asyncio
+    from services.email_service import get_email_settings, send_email_with_pdf
+
+    try:
+        housing_filter = get_housing_array_filter()
+        _validate_guide_access(person_id, housing_filter)
+
+        custom_email = None
+        try:
+            body = await request.json()
+            custom_email = body.get('email')
+        except:
+            pass
+
+    except HTTPException as e:
+        return JSONResponse({"success": False, "error": e.detail}, status_code=e.status_code)
+    except Exception as e:
+        logger.error(f"Error in chains_report_email setup: {e}", exc_info=True)
+        return JSONResponse({"success": False, "error": f"שגיאה: {str(e)}"})
+
+    def send_email_task(pid: int, y: int, m: int, email: Optional[str]):
+        try:
+            with get_conn() as conn:
+                settings = get_email_settings(conn)
+                if not settings:
+                    return {"success": False, "error": "הגדרות מייל לא נמצאו"}
+
+                person = conn.execute(
+                    "SELECT id, name, email FROM people WHERE id = %s",
+                    (pid,)
+                ).fetchone()
+
+                if not person:
+                    return {"success": False, "error": "מדריך לא נמצא"}
+
+                target_email = email if email else person['email']
+                if not target_email:
+                    return {"success": False, "error": f"למדריך {person['name']} אין כתובת מייל"}
+
+                pdf_bytes = _generate_chains_pdf(pid, y, m)
+                if not pdf_bytes:
+                    return {"success": False, "error": "שגיאה ביצירת PDF"}
+
+                subject = f"דוח פירוט רצפים - {person['name']} - {m:02d}/{y}"
+                body_text = f"""שלום {person['name']},
+
+מצורף דוח פירוט הרצפים שלך לחודש {m:02d}/{y}.
+
+בברכה,
+מדור שכר
+צהר הלב
+
+<span style="color: #888; font-size: 11px;">─────────────────────────────</span>
+<span style="color: red; font-size: 11px;">הודעה זו נשלחה באופן אוטומטי. אין להשיב למייל זה.</span>
+"""
+                pdf_filename = f"דוח_רצפים_{person['name']}_{m:02d}_{y}.pdf"
+
+                result = send_email_with_pdf(
+                    settings=settings,
+                    to_email=target_email,
+                    to_name=person['name'],
+                    subject=subject,
+                    body=body_text,
+                    pdf_bytes=pdf_bytes,
+                    pdf_filename=pdf_filename
+                )
+
+                if result['success']:
+                    return {"success": True, "message": f"המייל נשלח בהצלחה ל-{target_email}"}
+                return result
+
+        except Exception as e:
+            logger.error(f"Error sending chains email: {e}")
+            return {"success": False, "error": str(e)}
+
+    try:
+        result = await asyncio.to_thread(send_email_task, person_id, year, month, custom_email)
+        return JSONResponse(result)
+    except Exception as e:
+        logger.error(f"Error in chains_report_email execution: {e}", exc_info=True)
+        return JSONResponse({"success": False, "error": f"שגיאה בשליחת המייל: {str(e)}"})

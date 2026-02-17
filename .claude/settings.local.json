@@ -53,7 +53,10 @@
       "Bash(git restore:*)",
       "Bash(git stash show:*)",
       "Bash(git push)",
-      "Bash(xargs:*)"
+      "Bash(xargs:*)",
+      "Bash(uvicorn app:app:*)",
+      "Bash(test:*)",
+      "Bash(wmic process:*)"
     ],
     "deny": [],
     "ask": []
