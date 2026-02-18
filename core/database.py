@@ -102,6 +102,17 @@ def get_default_period(request) -> tuple[int, int]:
     return now.year, now.month - 1
 
 
+def _pool_kwargs(dsn: str) -> dict:
+    """פרמטרים משותפים ליצירת pool עם TCP keepalive."""
+    return {
+        "dsn": dsn,
+        "keepalives": 1,
+        "keepalives_idle": 120,
+        "keepalives_interval": 10,
+        "keepalives_count": 3,
+    }
+
+
 def _get_prod_pool() -> pool.ThreadedConnectionPool:
     """Get or create the production connection pool."""
     global _prod_pool
@@ -112,7 +123,7 @@ def _get_prod_pool() -> pool.ThreadedConnectionPool:
         _prod_pool = pool.ThreadedConnectionPool(
             minconn=1,
             maxconn=10,
-            dsn=db_url
+            **_pool_kwargs(db_url)
         )
         logger.info("Production database connection pool created")
     return _prod_pool
@@ -128,7 +139,7 @@ def _get_demo_pool() -> pool.ThreadedConnectionPool:
         _demo_pool = pool.ThreadedConnectionPool(
             minconn=1,
             maxconn=5,
-            dsn=db_url
+            **_pool_kwargs(db_url)
         )
         logger.info("Demo database connection pool created")
     return _demo_pool
@@ -141,9 +152,37 @@ def _get_pool() -> pool.ThreadedConnectionPool:
     return _get_prod_pool()
 
 
+def _is_conn_alive(conn) -> bool:
+    """בדיקה מהירה אם חיבור DB עדיין פעיל."""
+    try:
+        if conn.closed:
+            return False
+        conn.cursor().execute("SELECT 1")
+        return True
+    except Exception:
+        return False
+
+
 def get_pooled_connection():
-    """Get a connection from the appropriate pool."""
-    return _get_pool().getconn()
+    """מחזיר חיבור תקין מה-pool. מחליף חיבור מת בחדש."""
+    current_pool = _get_pool()
+    conn = current_pool.getconn()
+
+    if _is_conn_alive(conn):
+        return conn
+
+    # חיבור מת - סוגר ומבקש חדש
+    logger.warning("Stale DB connection detected, replacing")
+    try:
+        current_pool.putconn(conn, close=True)
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    conn = current_pool.getconn()
+    return conn
 
 
 def return_connection(conn, is_demo: bool = None):

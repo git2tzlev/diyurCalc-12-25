@@ -349,26 +349,20 @@
         const yearSelect = document.getElementById('year');
 
         if (monthSelect && yearSelect) {
-            // Save when form submits or when values change
             const saveSelectedPeriod = function() {
                 const month = monthSelect.value;
                 const year = yearSelect.value;
                 if (month && year) {
-                    fetch('/api/set-selected-period', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ year: parseInt(year), month: parseInt(month) })
-                    }).catch(err => console.error('Failed to save period:', err));
+                    // שמירה סינכרונית ב-cookie - עובד גם כש-form.submit() מנווט מיד
+                    document.cookie = `selected_period=${year}-${month};path=/;max-age=${86400*365};SameSite=Lax`;
                 }
             };
 
-            // Save before form submit
             const form = monthSelect.closest('form');
             if (form) {
                 form.addEventListener('submit', saveSelectedPeriod);
             }
 
-            // Also save on change (for auto-submit forms)
             monthSelect.addEventListener('change', saveSelectedPeriod);
             yearSelect.addEventListener('change', saveSelectedPeriod);
         }

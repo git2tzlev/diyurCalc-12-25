@@ -100,7 +100,13 @@ def load_export_config_from_db(conn) -> Dict[str, Tuple[str, str, str]]:
                     value_type = 'count'
             
             export_codes[symbol] = (internal_key, value_type, display_name)
-            
+
+        # מיון לפי מספר סמל (360, 361, 362...)
+        export_codes = dict(sorted(
+            export_codes.items(),
+            key=lambda x: int(x[0]) if x[0].isdigit() else float('inf')
+        ))
+
         return export_codes
     except Exception as e:
         print(f"Error loading export config from DB: {e}")

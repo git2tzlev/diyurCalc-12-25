@@ -18,6 +18,7 @@ from core.time_utils import get_shabbat_times_cache
 from core.logic import (
     get_payment_codes,
     get_available_months_for_person,
+    auto_approve_substitute_travel,
 )
 from core.history import get_minimum_wage_for_month
 from app_utils import get_daily_segments_data, aggregate_daily_segments_to_monthly
@@ -316,6 +317,9 @@ def guide_view(
                     "report": report,
                     "display_shift_name": display_shift_name,
                 })
+
+            # אישור אוטומטי של נסיעות מדריך מחליף
+            auto_approve_substitute_travel(conn.conn, person_id, start_date, end_date)
 
     # Calculate total standby count
     total_standby_count = monthly_totals.get("standby", 0)
@@ -1829,6 +1833,7 @@ async def chains_report_email(
 
     def send_email_task(pid: int, y: int, m: int, email: Optional[str]):
         try:
+            # שליפת הגדרות ופרטי מדריך - חיבור DB קצר
             with get_conn() as conn:
                 settings = get_email_settings(conn)
                 if not settings:
@@ -1839,19 +1844,20 @@ async def chains_report_email(
                     (pid,)
                 ).fetchone()
 
-                if not person:
-                    return {"success": False, "error": "מדריך לא נמצא"}
+            if not person:
+                return {"success": False, "error": "מדריך לא נמצא"}
 
-                target_email = email if email else person['email']
-                if not target_email:
-                    return {"success": False, "error": f"למדריך {person['name']} אין כתובת מייל"}
+            target_email = email if email else person['email']
+            if not target_email:
+                return {"success": False, "error": f"למדריך {person['name']} אין כתובת מייל"}
 
-                pdf_bytes = _generate_chains_pdf(pid, y, m)
-                if not pdf_bytes:
-                    return {"success": False, "error": "שגיאה ביצירת PDF"}
+            # יצירת PDF ושליחת מייל - ללא חיבור DB
+            pdf_bytes = _generate_chains_pdf(pid, y, m)
+            if not pdf_bytes:
+                return {"success": False, "error": "שגיאה ביצירת PDF"}
 
-                subject = f"דוח פירוט רצפים - {person['name']} - {m:02d}/{y}"
-                body_text = f"""שלום {person['name']},
+            subject = f"דוח פירוט רצפים - {person['name']} - {m:02d}/{y}"
+            body_text = f"""שלום {person['name']},
 
 מצורף דוח פירוט הרצפים שלך לחודש {m:02d}/{y}.
 
@@ -1862,21 +1868,21 @@ async def chains_report_email(
 <span style="color: #888; font-size: 11px;">─────────────────────────────</span>
 <span style="color: red; font-size: 11px;">הודעה זו נשלחה באופן אוטומטי. אין להשיב למייל זה.</span>
 """
-                pdf_filename = f"דוח_רצפים_{person['name']}_{m:02d}_{y}.pdf"
+            pdf_filename = f"דוח_רצפים_{person['name']}_{m:02d}_{y}.pdf"
 
-                result = send_email_with_pdf(
-                    settings=settings,
-                    to_email=target_email,
-                    to_name=person['name'],
-                    subject=subject,
-                    body=body_text,
-                    pdf_bytes=pdf_bytes,
-                    pdf_filename=pdf_filename
-                )
+            result = send_email_with_pdf(
+                settings=settings,
+                to_email=target_email,
+                to_name=person['name'],
+                subject=subject,
+                body=body_text,
+                pdf_bytes=pdf_bytes,
+                pdf_filename=pdf_filename
+            )
 
-                if result['success']:
-                    return {"success": True, "message": f"המייל נשלח בהצלחה ל-{target_email}"}
-                return result
+            if result['success']:
+                return {"success": True, "message": f"המייל נשלח בהצלחה ל-{target_email}"}
+            return result
 
         except Exception as e:
             logger.error(f"Error sending chains email: {e}")

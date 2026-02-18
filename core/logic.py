@@ -199,6 +199,83 @@ def ensure_professional_support_code(conn):
 
 
 # =============================================================================
+# Auto-Approval Functions
+# =============================================================================
+
+
+def auto_approve_substitute_travel(conn, person_id: int, start_date, end_date) -> int:
+    """
+    אישור אוטומטי של נסיעות מדריך מחליף.
+
+    אם כל המשמרות של אותו מדריך באותו יום מאושרות,
+    גם רכיב התשלום "נסיעות מדריך מחליף" לאותו יום מאושר אוטומטית.
+
+    Args:
+        conn: חיבור psycopg2 (raw, לא wrapper)
+        person_id: מזהה המדריך
+        start_date: תחילת טווח (date)
+        end_date: סוף טווח (date)
+
+    Returns:
+        מספר רכיבי התשלום שאושרו
+    """
+    from core.constants import SUBSTITUTE_TRAVEL_TYPE_ID
+
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    try:
+        # שלב 1: מצא רכיבי "נסיעות מדריך מחליף" שטרם אושרו
+        cursor.execute("""
+            SELECT pc.id, pc.date
+            FROM payment_components pc
+            WHERE pc.person_id = %s
+              AND pc.date >= %s AND pc.date < %s
+              AND pc.component_type_id = %s
+              AND pc.is_approved = false
+        """, (person_id, start_date, end_date, SUBSTITUTE_TRAVEL_TYPE_ID))
+        unapproved = cursor.fetchall()
+
+        if not unapproved:
+            return 0
+
+        # שלב 2: לכל תאריך, בדוק אם כל המשמרות מאושרות
+        approved_count = 0
+        for pc in unapproved:
+            cursor.execute("""
+                SELECT COUNT(*) as total,
+                       SUM(CASE WHEN is_approved THEN 1 ELSE 0 END) as approved
+                FROM time_reports
+                WHERE person_id = %s AND date = %s
+            """, (person_id, pc["date"]))
+            check = cursor.fetchone()
+
+            if check["total"] > 0 and check["total"] == check["approved"]:
+                cursor.execute("""
+                    UPDATE payment_components
+                    SET is_approved = true, approved_at = NOW()
+                    WHERE id = %s
+                """, (pc["id"],))
+                approved_count += 1
+
+        if approved_count > 0:
+            conn.commit()
+            logger.info(
+                f"Auto-approved {approved_count} substitute travel payments "
+                f"for person_id={person_id}"
+            )
+
+        return approved_count
+    except Exception as e:
+        logger.error(f"Error in auto_approve_substitute_travel: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return 0
+    finally:
+        cursor.close()
+
+
+# =============================================================================
 # Main Calculation Functions
 # =============================================================================
 

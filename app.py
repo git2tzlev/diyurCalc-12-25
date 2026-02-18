@@ -135,13 +135,25 @@ templates.env.globals["app_version"] = config.VERSION
 # Middleware to set demo mode and housing array filter from cookies
 class DemoModeMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        # Set demo mode based on cookie
         demo_mode = get_demo_mode_from_cookie(request)
         set_demo_mode(demo_mode)
-        # Set housing array filter based on cookie
         housing_array_id = get_housing_array_from_cookie(request)
         set_housing_array_filter(housing_array_id)
         response = await call_next(request)
+
+        # שמירת תקופה נבחרת בעוגייה כשיש month+year ב-query params
+        qp = request.query_params
+        q_month = qp.get("month")
+        q_year = qp.get("year")
+        if q_month and q_year and q_month.isdigit() and q_year.isdigit():
+            response.set_cookie(
+                key="selected_period",
+                value=f"{q_year}-{q_month}",
+                max_age=86400 * 365,
+                httponly=False,
+                samesite="lax",
+            )
+
         return response
 
 
@@ -594,9 +606,9 @@ async def send_guide_email_api(request: Request, person_id: int, year: int, mont
 
 
 @app.post("/api/send-all-guides-email")
-def send_all_guides_email_api(request: Request, year: int, month: int):
-    """Send guide report emails to all active guides."""
-    return send_all_guides_email_route(request, year, month)
+async def send_all_guides_email_api(request: Request, year: int, month: int):
+    """שליחת דוחות לכל המדריכים הפעילים."""
+    return await send_all_guides_email_route(request, year, month)
 
 
 @app.post("/api/send-all-to-single-email")

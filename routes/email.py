@@ -6,7 +6,6 @@ Contains routes for email settings management and sending guide reports.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 
 from fastapi import Request, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -132,9 +131,8 @@ async def test_email_settings(request: Request) -> JSONResponse:
 
 
 async def send_guide_email_route(request: Request, person_id: int, year: int, month: int) -> JSONResponse:
-    """Send guide report email to a specific person or custom email."""
+    """שליחת דוח מדריך במייל."""
     try:
-        # Try to get custom email from request body
         custom_email = None
         try:
             body = await request.json()
@@ -143,31 +141,19 @@ async def send_guide_email_route(request: Request, person_id: int, year: int, mo
             pass
 
         import asyncio
-        
-        # Wrapper function to run in separate thread with its own DB connection
-        def send_email_task_wrapper(pid, y, m, email):
-            try:
-                # Create a fresh connection for this thread to avoid any sharing issues
-                with get_conn() as new_conn:
-                    return send_guide_email(new_conn, pid, y, m, email)
-            except Exception as task_error:
-                logger.error(f"Error in threaded email task: {task_error}")
-                return {"success": False, "error": str(task_error)}
 
-        # Run blocking PDF generation in a thread to prevent event loop deadlock
-        result = await asyncio.to_thread(send_email_task_wrapper, person_id, year, month, custom_email)
-            
+        result = await asyncio.to_thread(send_guide_email, person_id, year, month, custom_email)
         return JSONResponse(result)
     except Exception as e:
         logger.error(f"Error in send_guide_email_route: {e}", exc_info=True)
         return JSONResponse({"success": False, "error": str(e)})
 
 
-def send_all_guides_email_route(request: Request, year: int, month: int) -> JSONResponse:
-    """Send guide report emails to all active guides."""
+async def send_all_guides_email_route(request: Request, year: int, month: int) -> JSONResponse:
+    """שליחת דוחות לכל המדריכים הפעילים."""
     try:
-        with get_conn() as conn:
-            result = send_all_guides_email(conn, year, month)
+        import asyncio
+        result = await asyncio.to_thread(send_all_guides_email, year, month)
         return JSONResponse(result)
     except Exception as e:
         logger.error(f"Error in send_all_guides_email_route: {e}", exc_info=True)
@@ -184,12 +170,7 @@ async def send_all_to_single_email_route(request: Request, year: int, month: int
             return JSONResponse({"success": False, "error": "יש להזין כתובת מייל"})
 
         import asyncio
-
-        def send_task(y, m, email):
-            with get_conn() as conn:
-                return send_all_guides_to_single_email(conn, y, m, email)
-
-        result = await asyncio.to_thread(send_task, year, month, target_email)
+        result = await asyncio.to_thread(send_all_guides_to_single_email, year, month, target_email)
         return JSONResponse(result)
     except Exception as e:
         logger.error(f"Error in send_all_to_single_email_route: {e}", exc_info=True)
@@ -206,12 +187,7 @@ async def send_selected_guides_emails_route(request: Request, year: int, month: 
             return JSONResponse({"success": False, "error": "לא נבחרו מדריכים"})
 
         import asyncio
-
-        def send_task(ids, y, m):
-            with get_conn() as conn:
-                return send_selected_guides_email(conn, ids, y, m)
-
-        result = await asyncio.to_thread(send_task, guide_ids, year, month)
+        result = await asyncio.to_thread(send_selected_guides_email, guide_ids, year, month)
         return JSONResponse(result)
     except Exception as e:
         logger.error(f"Error in send_selected_guides_emails_route: {e}", exc_info=True)
@@ -232,12 +208,7 @@ async def send_selected_guides_to_single_email_route(request: Request, year: int
             return JSONResponse({"success": False, "error": "לא נבחרו מדריכים"})
 
         import asyncio
-
-        def send_task(ids, y, m, email):
-            with get_conn() as conn:
-                return send_selected_guides_to_single_email(conn, ids, y, m, email)
-
-        result = await asyncio.to_thread(send_task, guide_ids, year, month, target_email)
+        result = await asyncio.to_thread(send_selected_guides_to_single_email, guide_ids, year, month, target_email)
         return JSONResponse(result)
     except Exception as e:
         logger.error(f"Error in send_selected_guides_to_single_email_route: {e}", exc_info=True)

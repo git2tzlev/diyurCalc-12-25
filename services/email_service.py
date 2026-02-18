@@ -426,32 +426,32 @@ def send_email_with_pdf(
         return {"success": False, "error": str(e)}
 
 
-def send_guide_email(conn, person_id: int, year: int, month: int, custom_email: Optional[str] = None) -> Dict[str, Any]:
-    """Send guide report email to a specific person or custom email address."""
+def send_guide_email(person_id: int, year: int, month: int, custom_email: Optional[str] = None, settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """שליחת דוח מדריך במייל. מנהל חיבור DB בעצמו ומשחרר לפני עבודה כבדה."""
     try:
-        # Get email settings
-        settings = get_email_settings(conn)
-        if not settings:
-            return {"success": False, "error": "הגדרות מייל לא נמצאו. אנא הגדר אותן בעמוד ההגדרות."}
+        # שליפת הגדרות ופרטי מדריך - חיבור DB קצר
+        with get_conn() as conn:
+            if not settings:
+                settings = get_email_settings(conn)
+            if not settings:
+                return {"success": False, "error": "הגדרות מייל לא נמצאו. אנא הגדר אותן בעמוד ההגדרות."}
 
-        # Get person info
-        person = conn.execute(
-            "SELECT id, name, email FROM people WHERE id = %s",
-            (person_id,)
-        ).fetchone()
+            person = conn.execute(
+                "SELECT id, name, email FROM people WHERE id = %s",
+                (person_id,)
+            ).fetchone()
 
         if not person:
             return {"success": False, "error": "מדריך לא נמצא"}
 
-        # Use custom email if provided, otherwise use person's email
         target_email = custom_email if custom_email else person['email']
 
         if not target_email:
             return {"success": False, "error": f"למדריך {person['name']} אין כתובת מייל"}
 
-        # Generate PDF
+        # יצירת PDF - generate_guide_pdf מנהל חיבור DB בעצמו
         try:
-            pdf_bytes = generate_guide_pdf(conn, person_id, year, month)
+            pdf_bytes = generate_guide_pdf(person_id, year, month)
         except Exception as pdf_err:
             logger.error(f"PDF generation failed for {person['name']}: {pdf_err}", exc_info=True)
             return {"success": False, "error": f"שגיאה ביצירת PDF: {pdf_err}"}
@@ -494,25 +494,25 @@ def send_guide_email(conn, person_id: int, year: int, month: int, custom_email: 
         return {"success": False, "error": str(e)}
 
 
-def send_all_guides_email(conn, year: int, month: int) -> Dict[str, Any]:
-    """Send guide report emails to all active guides with email addresses."""
+def send_all_guides_email(year: int, month: int) -> Dict[str, Any]:
+    """שליחת דוחות לכל המדריכים הפעילים. משחרר חיבור DB לפני הלולאה."""
     try:
-        # Get email settings
-        settings = get_email_settings(conn)
-        if not settings:
-            return {"success": False, "error": "הגדרות מייל לא נמצאו"}
+        # שליפת הגדרות ורשימת מדריכים - חיבור DB קצר
+        with get_conn() as conn:
+            settings = get_email_settings(conn)
+            if not settings:
+                return {"success": False, "error": "הגדרות מייל לא נמצאו"}
 
-        # Get all active guides with emails
-        guides = conn.execute("""
-            SELECT DISTINCT p.id, p.name, p.email
-            FROM people p
-            JOIN time_reports tr ON tr.person_id = p.id
-            WHERE p.is_active = TRUE
-            AND p.email IS NOT NULL
-            AND p.email != ''
-            AND EXTRACT(YEAR FROM tr.date) = %s
-            AND EXTRACT(MONTH FROM tr.date) = %s
-        """, (year, month)).fetchall()
+            guides = conn.execute("""
+                SELECT DISTINCT p.id, p.name, p.email
+                FROM people p
+                JOIN time_reports tr ON tr.person_id = p.id
+                WHERE p.is_active = TRUE
+                AND p.email IS NOT NULL
+                AND p.email != ''
+                AND EXTRACT(YEAR FROM tr.date) = %s
+                AND EXTRACT(MONTH FROM tr.date) = %s
+            """, (year, month)).fetchall()
 
         if not guides:
             return {"success": False, "error": "לא נמצאו מדריכים פעילים עם מייל לחודש זה"}
@@ -520,7 +520,7 @@ def send_all_guides_email(conn, year: int, month: int) -> Dict[str, Any]:
         results = {"success": [], "failed": []}
 
         for guide in guides:
-            result = send_guide_email(conn, guide['id'], year, month)
+            result = send_guide_email(guide['id'], year, month, settings=settings)
             if result.get('success'):
                 results['success'].append(guide['name'])
             else:
@@ -543,34 +543,34 @@ def send_all_guides_email(conn, year: int, month: int) -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
-def send_all_guides_to_single_email(conn, year: int, month: int, target_email: str) -> Dict[str, Any]:
+def send_all_guides_to_single_email(year: int, month: int, target_email: str) -> Dict[str, Any]:
     """שליחת כל דוחות המדריכים למייל אחד (קובץ PDF אחד משולב)."""
     try:
-        # Get email settings
-        settings = get_email_settings(conn)
-        if not settings:
-            return {"success": False, "error": "הגדרות מייל לא נמצאו"}
-
         if not target_email:
             return {"success": False, "error": "לא הוזנה כתובת מייל"}
 
-        # Get all active guides with shifts this month
-        guides = conn.execute("""
-            SELECT DISTINCT p.id, p.name
-            FROM people p
-            JOIN time_reports tr ON tr.person_id = p.id
-            WHERE p.is_active = TRUE
-            AND EXTRACT(YEAR FROM tr.date) = %s
-            AND EXTRACT(MONTH FROM tr.date) = %s
-            ORDER BY p.name
-        """, (year, month)).fetchall()
+        # שליפת הגדרות ורשימת מדריכים - חיבור DB קצר
+        with get_conn() as conn:
+            settings = get_email_settings(conn)
+            if not settings:
+                return {"success": False, "error": "הגדרות מייל לא נמצאו"}
+
+            guides = conn.execute("""
+                SELECT DISTINCT p.id, p.name
+                FROM people p
+                JOIN time_reports tr ON tr.person_id = p.id
+                WHERE p.is_active = TRUE
+                AND EXTRACT(YEAR FROM tr.date) = %s
+                AND EXTRACT(MONTH FROM tr.date) = %s
+                ORDER BY p.name
+            """, (year, month)).fetchall()
 
         if not guides:
             return {"success": False, "error": "לא נמצאו מדריכים עם משמרות בחודש זה"}
 
-        # Generate combined PDF with all guides
+        # יצירת PDF משולב - _generate_combined_guides_pdf מנהל חיבורים בעצמו
         pdf_bytes, guide_count, failed_guides = _generate_combined_guides_pdf(
-            conn, guides, year, month
+            guides, year, month
         )
 
         if not pdf_bytes:
@@ -609,29 +609,30 @@ def send_all_guides_to_single_email(conn, year: int, month: int, target_email: s
         return {"success": False, "error": str(e)}
 
 
-def send_selected_guides_email(conn, guide_ids: list, year: int, month: int) -> Dict[str, Any]:
+def send_selected_guides_email(guide_ids: list, year: int, month: int) -> Dict[str, Any]:
     """שליחת דוחות למדריכים נבחרים בלבד (לפי רשימת מזהים)."""
     try:
         logger.info(f"=== התחלת שליחת מיילים ל-{len(guide_ids)} מדריכים - {month:02d}/{year} ===")
-
-        settings = get_email_settings(conn)
-        if not settings:
-            logger.error("הגדרות מייל לא נמצאו")
-            return {"success": False, "error": "הגדרות מייל לא נמצאו"}
 
         if not guide_ids:
             logger.warning("לא נבחרו מדריכים")
             return {"success": False, "error": "לא נבחרו מדריכים"}
 
-        # שליפת פרטי המדריכים הנבחרים שיש להם מייל
-        placeholders = ",".join(["%s"] * len(guide_ids))
-        guides = conn.execute(f"""
-            SELECT id, name, email
-            FROM people
-            WHERE id IN ({placeholders})
-            AND email IS NOT NULL
-            AND email != ''
-        """, tuple(guide_ids)).fetchall()
+        # שליפת הגדרות ורשימת מדריכים - חיבור DB קצר
+        with get_conn() as conn:
+            settings = get_email_settings(conn)
+            if not settings:
+                logger.error("הגדרות מייל לא נמצאו")
+                return {"success": False, "error": "הגדרות מייל לא נמצאו"}
+
+            placeholders = ",".join(["%s"] * len(guide_ids))
+            guides = conn.execute(f"""
+                SELECT id, name, email
+                FROM people
+                WHERE id IN ({placeholders})
+                AND email IS NOT NULL
+                AND email != ''
+            """, tuple(guide_ids)).fetchall()
 
         if not guides:
             logger.warning("לא נמצאו מדריכים עם מייל ברשימה")
@@ -647,14 +648,14 @@ def send_selected_guides_email(conn, guide_ids: list, year: int, month: int) -> 
             guide_email = guide['email']
             logger.info(f"[{idx}/{total}] שולח ל: {guide_name} ({guide_email})...")
 
-            result = send_guide_email(conn, guide['id'], year, month)
+            result = send_guide_email(guide['id'], year, month, settings=settings)
 
             if result.get('success'):
-                logger.info(f"[{idx}/{total}] ✓ נשלח בהצלחה: {guide_name} -> {guide_email}")
+                logger.info(f"[{idx}/{total}] נשלח בהצלחה: {guide_name} -> {guide_email}")
                 results['success'].append({"name": guide_name, "email": guide_email})
             else:
                 error_msg = result.get('error', 'שגיאה לא ידועה')
-                logger.error(f"[{idx}/{total}] ✗ נכשל: {guide_name} ({guide_email}) - {error_msg}")
+                logger.error(f"[{idx}/{total}] נכשל: {guide_name} ({guide_email}) - {error_msg}")
                 results['failed'].append({
                     "name": guide_name,
                     "email": guide_email,
@@ -683,34 +684,35 @@ def send_selected_guides_email(conn, guide_ids: list, year: int, month: int) -> 
         return {"success": False, "error": str(e)}
 
 
-def send_selected_guides_to_single_email(conn, guide_ids: list, year: int, month: int, target_email: str) -> Dict[str, Any]:
+def send_selected_guides_to_single_email(guide_ids: list, year: int, month: int, target_email: str) -> Dict[str, Any]:
     """שליחת דוחות מדריכים נבחרים למייל אחד (קובץ PDF משולב)."""
     try:
-        settings = get_email_settings(conn)
-        if not settings:
-            return {"success": False, "error": "הגדרות מייל לא נמצאו"}
-
         if not target_email:
             return {"success": False, "error": "לא הוזנה כתובת מייל"}
 
         if not guide_ids:
             return {"success": False, "error": "לא נבחרו מדריכים"}
 
-        # שליפת פרטי המדריכים הנבחרים
-        placeholders = ",".join(["%s"] * len(guide_ids))
-        guides = conn.execute(f"""
-            SELECT id, name
-            FROM people
-            WHERE id IN ({placeholders})
-            ORDER BY name
-        """, tuple(guide_ids)).fetchall()
+        # שליפת הגדרות ורשימת מדריכים - חיבור DB קצר
+        with get_conn() as conn:
+            settings = get_email_settings(conn)
+            if not settings:
+                return {"success": False, "error": "הגדרות מייל לא נמצאו"}
+
+            placeholders = ",".join(["%s"] * len(guide_ids))
+            guides = conn.execute(f"""
+                SELECT id, name
+                FROM people
+                WHERE id IN ({placeholders})
+                ORDER BY name
+            """, tuple(guide_ids)).fetchall()
 
         if not guides:
             return {"success": False, "error": "לא נמצאו מדריכים ברשימה"}
 
-        # Generate combined PDF with selected guides
+        # יצירת PDF משולב - _generate_combined_guides_pdf מנהל חיבורים בעצמו
         pdf_bytes, guide_count, failed_guides = _generate_combined_guides_pdf(
-            conn, guides, year, month
+            guides, year, month
         )
 
         if not pdf_bytes:
@@ -749,10 +751,11 @@ def send_selected_guides_to_single_email(conn, guide_ids: list, year: int, month
         return {"success": False, "error": str(e)}
 
 
-def _generate_combined_guides_pdf(conn, guides, year: int, month: int):
+def _generate_combined_guides_pdf(guides, year: int, month: int):
     """יצירת קובץ PDF אחד משולב עם כל המדריכים - כל מדריך בעמוד נפרד.
 
     משתמש ב-prepare_guide_pdf_data מ-routes.guide לקבלת נתונים זהים לדוח הבודד.
+    כל מדריך מקבל חיבור DB קצר ומשחרר אותו לפני יצירת PDF.
     """
     import time
     import subprocess
@@ -764,11 +767,9 @@ def _generate_combined_guides_pdf(conn, guides, year: int, month: int):
     successful_guides = 0
 
     try:
-        # Setup Jinja2 template
         env = Environment(loader=FileSystemLoader(str(config.TEMPLATES_DIR)))
         template = env.get_template("guide_shifts_pdf.html")
 
-        # Collect HTML content from all guides
         html_parts = []
 
         for guide in guides:
@@ -776,8 +777,9 @@ def _generate_combined_guides_pdf(conn, guides, year: int, month: int):
                 person_id = guide['id']
                 person_name = guide['name']
 
-                # שימוש בפונקציה המשותפת להכנת נתונים - זהה לדוח הבודד
-                pdf_data = prepare_guide_pdf_data(conn, person_id, year, month)
+                # חיבור DB קצר לכל מדריך - משתחרר מיד
+                with get_conn() as conn:
+                    pdf_data = prepare_guide_pdf_data(conn, person_id, year, month)
 
                 if not pdf_data:
                     failed_guides.append(person_name)
