@@ -49,11 +49,15 @@ TAGBUR_SHIFT_IDS: Set[int] = {TAGBUR_FRIDAY_SHIFT_ID, TAGBUR_SHABBAT_SHIFT_ID}
 
 REGULAR_APT_TYPE = 1        # דירה רגילה
 THERAPEUTIC_APT_TYPE = 2    # דירה טיפולית
+HIGH_FUNCTIONING_APT_TYPE = 6   # תפקוד גבוה
+LOW_FUNCTIONING_APT_TYPE = 7    # תפקוד נמוך
 
 # מיפוי סוג דירה לשם
 APT_TYPE_NAMES = {
     REGULAR_APT_TYPE: "דירה רגילה",
     THERAPEUTIC_APT_TYPE: "דירה טיפולית",
+    HIGH_FUNCTIONING_APT_TYPE: "תפקוד גבוה",
+    LOW_FUNCTIONING_APT_TYPE: "תפקוד נמוך",
 }
 
 # =============================================================================
@@ -89,6 +93,9 @@ STANDBY_CANCEL_OVERLAP_THRESHOLD = 0.70
 
 # Default standby rate (in shekels)
 DEFAULT_STANDBY_RATE = 70.0
+
+# ASD night standby rate for high functioning apartments (in shekels)
+ASD_NIGHT_STANDBY_RATE = 150.0
 
 # Maximum deduction from cancelled standby
 # If standby rate > 70, pay the difference (rate - 70)

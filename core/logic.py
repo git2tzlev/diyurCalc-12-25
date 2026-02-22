@@ -134,7 +134,9 @@ def get_payment_codes(conn):
         cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         cursor.execute("""
             SELECT * FROM payment_codes
-            ORDER BY display_order ASC NULLS LAST
+            ORDER BY
+              CASE WHEN merav_code ~ '^\d+$' THEN CAST(merav_code AS INTEGER) ELSE 999999 END ASC,
+              display_order ASC NULLS LAST
         """)
         result = cursor.fetchall()
         cursor.close()

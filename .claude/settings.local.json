@@ -56,7 +56,12 @@
       "Bash(xargs:*)",
       "Bash(uvicorn app:app:*)",
       "Bash(test:*)",
-      "Bash(wmic process:*)"
+      "Bash(wmic process:*)",
+      "Bash(git stash push:*)",
+      "Bash(git stash pop:*)",
+      "Bash(git log:*)",
+      "Bash(git reflog:*)",
+      "Bash(python.exe -m pytest:*)"
     ],
     "deny": [],
     "ask": []
