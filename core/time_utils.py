@@ -270,3 +270,82 @@ def _get_shabbat_boundaries(day_date: date, shabbat_cache: Dict[str, Dict[str, s
                 pass
 
     return (enter_minutes, exit_minutes)
+
+
+# =============================================================================
+# Purim Boundary Detection
+# =============================================================================
+
+def _get_purim_date(shabbat_cache: Dict[str, Dict[str, str]], is_jerusalem: bool) -> date | None:
+    """
+    מציאת תאריך פורים מתוך ה-cache.
+
+    מחפש רשומה עם holiday_name "פורים" (לא ירושלים) או "שושן פורים" (ירושלים).
+
+    Returns:
+        תאריך פורים או None אם לא נמצא
+    """
+    from core.constants import PURIM_HOLIDAY_NAME, SHUSHAN_PURIM_HOLIDAY_NAME
+    target = SHUSHAN_PURIM_HOLIDAY_NAME if is_jerusalem else PURIM_HOLIDAY_NAME
+
+    for date_str, info in shabbat_cache.items():
+        if info.get("holiday") == target:
+            try:
+                return datetime.strptime(date_str, "%Y-%m-%d").date()
+            except ValueError:
+                return None
+    return None
+
+
+def _get_purim_boundaries(
+    day_date: date,
+    shabbat_cache: Dict[str, Dict[str, str]],
+    is_jerusalem: bool
+) -> Tuple[int, int]:
+    """
+    גבולות פורים ליום נתון.
+
+    פורים: תעריף 150% מ-08:00 ביום הפורים עד 08:00 למחרת בבוקר.
+    - ביום הפורים עצמו: (480, 1440) = מ-08:00 עד חצות
+    - ביום שלמחרת: (0, 480) = מחצות עד 08:00
+
+    Returns:
+        (enter, exit) בדקות מחצות, או (-1, -1) אם היום לא פורים
+    """
+    from core.constants import PURIM_ENTER_MINUTES, PURIM_EXIT_MINUTES
+
+    purim_date = _get_purim_date(shabbat_cache, is_jerusalem)
+    if purim_date is None:
+        return (-1, -1)
+
+    if day_date == purim_date:
+        # יום הפורים: 08:00 עד חצות
+        return (PURIM_ENTER_MINUTES, MINUTES_PER_DAY)
+
+    if day_date == purim_date + timedelta(days=1):
+        # בוקר למחרת: חצות עד 08:00
+        return (0, PURIM_EXIT_MINUTES)
+
+    return (-1, -1)
+
+
+def _is_purim_time(
+    actual_date: date,
+    start_min: int,
+    shabbat_cache: Dict[str, Dict[str, str]],
+    is_jerusalem: bool
+) -> bool:
+    """
+    בדיקה אם זמן נתון חל בשעות פורים.
+
+    Args:
+        actual_date: התאריך בפועל
+        start_min: דקות מחצות (יכול להיות >1440 למשמרות לילה)
+        shabbat_cache: מטמון זמני שבת
+        is_jerusalem: האם הדירה בירושלים
+    """
+    purim_enter, purim_exit = _get_purim_boundaries(actual_date, shabbat_cache, is_jerusalem)
+    if purim_enter < 0:
+        return False
+    actual_minute = start_min % MINUTES_PER_DAY
+    return purim_enter <= actual_minute < purim_exit

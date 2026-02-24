@@ -6,6 +6,7 @@ from core.time_utils import (
     REGULAR_HOURS_LIMIT, OVERTIME_125_LIMIT,
     FRIDAY, SATURDAY,
     span_minutes, to_local_date, _get_shabbat_boundaries,
+    _get_purim_boundaries, _is_purim_time,
 )
 from utils.utils import overlap_minutes, to_gematria, month_range_ts, merge_intervals, find_uncovered_intervals
 from convertdate import hebrew
@@ -67,6 +68,10 @@ from core.constants import (
     calculate_night_hours_in_segment,
     # Night hours threshold
     NIGHT_HOURS_THRESHOLD,
+    # Purim constants
+    PURIM_HOLIDAY_NAME,
+    SHUSHAN_PURIM_HOLIDAY_NAME,
+    JERUSALEM_CITY_NAMES,
 )
 
 logger = logging.getLogger(__name__)
@@ -162,7 +167,8 @@ def _calculate_chain_wages(
     chain_segments: List[Tuple[int, int, int, date]],
     shabbat_cache: Dict[str, Dict[str, str]],
     minutes_offset: int = 0,
-    is_night_shift: bool = False
+    is_night_shift: bool = False,
+    is_jerusalem: bool = False
 ) -> Dict[str, Any]:
     """
     חישוב שכר לרצף עבודה (chain) בשיטת בלוקים.
@@ -170,13 +176,14 @@ def _calculate_chain_wages(
     במקום לעבור דקה-דקה, מחשב בלוקים לפי גבולות:
     - 480 דקות (מעבר 100% -> 125%) - או 420 למשמרת לילה
     - 600 דקות (מעבר 125% -> 150%) - או 540 למשמרת לילה
-    - גבולות שבת (כניסה/יציאה)
+    - גבולות שבת/חג/פורים (כניסה/יציאה)
 
     Args:
         chain_segments: List of (start_min, end_min, shift_id, actual_date) tuples
         shabbat_cache: Cache of Shabbat times
         minutes_offset: Minutes already worked in this chain (from previous day's carryover)
         is_night_shift: Whether this is a night shift (uses 7-hour day instead of 8)
+        is_jerusalem: Whether the apartment is in Jerusalem (affects Purim date)
 
     Returns:
         Dict with calc100, calc125, calc150, calc175, calc200,
@@ -218,6 +225,11 @@ def _calculate_chain_wages(
         seg_weekday = seg_actual_date.weekday()
         shabbat_enter, shabbat_exit = _get_shabbat_boundaries(seg_actual_date, shabbat_cache)
         seg_is_shabbat_or_holiday = (shabbat_enter > 0)
+
+        # בדיקת גבולות פורים - לוגיקה נפרדת כי פורים משתמש בזמנים קבועים (08:00-08:00)
+        # ותלוי במיקום הדירה (ירושלים/לא ירושלים)
+        purim_enter, purim_exit = _get_purim_boundaries(seg_actual_date, shabbat_cache, is_jerusalem)
+        seg_is_purim = (purim_enter >= 0)
 
         # בדיקה אם היום הוא שבת/חג (לא ערב שבת/חג)
         # שבת: weekday == SATURDAY
@@ -1004,7 +1016,8 @@ def get_daily_segments_data(
                        rate_at.name AS rate_apartment_type_name,
                        rate_at.hourly_wage_supplement AS rate_hourly_wage_supplement,
                        p.is_married,
-                       p.name as person_name
+                       p.name as person_name,
+                       ap.city AS apartment_city
                 FROM time_reports tr
                 LEFT JOIN shift_types st ON st.id = tr.shift_type_id
                 JOIN apartments ap ON ap.id = tr.apartment_id
@@ -1033,7 +1046,8 @@ def get_daily_segments_data(
                        rate_at.name AS rate_apartment_type_name,
                        rate_at.hourly_wage_supplement AS rate_hourly_wage_supplement,
                        p.is_married,
-                       p.name as person_name
+                       p.name as person_name,
+                       ap.city AS apartment_city
                 FROM time_reports tr
                 LEFT JOIN shift_types st ON st.id = tr.shift_type_id
                 LEFT JOIN apartments ap ON ap.id = tr.apartment_id
@@ -1426,11 +1440,13 @@ def get_daily_segments_data(
             housing_array_id = r.get("housing_array_id")
 
             # שעות לא מכוסות לפני תחילת המשמרת
-            # בתגבור: ביום שישי (weekday==4) רק לפני, בשבת (weekday==5) רק אחרי
+            # חופשה/מחלה: אין שעות לא מכוסות כלל (הכל חלק מהחופשה/מחלה)
+            # תגבור: ביום שישי (weekday==4) רק לפני, בשבת (weekday==5) רק אחרי
             is_friday = r_date.weekday() == 4
             is_saturday = r_date.weekday() == 5
+            is_vacation_or_sick = is_vacation_report or is_sick_report
 
-            if rep_start_orig < first_seg_start and not is_saturday:
+            if rep_start_orig < first_seg_start and not is_saturday and not is_vacation_or_sick:
                 uncov_start = rep_start_orig
                 uncov_end = first_seg_start
                 entry["segments"].append((uncov_start, uncov_end, "work", "work", WORK_HOUR_SHIFT_ID, None, apartment_type_id, is_married, apartment_name, r_date, actual_apartment_type_id, None, housing_array_id, apartment_type_name, housing_array_name, rate_apartment_type_name, apartment_type_change_date, rate_apartment_type_id))
@@ -1476,13 +1492,14 @@ def get_daily_segments_data(
 
                 # For fixed segment shifts (tagbur/vacation/sick), standby_defined_end = seg_end (full standby)
                 standby_defined_end = seg_end if effective_seg_type == "standby" else None
-                entry["segments"].append((seg_start, seg_end, effective_seg_type, label, r["shift_type_id"], segment_id, apartment_type_id, is_married, apartment_name, actual_seg_date, actual_apartment_type_id, standby_defined_end, housing_array_id, apartment_type_name, housing_array_name, rate_apartment_type_name, apartment_type_change_date, rate_apartment_type_id))
+                apartment_city = r.get("apartment_city", "")
+                entry["segments"].append((seg_start, seg_end, effective_seg_type, label, r["shift_type_id"], segment_id, apartment_type_id, is_married, apartment_name, actual_seg_date, actual_apartment_type_id, standby_defined_end, housing_array_id, apartment_type_name, housing_array_name, rate_apartment_type_name, apartment_type_change_date, rate_apartment_type_id, apartment_city))
 
             # שעות לא מכוסות אחרי סיום המשמרת
-            # התאמה למקרה של משמרת שחוצה חצות
-            # בתגבור: ביום שישי רק לפני, בשבת רק אחרי
+            # חופשה/מחלה: אין שעות לא מכוסות כלל
+            # תגבור: ביום שישי רק לפני, בשבת רק אחרי
             effective_rep_end = rep_end_orig if rep_end_orig > rep_start_orig else rep_end_orig + MINUTES_PER_DAY
-            if effective_rep_end > last_seg_end and not is_friday:
+            if effective_rep_end > last_seg_end and not is_friday and not is_vacation_or_sick:
                 uncov_start = last_seg_end
                 uncov_end = effective_rep_end
                 # התאריך של הסגמנט הלא מכוסה אחרי = התאריך של הסגמנט האחרון
@@ -1723,8 +1740,9 @@ def get_daily_segments_data(
                     # to detect early exit: if eff_end < standby_defined_end, it's early exit
                     standby_defined_end = current_seg_end if effective_seg_type == "standby" else None
                     housing_array_id = r.get("housing_array_id")
-                    entry["segments"].append((eff_start, eff_end, effective_seg_type, label, r["shift_type_id"], segment_id, apartment_type_id, is_married, apartment_name, p_date, actual_apartment_type_id, standby_defined_end, housing_array_id, apartment_type_name, housing_array_name, rate_apartment_type_name, apartment_type_change_date, rate_apartment_type_id))
-                    
+                    apartment_city = r.get("apartment_city", "")
+                    entry["segments"].append((eff_start, eff_end, effective_seg_type, label, r["shift_type_id"], segment_id, apartment_type_id, is_married, apartment_name, p_date, actual_apartment_type_id, standby_defined_end, housing_array_id, apartment_type_name, housing_array_name, rate_apartment_type_name, apartment_type_change_date, rate_apartment_type_id, apartment_city))
+
                 # Uncovered minutes -> work
                 # חישוב שעות עבודה שלא מכוסות ע"י סגמנטים מוגדרים
                 total_part_minutes = s_end - s_start
@@ -1747,6 +1765,7 @@ def get_daily_segments_data(
                     rate_apartment_type_name = r.get("rate_apartment_type_name", "")
                     apartment_type_change_date = r.get("apartment_type_change_date", "")
                     housing_array_id = r.get("housing_array_id")
+                    apartment_city = r.get("apartment_city", "")
 
                     for uncov_start, uncov_end in uncovered_intervals:
                         uncov_duration = uncov_end - uncov_start
@@ -1769,7 +1788,7 @@ def get_daily_segments_data(
                             eff_uncov_start, eff_uncov_end, "work", "work",
                             uncovered_shift_id, segment_id,
                             apartment_type_id, is_married,
-                            apartment_name, p_date, actual_apartment_type_id, None, housing_array_id, apartment_type_name, housing_array_name, rate_apartment_type_name, apartment_type_change_date, rate_apartment_type_id
+                            apartment_name, p_date, actual_apartment_type_id, None, housing_array_id, apartment_type_name, housing_array_name, rate_apartment_type_name, apartment_type_change_date, rate_apartment_type_id, apartment_city
                         ))
 
     # Process Daily Segments
@@ -1861,23 +1880,24 @@ def get_daily_segments_data(
         sick_segments = []
 
         for seg_entry in raw_segments:
-            # Normalize length to 18 (now includes rate_apartment_type_id)
-            if len(seg_entry) < 18:
+            # Normalize length to 19 (now includes apartment_city)
+            if len(seg_entry) < 19:
                 # Pad with None
-                seg_entry = seg_entry + (None,) * (18 - len(seg_entry))
+                seg_entry = seg_entry + (None,) * (19 - len(seg_entry))
 
-            s_start, s_end, s_type, label, sid, seg_id, apt_type, married, apt_name, actual_date, actual_apt_type, standby_defined_end, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date, rate_apt_type = seg_entry
+            s_start, s_end, s_type, label, sid, seg_id, apt_type, married, apt_name, actual_date, actual_apt_type, standby_defined_end, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date, rate_apt_type, apt_city = seg_entry
 
             if s_type == "standby":
                 # Include shift_type_id (sid) for priority selection when merging
                 # Include standby_defined_end for early exit detection
-                standby_segments.append((s_start, s_end, seg_id, apt_type, married, actual_date, sid, actual_apt_type, standby_defined_end))
+                # Include apt_city for Purim standby rate calculation
+                standby_segments.append((s_start, s_end, seg_id, apt_type, married, actual_date, sid, actual_apt_type, standby_defined_end, apt_city))
             elif s_type == "vacation":
                 vacation_segments.append((s_start, s_end, actual_date))
             elif s_type == "sick":
                 sick_segments.append((s_start, s_end, actual_date))
             else:
-                work_segments.append((s_start, s_end, label, sid, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date))
+                work_segments.append((s_start, s_end, label, sid, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date, apt_city))
                 
         work_segments.sort(key=lambda x: x[0])
         standby_segments.sort(key=lambda x: x[0])
@@ -1892,7 +1912,7 @@ def get_daily_segments_data(
             if k not in seen:
                 deduped.append(w)
                 seen.add(k)
-        work_segments = deduped  # Each is (start, end, label, sid, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date)
+        work_segments = deduped  # Each is (start, end, label, sid, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date, apt_city)
 
         # Note: Night chain detection is now done per-chain, not per-day
         # A chain is a "night chain" if it has 2+ hours in 22:00-06:00 range
@@ -1916,16 +1936,16 @@ def get_daily_segments_data(
         merged_standbys = []
 
         for sb in standby_segments:
-            sb_start, sb_end, seg_id, apt_type, married, actual_date, shift_type_id, actual_apt_type, standby_defined_end = sb
+            sb_start, sb_end, seg_id, apt_type, married, actual_date, shift_type_id, actual_apt_type, standby_defined_end, sb_apt_city = sb
 
             if merged_standbys and sb_start <= merged_standbys[-1][1]:  # Overlapping or adjacent
                 # Extend the previous merged standby, keep original seg_id
                 # Keep the max standby_defined_end for early exit detection
                 prev = merged_standbys[-1]
                 new_defined_end = max(prev[8] or 0, standby_defined_end or 0) if (prev[8] or standby_defined_end) else None
-                merged_standbys[-1] = (prev[0], max(prev[1], sb_end), prev[2], prev[3], prev[4], prev[5], prev[6], prev[7], new_defined_end)
+                merged_standbys[-1] = (prev[0], max(prev[1], sb_end), prev[2], prev[3], prev[4], prev[5], prev[6], prev[7], new_defined_end, prev[9])
             else:
-                merged_standbys.append((sb_start, sb_end, seg_id, apt_type, married, actual_date, shift_type_id, actual_apt_type, standby_defined_end))
+                merged_standbys.append((sb_start, sb_end, seg_id, apt_type, married, actual_date, shift_type_id, actual_apt_type, standby_defined_end, sb_apt_city))
 
         # Standby Trim Logic - subtract work time from standby instead of cancelling
         # NEW: Early exit detection - if standby ends before its defined end due to early exit,
@@ -1935,7 +1955,7 @@ def get_daily_segments_data(
         early_exit_work_segments = []  # כוננויות חלקיות בגלל יציאה מוקדמת - יהפכו לעבודה
 
         for sb in merged_standbys:
-            sb_start, sb_end, seg_id, apt_type, married, actual_date, shift_type_id, actual_apt_type, standby_defined_end = sb
+            sb_start, sb_end, seg_id, apt_type, married, actual_date, shift_type_id, actual_apt_type, standby_defined_end, sb_apt_city = sb
             duration = sb_end - sb_start
             if duration <= 0: continue
 
@@ -1957,10 +1977,10 @@ def get_daily_segments_data(
             if is_early_exit:
                 # יציאה מוקדמת - הכוננות החלקית הופכת לשעות עבודה שממשיכות את הרצף
                 # הוספה לרשימת סגמנטי עבודה במקום כוננות
-                # (start, end, label, sid, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date)
+                # (start, end, label, sid, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date, apt_city)
                 early_exit_work_segments.append((
                     sb_start, sb_end, "כוננות חלקית", shift_type_id,
-                    "", actual_date, apt_type, actual_apt_type, apt_type, None, "", "", "", ""
+                    "", actual_date, apt_type, actual_apt_type, apt_type, None, "", "", "", "", sb_apt_city
                 ))
                 # לא מוסיפים ל-trimmed_standbys ולא ל-cancelled_standbys
                 continue
@@ -2024,7 +2044,7 @@ def get_daily_segments_data(
                 # Add trimmed parts (keep shift_type_id, actual_apt_type, and standby_defined_end)
                 for r_start, r_end in remaining_parts:
                     if r_end > r_start:
-                        trimmed_standbys.append((r_start, r_end, seg_id, apt_type, married, actual_date, shift_type_id, actual_apt_type, standby_defined_end))
+                        trimmed_standbys.append((r_start, r_end, seg_id, apt_type, married, actual_date, shift_type_id, actual_apt_type, standby_defined_end, sb_apt_city))
 
         standby_segments = trimmed_standbys
 
@@ -2122,7 +2142,7 @@ def get_daily_segments_data(
             # עיבוד כוננויות רק למשמרות תגבור (לא לחופשה/מחלה)
             is_tagbur = bool(day_shift_ids & TAGBUR_SHIFT_IDS)  # בדיקה לפי ID
             if is_tagbur and standby_segments:
-                for sb_start, sb_end, seg_id, apt_type, married, actual_date, _shift_type_id, actual_apt_type, _standby_defined_end in standby_segments:
+                for sb_start, sb_end, seg_id, apt_type, married, actual_date, _shift_type_id, actual_apt_type, _standby_defined_end, _sb_apt_city in standby_segments:
                     duration = sb_end - sb_start
                     if duration <= 0:
                         continue
@@ -2249,16 +2269,20 @@ def get_daily_segments_data(
         last_etype = None
 
         def calculate_chain_pay(segments, minutes_offset=0, carryover_night_minutes=0):
-            # segments is list of (start, end, label, shift_id, apartment_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name)
+            # segments is list of (start, end, label, shift_id, apartment_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date, apt_city)
             # Convert to format expected by _calculate_chain_wages: (start, end, shift_id, actual_date)
             # Include actual_date for each segment for correct Shabbat calculation
-            chain_segs = [(s, e, sid, adate) for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date in segments]
+            chain_segs = [(s, e, sid, adate) for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date, apt_city in segments]
+
+            # Determine if apartment is in Jerusalem (for Purim date calculation)
+            first_city = segments[0][14] if segments else ""
+            chain_is_jerusalem = (first_city or "") in JERUSALEM_CITY_NAMES
 
             # Calculate night hours in current chain segments
             # Times are in extended 00:00-32:00 axis (0-1920 minutes)
             # where 1440+ represents next day (00:00-08:00 after midnight)
             current_chain_night_minutes = 0
-            for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date in segments:
+            for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date, apt_city in segments:
                 # Convert from extended 00:00-32:00 axis to 00:00-24:00 axis
                 real_start = s % 1440
                 real_end = e % 1440
@@ -2276,7 +2300,7 @@ def get_daily_segments_data(
             # Use optimized block calculation with carryover offset
             # Pass night chain flag for 7-hour workday threshold
             # Each segment includes its actual_date for correct Shabbat boundary calculation
-            result = _calculate_chain_wages(chain_segs, shabbat_cache, minutes_offset, chain_is_night)
+            result = _calculate_chain_wages(chain_segs, shabbat_cache, minutes_offset, chain_is_night, chain_is_jerusalem)
 
             c_100 = result["calc100"]
             c_125 = result["calc125"]
