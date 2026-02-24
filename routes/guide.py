@@ -22,7 +22,8 @@ from core.logic import (
 )
 from core.history import get_minimum_wage_for_month
 from app_utils import get_daily_segments_data, aggregate_daily_segments_to_monthly
-from core.constants import is_implicit_tagbur, FRIDAY_SHIFT_ID, SHABBAT_SHIFT_ID
+from core.constants import is_implicit_tagbur, FRIDAY_SHIFT_ID, SHABBAT_SHIFT_ID, PERMANENT_EMPLOYEE_TYPE
+from core.holiday_payment import calculate_holiday_payments
 from utils.utils import month_range_ts, format_currency, format_currency_total, human_date
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,32 @@ def _validate_guide_access(person_id: int, housing_filter: Optional[int]) -> Non
 
         if not row or row["housing_array_id"] != housing_filter:
             raise HTTPException(status_code=403, detail="אין הרשאה לצפות במדריך זה")
+
+
+def _inject_holiday_payment(
+    conn, monthly_totals: dict, person_id: int,
+    year: int, month: int, shabbat_cache: dict,
+    minimum_wage: float, housing_filter: int | None,
+) -> None:
+    """הזרקת תשלום חג ל-monthly_totals (in-place)."""
+    person_type = conn.execute(
+        "SELECT type FROM people WHERE id = %s", (person_id,)
+    ).fetchone()
+    if not person_type or person_type["type"] != PERMANENT_EMPLOYEE_TYPE:
+        return
+
+    hp_map = calculate_holiday_payments(
+        conn.conn, year, month, shabbat_cache, minimum_wage,
+        housing_filter=housing_filter,
+    )
+    hp = hp_map.get(person_id, 0)
+    if hp > 0:
+        monthly_totals["holiday_payment"] = hp
+        hp_rounded = round(round(hp, 2), 1)
+        monthly_totals["total_payment"] = monthly_totals.get("total_payment", 0) + hp_rounded
+        monthly_totals["gesher_total"] = monthly_totals.get("gesher_total", 0) + hp_rounded
+        monthly_totals["display_total"] = monthly_totals.get("display_total", 0) + hp_rounded
+        monthly_totals["rounded_total"] = monthly_totals.get("rounded_total", 0) + hp_rounded
 
 
 def simple_summary_view(
@@ -106,14 +133,16 @@ def simple_summary_view(
                 continue
 
             # Determine type
-            # weekday() 0-3=Sun-Wed, 4=Thu(Wait.. Mon=0..Sun=6)
             # Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
             wd = day["date_obj"].weekday()
+            day_str = day["date_obj"].strftime("%Y-%m-%d")
+            day_info = shabbat_cache.get(day_str)
 
-            # Sun(6), Mon(0)-Thu(3) -> Weekday
-            is_weekday = (wd == 6 or wd <= 3)
-            is_friday = (wd == 4)
-            is_saturday = (wd == 5)
+            # זיהוי חג באמצע השבוע לפי טבלת shabbat_times
+            is_holiday = bool(day_info and (day_info.get("enter") or day_info.get("exit")) and wd != 4 and wd != 5)
+            is_friday = (wd == 4) or (is_holiday and day_info and day_info.get("enter") and not day_info.get("exit"))
+            is_saturday = (wd == 5) or (is_holiday and not is_friday)
+            is_weekday = not is_friday and not is_saturday
 
             day_payment = day["payment"] or 0
 
@@ -277,6 +306,12 @@ def guide_view(
                 conn, daily_segments, person_id, selected_year, selected_month, MINIMUM_WAGE
             )
             logger.info(f"aggregate_daily_segments_to_monthly took: {time.time() - totals_start:.4f}s")
+
+            _inject_holiday_payment(
+                conn, monthly_totals, person_id,
+                selected_year, selected_month, shabbat_cache,
+                MINIMUM_WAGE, housing_filter,
+            )
 
             # Get raw reports for the template
             start_dt, end_dt = month_range_ts(selected_year, selected_month)
@@ -905,6 +940,11 @@ def shifts_report_view(
         monthly_totals = aggregate_daily_segments_to_monthly(
             conn, daily_segments, person_id, year, month, MINIMUM_WAGE
         )
+        _inject_holiday_payment(
+            conn, monthly_totals, person_id,
+            year, month, shabbat_cache,
+            MINIMUM_WAGE, housing_filter,
+        )
 
         variable_by_shift = {}
         for day in daily_segments:
@@ -1349,6 +1389,11 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int) -> Optio
     monthly_totals = aggregate_daily_segments_to_monthly(
         conn, daily_segments, person_id, year, month, MINIMUM_WAGE
     )
+    _inject_holiday_payment(
+        conn, monthly_totals, person_id,
+        year, month, shabbat_cache,
+        MINIMUM_WAGE, housing_filter,
+    )
 
     variable_by_shift = {}
     for day in daily_segments:
@@ -1692,6 +1737,11 @@ def _prepare_chains_pdf_data(conn, person_id: int, year: int, month: int) -> Opt
     shabbat_cache = get_shabbat_times_cache(conn.conn)
     daily_segments, _ = get_daily_segments_data(conn, person_id, year, month, shabbat_cache, MINIMUM_WAGE)
     monthly_totals = aggregate_daily_segments_to_monthly(conn, daily_segments, person_id, year, month, MINIMUM_WAGE)
+    _inject_holiday_payment(
+        conn, monthly_totals, person_id,
+        year, month, shabbat_cache,
+        MINIMUM_WAGE, get_housing_array_filter(),
+    )
 
     return {
         "person": person,

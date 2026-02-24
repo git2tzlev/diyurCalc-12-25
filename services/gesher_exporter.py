@@ -65,6 +65,7 @@ def load_export_config_from_db(conn) -> Dict[str, Tuple[str, str, str]]:
             # סכומים ישירים
             'travel': 'money',
             'professional_support': 'money',
+            'holiday_payment': 'money',
             'extras': 'money',
             
             # נתונים אינפורמטיביים

@@ -276,30 +276,25 @@ def _get_shabbat_boundaries(day_date: date, shabbat_cache: Dict[str, Dict[str, s
 # Purim Boundary Detection
 # =============================================================================
 
-def _get_purim_date(shabbat_cache: Dict[str, Dict[str, str]], is_jerusalem: bool) -> date | None:
+def _get_purim_date(day_date: date, is_jerusalem: bool) -> date:
     """
-    מציאת תאריך פורים מתוך ה-cache.
+    חישוב תאריך פורים מלוח עברי.
 
-    מחפש רשומה עם holiday_name "פורים" (לא ירושלים) או "שושן פורים" (ירושלים).
-
-    Returns:
-        תאריך פורים או None אם לא נמצא
+    פורים = י"ד אדר (או אדר ב' בשנה מעוברת).
+    שושן פורים (ירושלים) = ט"ו אדר.
     """
-    from core.constants import PURIM_HOLIDAY_NAME, SHUSHAN_PURIM_HOLIDAY_NAME
-    target = SHUSHAN_PURIM_HOLIDAY_NAME if is_jerusalem else PURIM_HOLIDAY_NAME
+    from convertdate import hebrew
 
-    for date_str, info in shabbat_cache.items():
-        if info.get("holiday") == target:
-            try:
-                return datetime.strptime(date_str, "%Y-%m-%d").date()
-            except ValueError:
-                return None
-    return None
+    hebrew_year, _, _ = hebrew.from_gregorian(day_date.year, day_date.month, day_date.day)
+    # בשנה מעוברת פורים באדר ב' (חודש 13), בשנה רגילה באדר (חודש 12)
+    adar = 13 if hebrew.leap(hebrew_year) else 12
+    purim_day = 15 if is_jerusalem else 14
+    g_year, g_month, g_day = hebrew.to_gregorian(hebrew_year, adar, purim_day)
+    return date(g_year, g_month, g_day)
 
 
 def _get_purim_boundaries(
     day_date: date,
-    shabbat_cache: Dict[str, Dict[str, str]],
     is_jerusalem: bool
 ) -> Tuple[int, int]:
     """
@@ -314,7 +309,7 @@ def _get_purim_boundaries(
     """
     from core.constants import PURIM_ENTER_MINUTES, PURIM_EXIT_MINUTES
 
-    purim_date = _get_purim_date(shabbat_cache, is_jerusalem)
+    purim_date = _get_purim_date(day_date, is_jerusalem)
     if purim_date is None:
         return (-1, -1)
 
@@ -332,7 +327,6 @@ def _get_purim_boundaries(
 def _is_purim_time(
     actual_date: date,
     start_min: int,
-    shabbat_cache: Dict[str, Dict[str, str]],
     is_jerusalem: bool
 ) -> bool:
     """
@@ -341,10 +335,9 @@ def _is_purim_time(
     Args:
         actual_date: התאריך בפועל
         start_min: דקות מחצות (יכול להיות >1440 למשמרות לילה)
-        shabbat_cache: מטמון זמני שבת
         is_jerusalem: האם הדירה בירושלים
     """
-    purim_enter, purim_exit = _get_purim_boundaries(actual_date, shabbat_cache, is_jerusalem)
+    purim_enter, purim_exit = _get_purim_boundaries(actual_date, is_jerusalem)
     if purim_enter < 0:
         return False
     actual_minute = start_min % MINUTES_PER_DAY

@@ -32,6 +32,12 @@ TAGBUR_SHABBAT_POST_EXIT_MINUTES = 120  # שעתיים אחרי צאת שבת
 HOSPITAL_ESCORT_SHIFT_ID = 120  # משמרת ליווי בי"ח
 MEDICAL_ESCORT_SHIFT_ID = 148   # משמרת ליווי רפואי
 WORK_HOUR_SHIFT_ID = 138        # שעת עבודה (לשעות מחוץ לסגמנטים מוגדרים)
+WEEKDAY_SHIFT_TYPE_ID = 103     # משמרת חול רגיל
+
+# Holiday Payment (תשלום חג)
+HOLIDAY_PAYMENT_INTERNAL_KEY = "holiday_payment"
+HOLIDAY_PAYMENT_MERAV_CODE = "254"
+PERMANENT_EMPLOYEE_TYPE = "permanent"
 
 # =============================================================================
 # Shift ID Groups
@@ -127,8 +133,6 @@ MINIMUM_ESCORT_MINUTES = 60
 
 PURIM_ENTER_MINUTES = 480       # 08:00 - תחילת תעריף פורים
 PURIM_EXIT_MINUTES = 480        # 08:00 למחרת - סיום תעריף פורים
-PURIM_HOLIDAY_NAME = "פורים"
-SHUSHAN_PURIM_HOLIDAY_NAME = "שושן פורים"
 JERUSALEM_CITY_NAMES = {"ירושלים"}
 
 # =============================================================================

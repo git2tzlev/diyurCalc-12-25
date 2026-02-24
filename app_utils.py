@@ -68,9 +68,6 @@ from core.constants import (
     calculate_night_hours_in_segment,
     # Night hours threshold
     NIGHT_HOURS_THRESHOLD,
-    # Purim constants
-    PURIM_HOLIDAY_NAME,
-    SHUSHAN_PURIM_HOLIDAY_NAME,
     JERUSALEM_CITY_NAMES,
 )
 
@@ -125,6 +122,49 @@ def get_standby_rate(conn, segment_id: int, apartment_type_id: int | None, is_ma
         return float(row["amount"]) / 100
 
     return DEFAULT_STANDBY_RATE
+
+
+# Cache for Shabbat standby segment_id (shared across calls within same request)
+_shabbat_standby_seg_id_cache: Dict[str, int | None] = {}
+
+
+def _get_shabbat_standby_segment_id(conn) -> int | None:
+    """מציאת ה-segment_id של כוננות שבת מטבלת shift_time_segments."""
+    cache_key = "shabbat_standby_seg_id"
+    if cache_key in _shabbat_standby_seg_id_cache:
+        return _shabbat_standby_seg_id_cache[cache_key]
+
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cursor.execute("""
+        SELECT id FROM shift_time_segments
+        WHERE shift_type_id = %s AND segment_type = 'standby'
+        LIMIT 1
+    """, (SHABBAT_SHIFT_ID,))
+    row = cursor.fetchone()
+    cursor.close()
+
+    result = row["id"] if row else None
+    _shabbat_standby_seg_id_cache[cache_key] = result
+    return result
+
+
+def _get_purim_standby_rate(
+    conn, apt_type: int | None, married: bool,
+    actual_date: date, start_min: int,
+    apt_city: str, year: int = None, month: int = None
+) -> float | None:
+    """
+    אם הכוננות חלה בשעות פורים, מחזיר תעריף כוננות שבת.
+    אחרת מחזיר None (להשתמש בתעריף הרגיל).
+    """
+    is_jerusalem = (apt_city or "") in JERUSALEM_CITY_NAMES
+    if not _is_purim_time(actual_date, start_min, is_jerusalem):
+        return None
+
+    shabbat_seg_id = _get_shabbat_standby_segment_id(conn)
+    if shabbat_seg_id:
+        return get_standby_rate(conn, shabbat_seg_id, apt_type, married, year, month)
+    return None
 
 
 # =============================================================================
@@ -228,7 +268,7 @@ def _calculate_chain_wages(
 
         # בדיקת גבולות פורים - לוגיקה נפרדת כי פורים משתמש בזמנים קבועים (08:00-08:00)
         # ותלוי במיקום הדירה (ירושלים/לא ירושלים)
-        purim_enter, purim_exit = _get_purim_boundaries(seg_actual_date, shabbat_cache, is_jerusalem)
+        purim_enter, purim_exit = _get_purim_boundaries(seg_actual_date, is_jerusalem)
         seg_is_purim = (purim_enter >= 0)
 
         # בדיקה אם היום הוא שבת/חג (לא ערב שבת/חג)
@@ -318,8 +358,54 @@ def _calculate_chain_wages(
             # Take the minimum
             block_size = min(minutes_until_tier_change, minutes_left_in_seg)
 
+            # גבולות פורים - חיתוך הבלוק כדי שכל בלוק יהיה כולו בפורים או כולו מחוצה לו
+            block_in_purim = False
+            if seg_is_purim:
+                actual_minute = current_abs_minute % MINUTES_PER_DAY
+                # בדיקה אם חצינו חצות בתוך הסגמנט (ולא נורמליזציה של +1440)
+                # סגמנט שמתחיל מעל 1440 הוא סגמנט מנורמל - actual_date כבר נכון
+                crossed_midnight = (seg_start < MINUTES_PER_DAY) and (current_abs_minute >= MINUTES_PER_DAY)
+                if crossed_midnight:
+                    # חצינו חצות בתוך הסגמנט - בדיקת גבולות פורים של היום הבא
+                    next_pe, next_px = _get_purim_boundaries(
+                        seg_actual_date + timedelta(days=1), is_jerusalem)
+                    if next_pe >= 0:
+                        if next_pe <= actual_minute < next_px:
+                            block_in_purim = True
+                            block_size = min(block_size, next_px - actual_minute)
+                        elif actual_minute < next_pe:
+                            block_size = min(block_size, next_pe - actual_minute)
+                else:
+                    # סגמנט רגיל או מנורמל - שימוש בגבולות פורים של actual_date
+                    if purim_enter <= actual_minute < purim_exit:
+                        block_in_purim = True
+                        block_size = min(block_size, purim_exit - actual_minute)
+                    elif actual_minute < purim_enter:
+                        block_size = min(block_size, purim_enter - actual_minute)
+
+            # Helper to add segment detail
+            def add_segment_detail(start_min, end_min, rate_label, is_shabbat):
+                result["segments_detail"].append((start_min, end_min, rate_label, is_shabbat))
+
+            if block_in_purim:
+                # פורים = תעריף חג (כמו שבת)
+                block_abs_start = current_abs_minute
+                block_abs_end = current_abs_minute + block_size
+                if shabbat_rate == "150%":
+                    result["calc150"] += block_size
+                    result["calc150_shabbat"] += block_size
+                    result["calc150_shabbat_100"] += block_size
+                    result["calc150_shabbat_50"] += block_size
+                    add_segment_detail(block_abs_start, block_abs_end, "150% פורים", True)
+                elif shabbat_rate == "175%":
+                    result["calc175"] += block_size
+                    add_segment_detail(block_abs_start, block_abs_end, "175% פורים", True)
+                else:
+                    result["calc200"] += block_size
+                    add_segment_detail(block_abs_start, block_abs_end, "200% פורים", True)
+
             # Now check Shabbat/Holiday boundaries within this block
-            if seg_is_shabbat_or_holiday:
+            elif seg_is_shabbat_or_holiday:
                 block_abs_start = current_abs_minute
                 block_abs_end = current_abs_minute + block_size
 
@@ -351,10 +437,6 @@ def _calculate_chain_wages(
 
                 abs_start_from_fri = actual_block_start + day_offset_start
                 abs_end_from_fri = actual_block_end + day_offset_end
-
-                # Helper to add segment detail
-                def add_segment_detail(start_min, end_min, rate_label, is_shabbat):
-                    result["segments_detail"].append((start_min, end_min, rate_label, is_shabbat))
 
                 # Split block at Shabbat boundaries
                 # Case 1: Entirely before Shabbat
@@ -1441,12 +1523,13 @@ def get_daily_segments_data(
 
             # שעות לא מכוסות לפני תחילת המשמרת
             # חופשה/מחלה: אין שעות לא מכוסות כלל (הכל חלק מהחופשה/מחלה)
-            # תגבור: ביום שישי (weekday==4) רק לפני, בשבת (weekday==5) רק אחרי
-            is_friday = r_date.weekday() == 4
-            is_saturday = r_date.weekday() == 5
+            # תגבור ערב (108): שעות לא מכוסות רק לפני (אחרי = שבת/חג)
+            # תגבור שבת/חג (109): שעות לא מכוסות רק אחרי (לפני = שבת/חג)
+            is_tagbur_eve = (shift_type_id == TAGBUR_FRIDAY_SHIFT_ID)
+            is_tagbur_holy = (shift_type_id == TAGBUR_SHABBAT_SHIFT_ID)
             is_vacation_or_sick = is_vacation_report or is_sick_report
 
-            if rep_start_orig < first_seg_start and not is_saturday and not is_vacation_or_sick:
+            if rep_start_orig < first_seg_start and not is_tagbur_holy and not is_vacation_or_sick:
                 uncov_start = rep_start_orig
                 uncov_end = first_seg_start
                 entry["segments"].append((uncov_start, uncov_end, "work", "work", WORK_HOUR_SHIFT_ID, None, apartment_type_id, is_married, apartment_name, r_date, actual_apartment_type_id, None, housing_array_id, apartment_type_name, housing_array_name, rate_apartment_type_name, apartment_type_change_date, rate_apartment_type_id))
@@ -1497,9 +1580,10 @@ def get_daily_segments_data(
 
             # שעות לא מכוסות אחרי סיום המשמרת
             # חופשה/מחלה: אין שעות לא מכוסות כלל
-            # תגבור: ביום שישי רק לפני, בשבת רק אחרי
+            # תגבור ערב (108): שעות לא מכוסות רק לפני (אחרי = שבת/חג)
+            # תגבור שבת/חג (109): שעות לא מכוסות רק אחרי (לפני = שבת/חג)
             effective_rep_end = rep_end_orig if rep_end_orig > rep_start_orig else rep_end_orig + MINUTES_PER_DAY
-            if effective_rep_end > last_seg_end and not is_friday and not is_vacation_or_sick:
+            if effective_rep_end > last_seg_end and not is_tagbur_eve and not is_vacation_or_sick:
                 uncov_start = last_seg_end
                 uncov_end = effective_rep_end
                 # התאריך של הסגמנט הלא מכוסה אחרי = התאריך של הסגמנט האחרון
@@ -1918,7 +2002,7 @@ def get_daily_segments_data(
         # A chain is a "night chain" if it has 2+ hours in 22:00-06:00 range
         # This includes carryover hours from previous day/month
 
-        # Dedup standby - now includes shift_type_id and standby_defined_end (9 elements)
+        # Dedup standby - now includes shift_type_id, standby_defined_end, apt_city (10 elements)
         deduped_sb = []
         seen_sb = set()
         for sb in standby_segments:
@@ -1987,7 +2071,16 @@ def get_daily_segments_data(
 
             if ratio >= STANDBY_CANCEL_OVERLAP_THRESHOLD:
                 # כוננות מתבטלת - מורידים עד 70₪, משלמים את ההפרש
-                standby_rate = get_standby_rate(conn, seg_id or 0, apt_type, bool(married), year, month) if seg_id else DEFAULT_STANDBY_RATE
+                # בפורים: תעריף כוננות שבת
+                purim_rate = _get_purim_standby_rate(
+                    conn, apt_type, bool(married), actual_date, sb_start, sb_apt_city, year, month
+                ) if actual_date else None
+                if purim_rate is not None:
+                    standby_rate = purim_rate
+                elif seg_id:
+                    standby_rate = get_standby_rate(conn, seg_id, apt_type, bool(married), year, month)
+                else:
+                    standby_rate = DEFAULT_STANDBY_RATE
                 partial_pay = max(0, standby_rate - MAX_CANCELLED_STANDBY_DEDUCTION)
 
                 # בחודשים 11/2025 ו-12/2025: אם הכוננות בוטלה בגלל חפיפה עם משמרת שמירה על דייר (149) - ביטול מלא ללא תשלום
@@ -2158,7 +2251,16 @@ def get_daily_segments_data(
                     if entry.get("asd_night_high_func") and actual_apt_type == HIGH_FUNCTIONING_APT_TYPE:
                         standby_rate = ASD_NIGHT_STANDBY_RATE
                     else:
-                        standby_rate = get_standby_rate(conn, seg_id or 0, apt_type, bool(married), year, month) if seg_id else DEFAULT_STANDBY_RATE
+                        # בפורים: תעריף כוננות שבת
+                        purim_rate = _get_purim_standby_rate(
+                            conn, apt_type, bool(married), actual_date, sb_start, _sb_apt_city, year, month
+                        ) if actual_date else None
+                        if purim_rate is not None:
+                            standby_rate = purim_rate
+                        elif seg_id:
+                            standby_rate = get_standby_rate(conn, seg_id, apt_type, bool(married), year, month)
+                        else:
+                            standby_rate = DEFAULT_STANDBY_RATE
                     d_standby_pay += standby_rate
                     paid_standby_ids.add(standby_key)
 
@@ -2246,10 +2348,10 @@ def get_daily_segments_data(
 
         # Merge all events for processing - כל המשמרות כולל תגבור
         all_events = []
-        for s, e, l, sid, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date in work_segments:
+        for s, e, l, sid, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date, apt_city in work_segments:
             all_events.append({"start": s, "end": e, "type": "work", "label": l, "shift_id": sid, "apartment_name": apt_name or "", "apartment_type_id": actual_apt_type, "rate_apt_type": rate_apt_type, "actual_date": actual_date or day_date, "housing_array_id": housing_array_id, "apartment_type_name": apt_type_name or "", "housing_array_name": ha_name or "", "rate_apt_type_name": rate_apt_type_name or "", "apt_type_change_date": apt_type_change_date or ""})
-        for s, e, seg_id, apt, married, actual_date, _shift_type_id, actual_apt_type, _standby_defined_end in standby_segments:
-            all_events.append({"start": s, "end": e, "type": "standby", "label": "כוננות", "seg_id": seg_id, "apt": apt, "actual_apt_type": actual_apt_type, "married": married, "actual_date": actual_date or day_date})
+        for s, e, seg_id, apt, married, actual_date, _shift_type_id, actual_apt_type, _standby_defined_end, sb_apt_city in standby_segments:
+            all_events.append({"start": s, "end": e, "type": "standby", "label": "כוננות", "seg_id": seg_id, "apt": apt, "actual_apt_type": actual_apt_type, "married": married, "actual_date": actual_date or day_date, "apt_city": sb_apt_city or ""})
         for s, e, actual_date in vacation_segments:
             all_events.append({"start": s, "end": e, "type": "vacation", "label": "חופשה", "actual_date": actual_date or day_date})
         for s, e, actual_date in sick_segments:
@@ -2360,7 +2462,7 @@ def get_daily_segments_data(
             pay, c100, c125, c150, c175, c200, seg_detail, effective_rate = calculate_chain_pay(segments, minutes_offset, carryover_night_minutes)
 
             # Calculate total chain duration (including offset from previous day)
-            chain_duration = sum(e - s for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date in segments)
+            chain_duration = sum(e - s for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date, apt_city in segments)
             chain_total_minutes = minutes_offset + chain_duration
 
             # Get apartment names and types from segments - segments is (start, end, label, sid, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name)
@@ -2372,7 +2474,7 @@ def get_daily_segments_data(
             chain_rate_apt_types = set()
             chain_apt_type_names = set()
             chain_ha_names = set()
-            for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date in segments:
+            for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date, apt_city in segments:
                 if apt:
                     chain_apartments.add(apt)
                 if apt_type:
@@ -2413,7 +2515,7 @@ def get_daily_segments_data(
                 # מיון הסגמנטים המקוריים לפי זמן התחלה
                 sorted_segs = sorted(segs, key=lambda x: x[0])
 
-                for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date in sorted_segs:
+                for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date, apt_city in sorted_segs:
                     # בדיקה אם יש חפיפה עם הטווח הנוכחי
                     if s < seg_end and e > current_start:
                         # זמן התחלה של החפיפה
@@ -2446,7 +2548,7 @@ def get_daily_segments_data(
                 # אם לא נמצאו חפיפות, החזר סגמנט בודד עם ברירת מחדל
                 if not result_segments:
                     if segs:
-                        s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date = segs[0]
+                        s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date, apt_city = segs[0]
                         result_segments.append({
                             "start": seg_start,
                             "end": seg_end,
@@ -2666,7 +2768,7 @@ def get_daily_segments_data(
             # Calculate night minutes in this chain (for carryover to next day)
             # Times are in extended 00:00-32:00 axis (0-1920 minutes)
             chain_night_minutes = 0
-            for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date in segments:
+            for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date, apt_city in segments:
                 # Convert from extended 00:00-32:00 axis to 00:00-24:00 axis
                 real_start = s % 1440
                 real_end = e % 1440
@@ -2828,7 +2930,17 @@ def get_daily_segments_data(
                         if entry.get("asd_night_high_func") and actual_apt_type_ev == HIGH_FUNCTIONING_APT_TYPE:
                             rate = ASD_NIGHT_STANDBY_RATE
                         else:
-                            rate = get_standby_rate(conn, event.get("seg_id") or 0, apt_type, bool(event.get("married")), year, month)
+                            # בפורים: תעריף כוננות שבת
+                            ev_actual_date = event.get("actual_date")
+                            purim_rate = _get_purim_standby_rate(
+                                conn, apt_type, bool(event.get("married")),
+                                ev_actual_date, start,
+                                event.get("apt_city", ""), year, month
+                            ) if ev_actual_date else None
+                            if purim_rate is not None:
+                                rate = purim_rate
+                            else:
+                                rate = get_standby_rate(conn, event.get("seg_id") or 0, apt_type, bool(event.get("married")), year, month)
                         d_standby_pay += rate
                         paid_standby_ids.add(standby_key)
 
@@ -2882,9 +2994,9 @@ def get_daily_segments_data(
                 last_end = end
                 last_etype = etype
             else:
-                # segments: (start, end, label, shift_id, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date)
+                # segments: (start, end, label, shift_id, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date, apt_city)
                 # apt_type = rate_apt_type (לחישוב), actual_apt_type = apartment_type_id (להצגה)
-                current_chain_segments.append((start, end, event["label"], event["shift_id"], event.get("apartment_name", ""), event.get("actual_date"), event.get("rate_apt_type"), event.get("apartment_type_id"), event.get("rate_apt_type"), event.get("housing_array_id"), event.get("apartment_type_name", ""), event.get("housing_array_name", ""), event.get("rate_apt_type_name", ""), event.get("apt_type_change_date", "")))
+                current_chain_segments.append((start, end, event["label"], event["shift_id"], event.get("apartment_name", ""), event.get("actual_date"), event.get("rate_apt_type"), event.get("apartment_type_id"), event.get("rate_apt_type"), event.get("housing_array_id"), event.get("apartment_type_name", ""), event.get("housing_array_name", ""), event.get("rate_apt_type_name", ""), event.get("apt_type_change_date", ""), event.get("apt_city", "")))
                 last_end = end
                 last_etype = etype
 
@@ -3060,9 +3172,10 @@ def aggregate_daily_segments_to_monthly(
         "sick_days_accrued": 0.0,
         "vacation_days_accrued": 0.0,
 
-        # נסיעות, תומך מקצועי ותוספות
+        # נסיעות, תומך מקצועי, תשלום חג ותוספות
         "travel": 0.0,
         "professional_support": 0.0,
+        "holiday_payment": 0.0,
         "extras": 0.0,
 
         # ימי עבודה
@@ -3332,6 +3445,7 @@ def aggregate_daily_segments_to_monthly(
         monthly_totals["standby_payment"] +
         monthly_totals["travel"] +
         monthly_totals["professional_support"] +
+        monthly_totals["holiday_payment"] +
         monthly_totals["extras"]
     )
 
@@ -3364,6 +3478,7 @@ def aggregate_daily_segments_to_monthly(
         round(round(monthly_totals.get("sick_payment", 0) or 0, 2), 1) +
         round(round(monthly_totals.get("travel", 0) or 0, 2), 1) +
         round(round(monthly_totals.get("professional_support", 0) or 0, 2), 1) +
+        round(round(monthly_totals.get("holiday_payment", 0) or 0, 2), 1) +
         round(round(monthly_totals.get("extras", 0) or 0, 2), 1)
     )
 

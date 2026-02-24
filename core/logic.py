@@ -174,6 +174,32 @@ def ensure_sick_payment_code(conn):
         logger.error(f"Error ensuring sick payment code: {e}")
 
 
+def ensure_holiday_payment_code(conn):
+    """
+    מוודא שקוד מירב 254 לתשלום חג קיים בטבלת payment_codes.
+    אם לא קיים, מוסיף אותו.
+    """
+    try:
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+
+        cursor.execute("""
+            SELECT id FROM payment_codes WHERE internal_key = 'holiday_payment'
+        """)
+        existing = cursor.fetchone()
+
+        if not existing:
+            cursor.execute("""
+                INSERT INTO payment_codes (internal_key, display_name, merav_code, display_order)
+                VALUES ('holiday_payment', 'תשלום חג', '254', 176)
+            """)
+            conn.commit()
+            logger.info("Added holiday_payment code (254) to payment_codes table")
+
+        cursor.close()
+    except Exception as e:
+        logger.error(f"Error ensuring holiday payment code: {e}")
+
+
 def ensure_professional_support_code(conn):
     """
     מוודא שקוד מירב 243 לתומך מקצועי קיים בטבלת payment_codes.
@@ -349,14 +375,14 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     if housing_filter is not None:
         cursor.execute("""
-            SELECT id, name, start_date, is_married, meirav_code
+            SELECT id, name, start_date, is_married, meirav_code, type
             FROM people
             WHERE is_active::integer = 1 AND housing_array_id = %s
             ORDER BY name
         """, (housing_filter,))
     else:
         cursor.execute("""
-            SELECT id, name, start_date, is_married, meirav_code
+            SELECT id, name, start_date, is_married, meirav_code, type
             FROM people
             WHERE is_active::integer = 1
             ORDER BY name
@@ -542,6 +568,31 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
             for k, v in monthly_totals.items():
                 if k in grand_totals and isinstance(v, (int, float)) and k not in ("payment", "total_payment", "rounded_total"):
                     grand_totals[k] += v
+
+    # חישוב תשלום חג
+    from core.holiday_payment import calculate_holiday_payments
+
+    person_types = {p["id"]: p["type"] for p in people}
+    holiday_payments = calculate_holiday_payments(
+        conn, year, month, shabbat_cache, minimum_wage,
+        all_reports=all_reports,
+        person_types=person_types,
+        housing_filter=housing_filter,
+    )
+
+    for person_data in summary_data:
+        pid = person_data["person_id"]
+        hp = holiday_payments.get(pid, 0)
+        if hp > 0:
+            person_data["totals"]["holiday_payment"] = hp
+            hp_rounded = round(round(hp, 2), 1)
+            person_data["totals"]["total_payment"] += hp_rounded
+            person_data["totals"]["gesher_total"] += hp_rounded
+            person_data["totals"]["display_total"] += hp_rounded
+            person_data["totals"]["rounded_total"] += hp_rounded
+            grand_totals["holiday_payment"] = grand_totals.get("holiday_payment", 0) + hp
+            grand_totals["total_payment"] += hp_rounded
+            grand_totals["rounded_total"] += hp_rounded
 
     # עיגול סה"כ כללי למניעת שגיאות floating point
     grand_totals["rounded_total"] = round(grand_totals["rounded_total"], 2)
