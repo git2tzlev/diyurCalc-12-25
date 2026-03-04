@@ -1869,6 +1869,34 @@ class TestHolidayWages(unittest.TestCase):
         self.assertEqual(result["calc150"], 420, "7 שעות @ 150%")
         self.assertEqual(result["calc175"], 90, "1.5 שעות @ 175%")
 
+    def test_erev_pesach_not_confused_with_two_day_holiday(self):
+        """ערב פסח חד-יומי לא מתבלבל עם חג דו-יומי."""
+        holiday_cache = {
+            "2026-04-02": {
+                "enter": "19:49", "exit": "20:00", "holiday": "Pesach I",
+            },
+        }
+        eve_date = date(2026, 4, 1)
+        segments = [(720, 1320, None, eve_date)]
+        result = _calculate_chain_wages_new(segments, holiday_cache, 0, False)
+        # 12:00-19:49 = chol, 19:49-20:00 = chag 150%, 20:00-22:00 = chag 175%
+        self.assertEqual(result["calc100"], 469)
+        self.assertEqual(result["calc150"], 11)
+        self.assertEqual(result["calc175"], 120)
+
+    def test_erev_pesach_two_record_format(self):
+        """ערב פסח בפורמט שתי רשומות."""
+        holiday_cache = {
+            "2026-04-01": {"enter": "19:49"},
+            "2026-04-02": {"exit": "20:00"},
+        }
+        eve_date = date(2026, 4, 1)
+        segments = [(720, 1320, None, eve_date)]
+        result = _calculate_chain_wages_new(segments, holiday_cache, 0, False)
+        self.assertEqual(result["calc100"], 469)
+        self.assertEqual(result["calc150"], 11)
+        self.assertEqual(result["calc175"], 120)
+
 
 # ============================================================================
 # חלק 2: בדיקות ידניות עם נתונים אמיתיים

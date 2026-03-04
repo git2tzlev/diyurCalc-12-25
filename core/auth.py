@@ -8,7 +8,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from passlib.hash import bcrypt
+import bcrypt as _bcrypt
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 from core.config import config
@@ -32,11 +32,12 @@ def verify_password(password: str, stored_password: str) -> bool:
     תומך גם ב-bcrypt hash וגם בסיסמאות טקסט רגיל (לתאימות לאחור).
     """
     try:
-        # בדיקה אם זה bcrypt hash (מתחיל ב-$2a$, $2b$, או $2y$)
         if stored_password.startswith("$2"):
-            return bcrypt.verify(password, stored_password)
+            return _bcrypt.checkpw(
+                password.encode("utf-8"),
+                stored_password.encode("utf-8"),
+            )
         else:
-            # סיסמה בטקסט רגיל - השוואה ישירה
             return password == stored_password
     except Exception as e:
         logger.warning(f"שגיאה באימות סיסמה: {e}")

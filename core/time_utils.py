@@ -161,6 +161,24 @@ def _find_holiday_record_for_date(day_date: date, shabbat_cache: Dict[str, Dict[
     return (None, None)
 
 
+def _is_two_day_yom_tov(holiday_date: date) -> bool:
+    """
+    בדיקה אם החג בתאריך הנתון הוא חג דו-יומי (בישראל).
+
+    בישראל, רק ראש השנה (א-ב תשרי) הוא חג דו-יומי.
+    רשומת החג הדו-יומי בטבלה היא ליום האחרון (ב תשרי).
+    """
+    try:
+        from convertdate import hebrew
+        hy, hm, hd = hebrew.from_gregorian(
+            holiday_date.year, holiday_date.month, holiday_date.day
+        )
+        # ראש השנה יום ב = ב תשרי (חודש 7, יום 2)
+        return hm == 7 and hd == 2
+    except Exception:
+        return False
+
+
 def _get_shabbat_boundaries(day_date: date, shabbat_cache: Dict[str, Dict[str, str]]) -> Tuple[int, int]:
     """
     קבלת זמני כניסה/יציאה של שבת או חג בדקות מחצות הערב.
@@ -215,12 +233,14 @@ def _get_shabbat_boundaries(day_date: date, shabbat_cache: Dict[str, Dict[str, s
 
             # בדיקה אם יש חג דו-יומי במרחק 2 ימים
             # חג דו-יומי = יש holiday ברשומה ואין רשומה נפרדת למחר
+            # בישראל, רק ראש השנה (א-ב תשרי) הוא חג דו-יומי
             is_two_day_holiday = (
                 day_plus_2_info and
                 day_plus_2_info.get("enter") and
                 day_plus_2_info.get("holiday") and  # חייב להיות שדה holiday
                 day_plus_2.weekday() != SATURDAY and
-                not (tomorrow_info and tomorrow_info.get("enter"))  # אין רשומה נפרדת למחר
+                not (tomorrow_info and tomorrow_info.get("enter")) and  # אין רשומה נפרדת למחר
+                _is_two_day_yom_tov(day_plus_2)  # אימות מלוח עברי
             )
 
             if is_two_day_holiday:
@@ -254,9 +274,10 @@ def _get_shabbat_boundaries(day_date: date, shabbat_cache: Dict[str, Dict[str, s
 
     if target_info:
         # זמן כניסה (candle_lighting) - מתרחש בערב
-        if target_info.get("enter"):
+        enter_source = target_info.get("enter") or (day_info and day_info.get("enter"))
+        if enter_source:
             try:
-                eh, em = map(int, target_info["enter"].split(":"))
+                eh, em = map(int, enter_source.split(":"))
                 enter_minutes = eh * MINUTES_PER_HOUR + em
             except (ValueError, AttributeError):
                 pass

@@ -297,8 +297,13 @@ def _calculate_chain_wages(
                     # ערב חג = היום שבו מדליקים נרות (enter)
                     # חג = כל הימים אחרי הדלקת הנרות עד ה-exit
                     if days_to_holiday_record == 0:
-                        # הרשומה היא היום - זה היום האחרון של החג
-                        seg_is_eve = False
+                        # הרשומה היא היום
+                        # אם יש exit (הבדלה) - זה יום החג האחרון
+                        # אם אין exit (רק הדלקת נרות) - זה ערב חג
+                        if holiday_info and not holiday_info.get("exit"):
+                            seg_is_eve = True
+                        else:
+                            seg_is_eve = False
                     elif days_to_holiday_record == 1:
                         # הרשומה היא מחר
                         # נבדוק אם יש רשומה להיום עצמו - אם יש, זה יום חג
