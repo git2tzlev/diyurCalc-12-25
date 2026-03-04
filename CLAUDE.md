@@ -30,7 +30,7 @@
 ```bash
 # פיתוח
 uvicorn app:app --reload --port 8000
-
+py -m uvicorn app:app --reload --port 8000
 # בדיקות
 pytest tests/ -v
 ```
