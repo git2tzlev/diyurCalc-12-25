@@ -7,6 +7,7 @@ from core.time_utils import (
     FRIDAY, SATURDAY,
     span_minutes, to_local_date, _get_shabbat_boundaries,
     _get_purim_boundaries, _is_purim_time,
+    classify_day_type,
 )
 from utils.utils import overlap_minutes, to_gematria, month_range_ts, merge_intervals, find_uncovered_intervals
 from convertdate import hebrew
@@ -261,80 +262,16 @@ def _calculate_chain_wages(
         seg_offset = 0
 
         # Get Shabbat/Holiday boundaries for THIS segment's actual date
-        # הפונקציה מחזירה (-1, -1) אם היום אינו שבת/חג/ערב שבת/ערב חג
-        seg_weekday = seg_actual_date.weekday()
         shabbat_enter, shabbat_exit = _get_shabbat_boundaries(seg_actual_date, shabbat_cache)
         seg_is_shabbat_or_holiday = (shabbat_enter > 0)
 
-        # בדיקת גבולות פורים - לוגיקה נפרדת כי פורים משתמש בזמנים קבועים (08:00-08:00)
-        # ותלוי במיקום הדירה (ירושלים/לא ירושלים)
+        # בדיקת גבולות פורים
         purim_enter, purim_exit = _get_purim_boundaries(seg_actual_date, is_jerusalem)
         seg_is_purim = (purim_enter >= 0)
 
-        # בדיקה אם היום הוא שבת/חג (לא ערב שבת/חג)
-        # שבת: weekday == SATURDAY
-        # חג: יום שבו כל השעות הן שעות חג (לא ערב חג)
-        # ערב חג/שישי: היום שלפני החג/שבת
-        # בדיקה אם זה ערב חג: הכניסה היא ב"היום" אבל החג מתחיל מחר
-        # ערב חג = יום שיש לו enter וזה לא שבת (יום שישי או ערב חג)
-        # חג = יום שבת, או יום עם exit, או יום ביניים בחג
-        seg_is_eve = False
-        if seg_is_shabbat_or_holiday:
-            if seg_weekday == FRIDAY:
-                # יום שישי = תמיד ערב שבת
-                seg_is_eve = True
-            elif seg_weekday == SATURDAY:
-                # שבת = תמיד יום קודש
-                seg_is_eve = False
-            else:
-                # ימי חול - צריך לבדוק אם זה ערב חג או חג
-                # ערב חג = היום שבו מדליקים נרות (כניסה היא היום, החג מחר)
-                # נבדוק אם מחר יש רשומת חג שהכניסה שלה מכוונת להיום
-                from core.time_utils import _find_holiday_record_for_date
-                holiday_date, holiday_info = _find_holiday_record_for_date(seg_actual_date, shabbat_cache)
-                if holiday_date:
-                    days_to_holiday_record = (holiday_date - seg_actual_date).days
-                    # ערב חג = היום שבו מדליקים נרות (enter)
-                    # חג = כל הימים אחרי הדלקת הנרות עד ה-exit
-                    if days_to_holiday_record == 0:
-                        # הרשומה היא היום
-                        # אם יש exit (הבדלה) - זה יום החג האחרון
-                        # אם אין exit (רק הדלקת נרות) - זה ערב חג
-                        if holiday_info and not holiday_info.get("exit"):
-                            seg_is_eve = True
-                        else:
-                            seg_is_eve = False
-                    elif days_to_holiday_record == 1:
-                        # הרשומה היא מחר
-                        # נבדוק אם יש רשומה להיום עצמו - אם יש, זה יום חג
-                        today_str = seg_actual_date.strftime("%Y-%m-%d")
-                        today_info = shabbat_cache.get(today_str)
-                        if today_info:
-                            seg_is_eve = False
-                        else:
-                            # אין רשומה להיום
-                            # נבדוק אם אתמול היה חלק מאותו חג (יש לו shabbat_boundaries חיוביים)
-                            yesterday = seg_actual_date - timedelta(days=1)
-                            yesterday_enter, _ = _get_shabbat_boundaries(yesterday, shabbat_cache)
-                            if yesterday_enter > 0:
-                                # אתמול היה חלק מחג/שבת - היום הוא יום חג
-                                seg_is_eve = False
-                            else:
-                                # אתמול לא היה חג - היום הוא ערב חג
-                                seg_is_eve = True
-                    else:
-                        # מרחק 2+ ימים
-                        # נבדוק אם אתמול היה חלק מאותו חג
-                        yesterday = seg_actual_date - timedelta(days=1)
-                        yesterday_enter, _ = _get_shabbat_boundaries(yesterday, shabbat_cache)
-                        if yesterday_enter > 0:
-                            # אתמול היה חלק מחג/שבת - היום הוא יום ביניים (חג)
-                            seg_is_eve = False
-                        else:
-                            # אתמול לא היה חג - היום הוא ערב
-                            seg_is_eve = True
-
-        seg_is_holy_day = seg_is_shabbat_or_holiday and not seg_is_eve
+        # סיווג סוג היום: ערב חג/שבת, יום חג/שבת, או חול
+        day_type = classify_day_type(seg_actual_date, shabbat_cache)
+        seg_is_holy_day = (day_type == "holy")
 
         while seg_offset < seg_duration:
             current_abs_minute = seg_start + seg_offset

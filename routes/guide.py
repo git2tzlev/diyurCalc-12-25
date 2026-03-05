@@ -69,9 +69,12 @@ def _inject_holiday_payment(
         conn.conn, year, month, shabbat_cache, minimum_wage,
         housing_filter=housing_filter,
     )
-    hp = hp_map.get(person_id, 0)
-    if hp > 0:
+    hp_data = hp_map.get(person_id)
+    if hp_data and hp_data["amount"] > 0:
+        hp = hp_data["amount"]
         monthly_totals["holiday_payment"] = hp
+        monthly_totals["holiday_payment_count"] = hp_data["count"]
+        monthly_totals["holiday_payment_rate"] = hp_data["rate"]
         hp_rounded = round(round(hp, 2), 1)
         monthly_totals["total_payment"] = monthly_totals.get("total_payment", 0) + hp_rounded
         monthly_totals["gesher_total"] = monthly_totals.get("gesher_total", 0) + hp_rounded

@@ -29,6 +29,7 @@ from app_utils import calculate_wage_rate, _calculate_chain_wages as _calculate_
 from core.time_utils import (
     REGULAR_HOURS_LIMIT,
     OVERTIME_125_LIMIT,
+    classify_day_type,
 )
 from core.constants import (
     NIGHT_REGULAR_HOURS_LIMIT,
@@ -1896,6 +1897,392 @@ class TestHolidayWages(unittest.TestCase):
         self.assertEqual(result["calc100"], 469)
         self.assertEqual(result["calc150"], 11)
         self.assertEqual(result["calc175"], 120)
+
+    def test_friday_holiday_full_day(self):
+        """חג ביום שישי (שבועות) — כל המשמרת בחג @ 150%."""
+        # שבועות 2026-05-22 (יום שישי), exit=00:00 = ממשיך לשבת
+        holiday_cache = {
+            "2026-05-22": {"enter": "18:52", "exit": "00:00", "holiday": "שבועות"},
+        }
+        friday_date = date(2026, 5, 22)
+        segments = [(480, 960, None, friday_date)]  # 08:00-16:00
+
+        result = _calculate_chain_wages_new(segments, holiday_cache, 0, False)
+
+        self.assertEqual(result["calc150"], 480, "8 שעות ביום שישי-חג = 150%")
+        self.assertEqual(result["calc100"], 0, "לא צריך שעות חול ביום חג")
+
+    def test_friday_holiday_erev_thursday(self):
+        """ערב שבועות ביום חמישי — חיתוך בכניסת החג."""
+        holiday_cache = {
+            "2026-05-22": {"enter": "18:52", "exit": "00:00", "holiday": "שבועות"},
+        }
+        thursday_date = date(2026, 5, 21)  # ערב שבועות
+        segments = [(960, 1200, None, thursday_date)]  # 16:00-20:00
+
+        result = _calculate_chain_wages_new(segments, holiday_cache, 0, False)
+
+        # 16:00-18:52 = 172 דקות חול, 18:52-20:00 = 68 דקות חג
+        self.assertEqual(result["calc100"], 172, "לפני כניסת החג = חול")
+        self.assertEqual(result["calc150"], 68, "אחרי כניסת החג = 150%")
+
+    def test_saturday_holiday_with_exit(self):
+        """חג בשבת (שמיני עצרת) עם exit רגיל — 150%."""
+        holiday_cache = {
+            "2025-10-11": {"enter": "17:56", "exit": "19:03", "holiday": "שמיני עצרת"},
+        }
+        saturday_date = date(2025, 10, 11)
+        segments = [(480, 960, None, saturday_date)]  # 08:00-16:00
+
+        result = _calculate_chain_wages_new(segments, holiday_cache, 0, False)
+
+        self.assertEqual(result["calc150"], 480, "8 שעות בשבת-חג = 150%")
+        self.assertEqual(result["calc100"], 0)
+
+    def test_rosh_hashana_on_shabbat_exit_00(self):
+        """ר\"ה יום א' בשבת, exit=00:00 — כל היום חג @ 150%."""
+        holiday_cache = {
+            "2026-09-12": {"enter": "18:10", "exit": "00:00", "holiday": "ראש השנה"},
+        }
+        saturday_date = date(2026, 9, 12)
+        segments = [(480, 960, None, saturday_date)]  # 08:00-16:00
+
+        result = _calculate_chain_wages_new(segments, holiday_cache, 0, False)
+
+        self.assertEqual(result["calc150"], 480, "8 שעות בשבת עם exit=00:00 = 150%")
+        self.assertEqual(result["calc100"], 0, "exit=00:00 לא גורם לחישוב חול")
+
+    def test_rosh_hashana_day2_after_shabbat(self):
+        """ר\"ה יום ב' ביום ראשון אחרי שבת — 150%."""
+        holiday_cache = {
+            "2026-09-12": {"enter": "18:10", "exit": "00:00", "holiday": "ראש השנה"},
+            "2026-09-13": {"enter": "19:39", "exit": "19:38", "holiday": "ראש השנה"},
+        }
+        sunday_date = date(2026, 9, 13)
+        segments = [(480, 960, None, sunday_date)]  # 08:00-16:00
+
+        result = _calculate_chain_wages_new(segments, holiday_cache, 0, False)
+
+        self.assertEqual(result["calc150"], 480, "8 שעות ביום ב' ר\"ה = 150%")
+        self.assertEqual(result["calc100"], 0)
+
+    def test_holiday_shabbat_connected_both_days(self):
+        """חג+שבת מחוברים (שבועות שישי + שבת) — שני ימים @ 150%."""
+        holiday_cache = {
+            "2026-05-22": {"enter": "18:52", "exit": "00:00", "holiday": "שבועות"},
+            "2026-05-23": {"exit": "19:55"},  # שבת רגילה אחרי שבועות
+        }
+        # משמרת ביום שישי (חג)
+        friday_date = date(2026, 5, 22)
+        segments_fri = [(480, 960, None, friday_date)]
+        result_fri = _calculate_chain_wages_new(segments_fri, holiday_cache, 0, False)
+
+        # משמרת בשבת
+        saturday_date = date(2026, 5, 23)
+        segments_sat = [(480, 960, None, saturday_date)]
+        result_sat = _calculate_chain_wages_new(segments_sat, holiday_cache, 0, False)
+
+        self.assertEqual(result_fri["calc150"], 480, "שישי-חג = 150%")
+        self.assertEqual(result_sat["calc150"], 480, "שבת = 150%")
+
+
+class TestClassifyDayType(unittest.TestCase):
+    """בדיקות לפונקציית classify_day_type."""
+
+    def test_regular_weekday(self):
+        """יום חול רגיל = weekday."""
+        result = classify_day_type(date(2025, 10, 8), {})
+        self.assertEqual(result, "weekday")
+
+    def test_regular_friday_is_eve(self):
+        """יום שישי רגיל = eve."""
+        cache = {
+            "2026-01-10": {"enter": "16:30", "exit": "17:45"},
+        }
+        result = classify_day_type(date(2026, 1, 9), cache)
+        self.assertEqual(result, "eve")
+
+    def test_regular_saturday_is_holy(self):
+        """שבת רגילה = holy."""
+        cache = {
+            "2026-01-10": {"enter": "16:30", "exit": "17:45"},
+        }
+        result = classify_day_type(date(2026, 1, 10), cache)
+        self.assertEqual(result, "holy")
+
+    def test_friday_holiday_is_holy(self):
+        """חג ביום שישי = holy (לא eve)."""
+        cache = {
+            "2026-05-22": {"enter": "18:52", "exit": "00:00", "holiday": "שבועות"},
+        }
+        result = classify_day_type(date(2026, 5, 22), cache)
+        self.assertEqual(result, "holy")
+
+    def test_erev_chag_weekday_is_eve(self):
+        """ערב חג ביום חול = eve."""
+        cache = {
+            "2025-10-07": {"enter": "17:45", "exit": "18:40"},
+        }
+        result = classify_day_type(date(2025, 10, 6), cache)
+        self.assertEqual(result, "eve")
+
+    def test_chag_day_is_holy(self):
+        """יום חג עם exit = holy."""
+        cache = {
+            "2025-10-07": {"enter": "17:45", "exit": "18:40"},
+        }
+        result = classify_day_type(date(2025, 10, 7), cache)
+        self.assertEqual(result, "holy")
+
+    def test_erev_chag_before_friday_holiday(self):
+        """ערב שבועות (חמישי) לפני חג בשישי = eve."""
+        cache = {
+            "2026-05-22": {"enter": "18:52", "exit": "00:00", "holiday": "שבועות"},
+        }
+        result = classify_day_type(date(2026, 5, 21), cache)
+        self.assertEqual(result, "eve")
+
+    def test_saturday_with_exit_00_is_holy(self):
+        """שבת עם exit=00:00 (חג ממשיך) = holy."""
+        cache = {
+            "2026-09-12": {"enter": "18:10", "exit": "00:00", "holiday": "ראש השנה"},
+        }
+        result = classify_day_type(date(2026, 9, 12), cache)
+        self.assertEqual(result, "holy")
+
+
+class TestHolidayEdgeCases(unittest.TestCase):
+    """
+    בדיקות מקרי קצה בחגים:
+    ר"ה 3 ימים רצופים, ערב חג בשבת, חג ביום ראשון,
+    משמרת שחוצה הבדלה, ר"ה שישי-שבת, משמרת לילה ממוצאי חג,
+    חגים סמוכים עם הפסקה, הבדלה מוקדמת, משמרת ממוצ"ש לחג ראשון,
+    משמרת שמתחילה בדיוק בכניסת חג.
+    """
+
+    def test_rosh_hashana_3_consecutive_holy_days(self):
+        """
+        ר"ה חמישי-שישי + שבת = 3 ימים קדושים רצופים.
+        יום א' חמישי (exit=00:00), יום ב' שישי (exit=00:00), שבת.
+        """
+        cache = {
+            # ר"ה יום א' - חמישי, ממשיך לשישי
+            "2025-09-25": {"enter": "18:00", "exit": "00:00", "holiday": "ראש השנה"},
+            # ר"ה יום ב' - שישי, ממשיך לשבת
+            "2025-09-26": {"enter": "18:00", "exit": "00:00", "holiday": "ראש השנה"},
+            # שבת רגילה אחרי ר"ה
+            "2025-09-27": {"exit": "19:10"},
+        }
+        # חמישי = חג
+        thu = date(2025, 9, 25)
+        result_thu = _calculate_chain_wages_new(
+            [(480, 960, None, thu)], cache, 0, False)
+        self.assertEqual(result_thu["calc150"], 480, "חמישי ר\"ה = 150%")
+
+        # שישי = חג (יום ב' ר"ה)
+        fri = date(2025, 9, 26)
+        result_fri = _calculate_chain_wages_new(
+            [(480, 960, None, fri)], cache, 0, False)
+        self.assertEqual(result_fri["calc150"], 480, "שישי ר\"ה = 150%")
+
+        # שבת = קדוש
+        sat = date(2025, 9, 27)
+        result_sat = _calculate_chain_wages_new(
+            [(480, 960, None, sat)], cache, 0, False)
+        self.assertEqual(result_sat["calc150"], 480, "שבת אחרי ר\"ה = 150%")
+
+    def test_erev_chag_on_shabbat(self):
+        """
+        ערב חג בשבת — שבת היא קדושה בפני עצמה, החג מתחיל במוצ"ש.
+        סוכות ביום ראשון, ערב סוכות = שבת.
+        """
+        cache = {
+            # שבת רגילה (גם ערב סוכות)
+            "2025-10-04": {"enter": "17:50", "exit": "18:55"},
+            # סוכות ביום ראשון
+            "2025-10-05": {"enter": "18:55", "exit": "19:00", "holiday": "סוכות"},
+        }
+        # שבת = holy (שבת רגילה)
+        sat = date(2025, 10, 4)
+        result = _calculate_chain_wages_new(
+            [(480, 960, None, sat)], cache, 0, False)
+        self.assertEqual(result["calc150"], 480, "שבת = 150% גם כערב חג")
+        self.assertEqual(classify_day_type(sat, cache), "holy")
+
+    def test_holiday_on_sunday_erev_is_shabbat(self):
+        """
+        חג ביום ראשון — ערב החג הוא שבת.
+        שבת נשארת "holy", יום ראשון גם "holy".
+        """
+        cache = {
+            "2025-10-04": {"enter": "17:50", "exit": "18:55"},
+            "2025-10-05": {"enter": "18:55", "exit": "19:00", "holiday": "סוכות"},
+        }
+        # שבת = holy
+        self.assertEqual(classify_day_type(date(2025, 10, 4), cache), "holy")
+        # יום ראשון = holy
+        sun = date(2025, 10, 5)
+        result = _calculate_chain_wages_new(
+            [(480, 960, None, sun)], cache, 0, False)
+        self.assertEqual(result["calc150"], 480, "יום ראשון-חג = 150%")
+
+    def test_shift_crossing_havdalah(self):
+        """
+        משמרת שחוצה את צאת החג — חיתוך בהבדלה.
+        חג עם הבדלה ב-19:03, משמרת 16:00-22:00.
+        """
+        cache = {
+            "2025-10-11": {"enter": "17:56", "exit": "19:03", "holiday": "שמיני עצרת"},
+        }
+        sat = date(2025, 10, 11)
+        segments = [(960, 1320, None, sat)]  # 16:00-22:00
+
+        result = _calculate_chain_wages_new(segments, cache, 0, False)
+
+        # 16:00-19:03 = 183 דקות חג, 19:03-22:00 = 177 דקות חול
+        shabbat_total = result["calc150_shabbat"]
+        weekday_total = result["calc100"] + result["calc125"] + result["calc150_overtime"]
+        self.assertEqual(shabbat_total, 183, "לפני הבדלה = חג")
+        self.assertEqual(weekday_total, 177, "אחרי הבדלה = חול")
+
+    def test_rosh_hashana_friday_saturday(self):
+        """
+        ר"ה יום א' בשישי, יום ב' בשבת.
+        שישי = חג (holy), שבת = חג+שבת (holy).
+        """
+        cache = {
+            # ר"ה יום א' - שישי, ממשיך לשבת
+            "2027-09-17": {"enter": "18:15", "exit": "00:00", "holiday": "ראש השנה"},
+            # ר"ה יום ב' - שבת
+            "2027-09-18": {"enter": "18:14", "exit": "19:20", "holiday": "ראש השנה"},
+        }
+        # שישי = holy (חג, לא ערב שבת)
+        fri = date(2027, 9, 17)
+        self.assertEqual(classify_day_type(fri, cache), "holy")
+        result_fri = _calculate_chain_wages_new(
+            [(480, 960, None, fri)], cache, 0, False)
+        self.assertEqual(result_fri["calc150"], 480, "שישי ר\"ה = 150%")
+
+        # שבת = holy
+        sat = date(2027, 9, 18)
+        result_sat = _calculate_chain_wages_new(
+            [(480, 960, None, sat)], cache, 0, False)
+        self.assertEqual(result_sat["calc150"], 480, "שבת ר\"ה = 150%")
+
+    def test_night_shift_from_motzei_chag_to_weekday(self):
+        """
+        משמרת לילה ממוצאי חג לחול.
+        חג ביום שלישי, הבדלה 19:08, משמרת 22:00-06:00.
+        22:00-00:00 = אחרי הבדלה = חול, 00:00-06:00 = חול.
+        """
+        cache = {
+            "2025-10-07": {"enter": "18:01", "exit": "19:08", "holiday": "סוכות"},
+        }
+        # הסגמנט הראשון: 22:00-00:00 ביום חג (אחרי הבדלה)
+        chag_day = date(2025, 10, 7)
+        next_day = date(2025, 10, 8)
+        segments = [
+            (1320, 1440, None, chag_day),   # 22:00-00:00
+            (1440, 1800, None, next_day),   # 00:00-06:00
+        ]
+        result = _calculate_chain_wages_new(segments, cache, 0, is_night_shift=True)
+
+        # הכל אחרי הבדלה (19:08) = חול
+        self.assertEqual(result["calc150_shabbat"], 0, "אחרי הבדלה = חול")
+
+    def test_adjacent_holidays_with_gap(self):
+        """
+        שני חגים סמוכים עם יום הפסקה ביניהם.
+        סוכות (חמישי) → חול המועד (שישי) → שמיני עצרת (שבת).
+        """
+        cache = {
+            "2025-10-02": {"enter": "18:07", "exit": "19:14", "holiday": "סוכות"},
+            # שישי = שבת רגילה (חול המועד)
+            "2025-10-04": {"enter": "17:55", "exit": "19:05"},
+            # שמיני עצרת בשבת
+            "2025-10-04": {"enter": "17:55", "exit": "19:05", "holiday": "שמיני עצרת"},
+        }
+        # חמישי סוכות = holy
+        thu = date(2025, 10, 2)
+        self.assertEqual(classify_day_type(thu, cache), "holy")
+
+        # שישי = eve (ערב שבת רגיל, חול המועד = חול)
+        fri = date(2025, 10, 3)
+        self.assertEqual(classify_day_type(fri, cache), "eve")
+
+        # שבת שמיני עצרת = holy
+        sat = date(2025, 10, 4)
+        self.assertEqual(classify_day_type(sat, cache), "holy")
+
+    def test_holiday_with_early_havdalah(self):
+        """
+        חג עם הבדלה מוקדמת (חורף).
+        משמרת 08:00-20:00, הבדלה ב-17:00.
+        08:00-17:00 = חג (540 דקות), 17:00-20:00 = חול (180 דקות).
+        """
+        cache = {
+            "2025-12-17": {"enter": "16:00", "exit": "17:00", "holiday": "חנוכה חג"},
+        }
+        wed = date(2025, 12, 17)  # יום רביעי
+        segments = [(480, 1200, None, wed)]  # 08:00-20:00 (12 שעות)
+
+        result = _calculate_chain_wages_new(segments, cache, 0, False)
+
+        # 08:00-17:00 = 540 דקות חג: 480@150% + 60@175%
+        # 17:00-20:00 = 180 דקות חול: 60@175% + 120@200%... wait
+        # Actually with day_offset=1440 for holy day:
+        # abs_start = 480+1440 = 1920, abs_end = 1200+1440 = 2640
+        # exit = 17*60+1440 = 2460
+        # 1920 < 2460 → during shabbat until 2460
+        # 2460 < 2640 → crosses exit → Case 5
+        # during = 2460-1920 = 540 → shabbat
+        # after = 2640-2460 = 180 → weekday
+        self.assertEqual(result["calc150_shabbat"], 480, "8 שעות ראשונות חג @ 150%")
+        self.assertEqual(result["calc175"], 60, "שעה 9 חג @ 175%")
+        # אחרי הבדלה = חול
+        weekday_total = result["calc100"] + result["calc125"] + result["calc150_overtime"]
+        self.assertEqual(weekday_total, 180, "3 שעות אחרי הבדלה = חול")
+
+    def test_night_shift_motzei_shabbat_into_sunday_holiday(self):
+        """
+        משמרת לילה ממוצ"ש לחג ביום ראשון.
+        שבת הבדלה 18:55, חג ראשון מתחיל 18:55.
+        22:00-06:00: שבת כבר נגמרה, חג כבר התחיל → חג.
+        """
+        cache = {
+            "2025-10-04": {"enter": "17:50", "exit": "18:55"},  # שבת
+            "2025-10-05": {"enter": "18:55", "exit": "19:00", "holiday": "סוכות"},
+        }
+        # 22:00-00:00 על שבת (אחרי הבדלה 18:55)
+        sat = date(2025, 10, 4)
+        sun = date(2025, 10, 5)
+        segments = [
+            (1320, 1440, None, sat),   # 22:00-00:00 שבת (אחרי הבדלה)
+            (1440, 1800, None, sun),   # 00:00-06:00 יום ראשון (חג)
+        ]
+        result = _calculate_chain_wages_new(segments, cache, 0, is_night_shift=True)
+
+        # 22:00-00:00 = אחרי הבדלה שבת (18:55) = חול
+        # 00:00-06:00 = יום ראשון חג = חג
+        chag_minutes = result["calc150_shabbat"] + result["calc175"] + result["calc200"]
+        self.assertGreater(chag_minutes, 0, "חלק מהמשמרת בחג")
+
+    def test_shift_starting_exactly_at_candle_lighting(self):
+        """
+        משמרת שמתחילה בדיוק בזמן הדלקת נרות — כל הדקות חג.
+        """
+        cache = {
+            "2025-10-07": {"enter": "18:01", "exit": "19:08", "holiday": "סוכות"},
+        }
+        # ערב חג, משמרת מתחילה בדיוק ב-18:01 (כניסת חג)
+        eve = date(2025, 10, 6)
+        segments = [(1081, 1201, None, eve)]  # 18:01-20:01 (120 דקות)
+
+        result = _calculate_chain_wages_new(segments, cache, 0, False)
+
+        # כל 120 הדקות אחרי כניסת החג = חג
+        self.assertEqual(result["calc150_shabbat"], 120, "כל המשמרת בחג")
+        self.assertEqual(result["calc100"], 0, "אין דקות חול")
 
 
 # ============================================================================

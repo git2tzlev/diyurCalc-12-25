@@ -204,8 +204,12 @@ def _get_shabbat_boundaries(day_date: date, shabbat_cache: Dict[str, Dict[str, s
 
     # קביעת סוג היום ומציאת היום המקודש (שבת/חג)
     if weekday == FRIDAY:
-        # יום שישי - היום המקודש הוא מחר (שבת)
-        target_day = day_date + timedelta(days=1)
+        if day_info and day_info.get("holiday"):
+            # יום שישי שהוא חג - היום המקודש הוא היום עצמו
+            target_day = day_date
+        else:
+            # יום שישי רגיל - היום המקודש הוא מחר (שבת)
+            target_day = day_date + timedelta(days=1)
     elif weekday == SATURDAY or has_exit:
         # שבת או חג (יש לו havdalah) - היום המקודש הוא היום עצמו
         target_day = day_date
@@ -286,11 +290,77 @@ def _get_shabbat_boundaries(day_date: date, shabbat_cache: Dict[str, Dict[str, s
         if target_info.get("exit"):
             try:
                 xh, xm = map(int, target_info["exit"].split(":"))
-                exit_minutes = xh * MINUTES_PER_HOUR + xm + MINUTES_PER_DAY
+                if xh == 0 and xm == 0:
+                    # exit=00:00 = החג/שבת ממשיך ליום הבא, כל היום קדוש
+                    exit_minutes = 2 * MINUTES_PER_DAY
+                else:
+                    exit_minutes = xh * MINUTES_PER_HOUR + xm + MINUTES_PER_DAY
             except (ValueError, AttributeError):
                 pass
 
     return (enter_minutes, exit_minutes)
+
+
+def classify_day_type(day_date: date, shabbat_cache: Dict[str, Dict[str, str]]) -> str:
+    """
+    סיווג סוג היום ביחס לשבת/חג.
+
+    Returns:
+        "holy" - יום שבת/חג (כל היום קדוש עד הבדלה)
+        "eve" - ערב שבת/חג (יום חול, חג מתחיל בהדלקת נרות)
+        "weekday" - יום חול רגיל
+    """
+    weekday = day_date.weekday()
+    shabbat_enter, _ = _get_shabbat_boundaries(day_date, shabbat_cache)
+
+    if shabbat_enter < 0:
+        return "weekday"
+
+    day_str = day_date.strftime("%Y-%m-%d")
+    day_info = shabbat_cache.get(day_str)
+
+    if weekday == SATURDAY:
+        return "holy"
+
+    if weekday == FRIDAY:
+        if day_info and day_info.get("holiday"):
+            return "holy"
+        return "eve"
+
+    # ימי חול - בדיקה אם ערב חג או יום חג
+    # בדיקה ישירה: יום עם exit (הבדלה) = יום חג
+    if day_info and day_info.get("exit"):
+        return "holy"
+
+    holiday_date, holiday_info = _find_holiday_record_for_date(day_date, shabbat_cache)
+    if not holiday_date:
+        return "weekday"
+
+    days_to_holiday_record = (holiday_date - day_date).days
+
+    if days_to_holiday_record == 0:
+        # הרשומה היא להיום
+        if holiday_info and not holiday_info.get("exit"):
+            return "eve"  # רק הדלקת נרות = ערב חג
+        return "holy"  # יש הבדלה = יום חג
+
+    if days_to_holiday_record == 1:
+        # הרשומה היא למחר
+        if day_info:
+            return "holy"  # יש רשומה להיום = יום חג
+        # אין רשומה להיום - נבדוק אם אתמול היה חלק מאותו חג
+        yesterday = day_date - timedelta(days=1)
+        yesterday_enter, _ = _get_shabbat_boundaries(yesterday, shabbat_cache)
+        if yesterday_enter > 0:
+            return "holy"  # אתמול היה חג = היום גם חג
+        return "eve"  # אתמול לא היה חג = היום ערב חג
+
+    # מרחק 2+ ימים לרשומת החג
+    yesterday = day_date - timedelta(days=1)
+    yesterday_enter, _ = _get_shabbat_boundaries(yesterday, shabbat_cache)
+    if yesterday_enter > 0:
+        return "holy"  # אתמול היה חג = היום יום ביניים (חג)
+    return "eve"
 
 
 # =============================================================================

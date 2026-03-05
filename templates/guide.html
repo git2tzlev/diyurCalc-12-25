@@ -1463,7 +1463,7 @@
                   {% elif key == 'vacation' %}
                     {# חופשה: שעות × תעריף בסיס #}
                     {% set row_total = hours_rounded * (hourly_rate | round(2)) %}
-                  {% elif key == 'travel' or key == 'extras' or key == 'sick_payment' or key == 'professional_support' %}
+                  {% elif key == 'travel' or key == 'extras' or key == 'sick_payment' or key == 'professional_support' or key == 'holiday_payment' %}
                     {% set row_total = val %}
                   {% elif key == 'calc_variable' %}
                     {# תעריף משתנה - כמות 1, תעריף = סה"כ (כמו בגשר) #}
@@ -1533,6 +1533,11 @@
                     {# תומך מקצועי - סכום ישיר בשקלים #}
                     <td>-</td>
                     <td>-</td>
+                    <td>{{ row_total | format_currency }}</td>
+                    {% elif key == 'holiday_payment' %}
+                    {# תשלום חג - כמות ימי חג × תעריף ליום #}
+                    <td>{{ monthly_totals.holiday_payment_count or '-' }}</td>
+                    <td>{% if monthly_totals.holiday_payment_rate %}{{ "%.2f"|format(monthly_totals.holiday_payment_rate) }} ₪{% else %}-{% endif %}</td>
                     <td>{{ row_total | format_currency }}</td>
                     {% elif key == 'sick_payment' %}
                     {# תשלום מחלה #}

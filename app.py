@@ -770,7 +770,7 @@ async def set_selected_period_api(request: Request):
 async def startup_event():
     """Handle application startup - ensure database has required codes."""
     from core.logic import ensure_sick_payment_code, ensure_professional_support_code, ensure_holiday_payment_code
-    from core.database import get_conn
+    from core.database import get_conn, set_demo_mode
     try:
         with get_conn() as conn:
             ensure_sick_payment_code(conn.conn)
@@ -778,6 +778,18 @@ async def startup_event():
             ensure_holiday_payment_code(conn.conn)
     except Exception as e:
         logger.warning(f"Could not ensure payment codes on startup: {e}")
+
+    # וידוא קודים גם ב-DB הדמו
+    try:
+        set_demo_mode(True)
+        with get_conn() as conn:
+            ensure_sick_payment_code(conn.conn)
+            ensure_professional_support_code(conn.conn)
+            ensure_holiday_payment_code(conn.conn)
+    except Exception as e:
+        logger.debug(f"Could not ensure payment codes in demo DB: {e}")
+    finally:
+        set_demo_mode(False)
 
 
 @app.on_event("shutdown")

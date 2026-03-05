@@ -46,6 +46,14 @@ def _make_report(person_id, apartment_id, report_date):
     }
 
 
+def _get_amount(result, person_id):
+    """חילוץ סכום תשלום חג מהתוצאה."""
+    data = result.get(person_id)
+    if data is None:
+        return 0
+    return data["amount"]
+
+
 class TestGetHolidayDatesInMonth(unittest.TestCase):
     """בדיקות לזיהוי ימי חג בחודש."""
 
@@ -62,18 +70,14 @@ class TestGetHolidayDatesInMonth(unittest.TestCase):
         self.assertIn(date(2025, 10, 2), result)
 
     def test_two_day_holiday(self):
-        """חג דו-יומי (ר"ה) — שני ימים."""
-        # יום שני: רשומה ישירה עם holiday
-        # יום ראשון: נזהה דרך "מחר יש holiday עם enter"
+        """חג דו-יומי (ר"ה) — שני ימים עם רשומות נפרדות ב-DB."""
         cache = {
-            # 2025-09-23 (Tuesday) = ראש השנה יום א
-            # no direct record for first day
-            # 2025-09-24 (Wednesday) = ראש השנה יום ב
-            "2025-09-24": {"holiday": "ראש השנה ב", "enter": "18:00", "exit": "19:30"},
+            "2025-09-23": {"holiday": "ראש השנה א", "enter": "18:00", "exit": None},
+            "2025-09-24": {"holiday": "ראש השנה ב", "enter": None, "exit": "19:30"},
         }
         result = get_holiday_dates_in_month(2025, 9, cache)
-        self.assertIn(date(2025, 9, 24), result)
         self.assertIn(date(2025, 9, 23), result)
+        self.assertIn(date(2025, 9, 24), result)
         self.assertEqual(len(result), 2)
 
     def test_shabbat_without_holiday_excluded(self):
@@ -91,7 +95,6 @@ class TestCalculateHolidayPayments(unittest.TestCase):
     def setUp(self):
         """הגדרת mock לחיבור DB."""
         self.conn = MagicMock()
-        # Mock cursor for _get_weekday_shift_work_minutes
         mock_cursor = MagicMock()
         mock_cursor.fetchall.return_value = [
             {"start_time": "08:00", "end_time": "16:00"}  # 480 minutes = 8 hours
@@ -121,7 +124,7 @@ class TestCalculateHolidayPayments(unittest.TestCase):
         cache = _make_shabbat_cache_with_holiday([holiday])
 
         reports = [
-            _make_report(1, 100, date(2025, 10, 5)),  # עבד בחודש, לא בחג
+            _make_report(1, 100, date(2025, 10, 5)),
         ]
         person_types = {1: PERMANENT_EMPLOYEE_TYPE}
 
@@ -129,7 +132,9 @@ class TestCalculateHolidayPayments(unittest.TestCase):
             self.conn, 2025, 10, cache, self.minimum_wage,
             all_reports=reports, person_types=person_types,
         )
-        self.assertAlmostEqual(result.get(1, 0), self.full_shift_pay)
+        self.assertAlmostEqual(_get_amount(result, 1), self.full_shift_pay)
+        self.assertEqual(result[1]["count"], 1)
+        self.assertAlmostEqual(result[1]["rate"], self.full_shift_pay)
 
     def test_single_permanent_worked_holiday_gets_nothing(self):
         """מדריך קבוע אחד, עבד בחג → לא מקבל תשלום."""
@@ -137,7 +142,7 @@ class TestCalculateHolidayPayments(unittest.TestCase):
         cache = _make_shabbat_cache_with_holiday([holiday])
 
         reports = [
-            _make_report(1, 100, holiday),  # עבד בחג עצמו
+            _make_report(1, 100, holiday),
         ]
         person_types = {1: PERMANENT_EMPLOYEE_TYPE}
 
@@ -145,7 +150,7 @@ class TestCalculateHolidayPayments(unittest.TestCase):
             self.conn, 2025, 10, cache, self.minimum_wage,
             all_reports=reports, person_types=person_types,
         )
-        self.assertEqual(result.get(1, 0), 0)
+        self.assertEqual(_get_amount(result, 1), 0)
 
     def test_two_permanent_neither_worked_get_half(self):
         """2 קבועים, אף אחד לא עבד בחג → כל אחד חצי משמרת."""
@@ -162,8 +167,8 @@ class TestCalculateHolidayPayments(unittest.TestCase):
             self.conn, 2025, 10, cache, self.minimum_wage,
             all_reports=reports, person_types=person_types,
         )
-        self.assertAlmostEqual(result.get(1, 0), self.half_shift_pay)
-        self.assertAlmostEqual(result.get(2, 0), self.half_shift_pay)
+        self.assertAlmostEqual(_get_amount(result, 1), self.half_shift_pay)
+        self.assertAlmostEqual(_get_amount(result, 2), self.half_shift_pay)
 
     def test_two_permanent_one_worked_other_gets_half(self):
         """2 קבועים, אחד עבד בחג → רק השני מקבל חצי."""
@@ -171,9 +176,9 @@ class TestCalculateHolidayPayments(unittest.TestCase):
         cache = _make_shabbat_cache_with_holiday([holiday])
 
         reports = [
-            _make_report(1, 100, holiday),              # עבד בחג
+            _make_report(1, 100, holiday),
             _make_report(1, 100, date(2025, 10, 5)),
-            _make_report(2, 100, date(2025, 10, 6)),    # לא עבד בחג
+            _make_report(2, 100, date(2025, 10, 6)),
         ]
         person_types = {1: PERMANENT_EMPLOYEE_TYPE, 2: PERMANENT_EMPLOYEE_TYPE}
 
@@ -181,8 +186,8 @@ class TestCalculateHolidayPayments(unittest.TestCase):
             self.conn, 2025, 10, cache, self.minimum_wage,
             all_reports=reports, person_types=person_types,
         )
-        self.assertEqual(result.get(1, 0), 0)
-        self.assertAlmostEqual(result.get(2, 0), self.half_shift_pay)
+        self.assertEqual(_get_amount(result, 1), 0)
+        self.assertAlmostEqual(_get_amount(result, 2), self.half_shift_pay)
 
     def test_multi_day_holiday_pays_per_day(self):
         """חג דו-יומי — תשלום נפרד לכל יום."""
@@ -199,7 +204,8 @@ class TestCalculateHolidayPayments(unittest.TestCase):
             all_reports=reports, person_types=person_types,
         )
         # מדריך קבוע יחיד × 2 ימי חג = 2 × full_shift_pay
-        self.assertAlmostEqual(result.get(1, 0), self.full_shift_pay * 2)
+        self.assertAlmostEqual(_get_amount(result, 1), self.full_shift_pay * 2)
+        self.assertEqual(result[1]["count"], 2)
 
     def test_substitute_excluded(self):
         """מדריך מחליף לא מקבל תשלום חג."""
@@ -223,17 +229,20 @@ class TestCalculateHolidayPayments(unittest.TestCase):
         cache = _make_shabbat_cache_with_holiday([holiday])
 
         reports = [
-            _make_report(1, 100, date(2025, 10, 5)),   # דירה 100
-            _make_report(1, 200, date(2025, 10, 6)),   # דירה 200
+            _make_report(1, 100, date(2025, 10, 5)),
+            _make_report(1, 200, date(2025, 10, 6)),
+            _make_report(2, 100, date(2025, 10, 6)),
         ]
-        person_types = {1: PERMANENT_EMPLOYEE_TYPE}
+        person_types = {1: PERMANENT_EMPLOYEE_TYPE, 2: PERMANENT_EMPLOYEE_TYPE}
 
         result = calculate_holiday_payments(
             self.conn, 2025, 10, cache, self.minimum_wage,
             all_reports=reports, person_types=person_types,
         )
-        # מדריך יחיד בכל דירה → full_shift_pay × 2 דירות
-        self.assertAlmostEqual(result.get(1, 0), self.full_shift_pay * 2)
+        # person 1: יחיד בדירה 200 (full) + 1 מתוך 2 בדירה 100 (half) = full + half
+        self.assertAlmostEqual(_get_amount(result, 1), self.full_shift_pay + self.half_shift_pay)
+        # person 2: 1 מתוך 2 בדירה 100 (half)
+        self.assertAlmostEqual(_get_amount(result, 2), self.half_shift_pay)
 
 
 if __name__ == "__main__":

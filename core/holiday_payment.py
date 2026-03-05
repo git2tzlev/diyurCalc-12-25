@@ -63,7 +63,7 @@ def get_holiday_dates_in_month(
     מציאת כל ימי החג בחודש נתון (ללא שבתות רגילות).
 
     חג מזוהה לפי שדה holiday ב-shabbat_cache.
-    חגים דו-יומיים: גם היום הראשון (שאין לו רשומה ישירה) נכלל.
+    כל יום חג חייב להיות עם רשומה ישירה ב-shabbat_times (כולל חגים דו-יומיים כמו ר"ה).
     """
     holidays: List[date] = []
     days_in_month = monthrange(year, month)[1]
@@ -73,31 +73,8 @@ def get_holiday_dates_in_month(
         day_str = d.strftime("%Y-%m-%d")
         day_info = shabbat_cache.get(day_str)
 
-        # בדיקה ישירה: יש רשומה עם holiday ליום הזה
         if day_info and day_info.get("holiday"):
             holidays.append(d)
-            continue
-
-        # בדיקה לחג דו-יומי: היום הראשון אין לו רשומה,
-        # אבל למחר יש רשומה עם holiday ו-enter (ה-enter מכסה את אתמול)
-        tomorrow = d + timedelta(days=1)
-        tomorrow_str = tomorrow.strftime("%Y-%m-%d")
-        tomorrow_info = shabbat_cache.get(tomorrow_str)
-
-        if (
-            tomorrow_info
-            and tomorrow_info.get("holiday")
-            and tomorrow_info.get("enter")
-            and d.weekday() != 4  # לא שישי (שזה ערב שבת רגיל)
-            and d.weekday() != 5  # לא שבת
-        ):
-            # מחר הוא חג עם enter → היום הוא יום חג ראשון (או ערב חג)
-            # נבדוק: אם מחר הוא היום האחרון של חג דו-יומי,
-            # היום הוא היום הראשון של החג
-            # נוודא שהיום עצמו הוא לא ערב חג (לפני הכניסה)
-            # ע"י בדיקה שאין רשומה עם exit ליום הזה (כלומר הוא לא חג בפני עצמו)
-            if not (day_info and day_info.get("exit")):
-                holidays.append(d)
 
     return holidays
 
@@ -125,7 +102,7 @@ def calculate_holiday_payments(
         housing_filter: סינון לפי מערך דיור
 
     Returns:
-        {person_id: סכום תשלום חג}
+        {person_id: {"amount": סכום, "count": מספר ימי חג, "rate": תעריף ליום}}
     """
     holiday_dates = get_holiday_dates_in_month(year, month, shabbat_cache)
     if not holiday_dates:
@@ -174,7 +151,7 @@ def calculate_holiday_payments(
             apt_holiday_workers.setdefault(key, set()).add(person_id)
 
     # חישוב תשלום חג
-    result: Dict[int, float] = {}
+    result: Dict[int, dict] = {}
 
     for apartment_id, permanent_guides in apt_permanent_guides.items():
         num_permanent = len(permanent_guides)
@@ -193,7 +170,10 @@ def calculate_holiday_payments(
             pay = full_shift_pay if num_permanent == 1 else half_shift_pay
 
             for person_id in eligible:
-                result[person_id] = result.get(person_id, 0) + pay
+                if person_id not in result:
+                    result[person_id] = {"amount": 0.0, "count": 0, "rate": pay}
+                result[person_id]["amount"] += pay
+                result[person_id]["count"] += 1
 
     return result
 

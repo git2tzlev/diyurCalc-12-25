@@ -582,9 +582,12 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
 
     for person_data in summary_data:
         pid = person_data["person_id"]
-        hp = holiday_payments.get(pid, 0)
-        if hp > 0:
+        hp_data = holiday_payments.get(pid)
+        if hp_data and hp_data["amount"] > 0:
+            hp = hp_data["amount"]
             person_data["totals"]["holiday_payment"] = hp
+            person_data["totals"]["holiday_payment_count"] = hp_data["count"]
+            person_data["totals"]["holiday_payment_rate"] = hp_data["rate"]
             hp_rounded = round(round(hp, 2), 1)
             person_data["totals"]["total_payment"] += hp_rounded
             person_data["totals"]["gesher_total"] += hp_rounded
