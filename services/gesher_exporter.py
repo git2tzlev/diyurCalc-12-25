@@ -192,7 +192,12 @@ def calculate_value(totals: Dict, internal_key: str, value_type: str, minimum_wa
         except ValueError:
             multiplier = 1.0
         hours = round(raw_value / 60, 2)
-        hourly_rate = round(minimum_wage * multiplier, 2)
+        # שעות עבודה (calc*) - שימוש בתעריף בסיס ממוצע (כולל תוספות סוג דירה)
+        if internal_key.startswith('calc'):
+            base_rate = totals.get('average_base_rate', minimum_wage)
+        else:
+            base_rate = minimum_wage
+        hourly_rate = round(base_rate * multiplier, 2)
         return (hours, hourly_rate)
     
     elif value_type == 'days':

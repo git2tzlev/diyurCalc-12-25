@@ -392,7 +392,8 @@ def guide_view(
 
             # בדיקה אם זה תעריף משתנה
             is_special_hourly = chain.get("is_special_hourly", False)
-            is_variable_rate = is_special_hourly or abs(chain_rate - MINIMUM_WAGE) > 0.01
+            supplement = float(chain.get("hourly_wage_supplement", 0)) / 100
+            is_variable_rate = is_special_hourly or abs(chain_rate - MINIMUM_WAGE - supplement) > 0.01
 
             if is_variable_rate:
                 calc100 = chain.get("calc100", 0) or 0
@@ -959,7 +960,8 @@ def shifts_report_view(
                     continue
 
                 is_special_hourly = chain.get("is_special_hourly", False)
-                is_variable_rate = is_special_hourly or abs(chain_rate - MINIMUM_WAGE) > 0.01
+                supplement = float(chain.get("hourly_wage_supplement", 0)) / 100
+                is_variable_rate = is_special_hourly or abs(chain_rate - MINIMUM_WAGE - supplement) > 0.01
 
                 if is_variable_rate:
                     calc100 = chain.get("calc100", 0) or 0
@@ -1408,7 +1410,8 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int) -> Optio
                 continue
 
             is_special_hourly = chain.get("is_special_hourly", False)
-            is_variable_rate = is_special_hourly or abs(chain_rate - MINIMUM_WAGE) > 0.01
+            supplement = float(chain.get("hourly_wage_supplement", 0)) / 100
+            is_variable_rate = is_special_hourly or abs(chain_rate - MINIMUM_WAGE - supplement) > 0.01
 
             if is_variable_rate:
                 calc100 = chain.get("calc100", 0) or 0

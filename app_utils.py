@@ -1196,7 +1196,8 @@ def get_daily_segments_data(
                 shabbat_rate = get_effective_hourly_rate(
                     r, minimum_wage, is_shabbat=True, housing_rates_cache=housing_rates_cache
                 )
-                shift_rates[rate_key] = {"weekday": weekday_rate, "shabbat": shabbat_rate}
+                hourly_supplement = r.get("hourly_wage_supplement") or 0
+                shift_rates[rate_key] = {"weekday": weekday_rate, "shabbat": shabbat_rate, "supplement": hourly_supplement}
             if shift_id not in shift_names_map:
                 shift_names_map[shift_id] = r.get("shift_name", "")
             if shift_id not in shift_is_special_hourly:
@@ -2581,7 +2582,7 @@ def get_daily_segments_data(
 
                 # קבלת תעריף לפי (shift_id, housing_array_id, rate_apt_type) של הסגמנט הספציפי
                 seg_rate_key = (seg_shift_id, seg_housing_array_id, seg_rate_apt)
-                seg_rates_dict = shift_rates.get(seg_rate_key, {"weekday": minimum_wage, "shabbat": minimum_wage})
+                seg_rates_dict = shift_rates.get(seg_rate_key, {"weekday": minimum_wage, "shabbat": minimum_wage, "supplement": 0})
                 # בחירת תעריף שבת או חול לפי is_shabbat (מטבלת shift_type_housing_rates)
                 seg_rate = seg_rates_dict["shabbat"] if is_shabbat else seg_rates_dict["weekday"]
 
@@ -2701,6 +2702,7 @@ def get_daily_segments_data(
                     "break_reason": final_reason,
                     "from_prev_day": (seg_start >= MINUTES_PER_DAY) if is_first else False,
                     "effective_rate": seg_rate,  # שימוש בתעריף הנכון (שבת או חול) לפי is_shabbat
+                    "hourly_wage_supplement": seg_rates_dict.get("supplement", 0),  # תוספת סוג דירה באגורות
                 })
 
             # Check if chain ends at 08:00 boundary (1920 = 08:00 + 1440)
@@ -3127,6 +3129,10 @@ def aggregate_daily_segments_to_monthly(
         "variable_rate_value": minimum_wage,
         "variable_rate_extra_payment": 0.0,
         "variable_rates": {},  # {rate_value: {calc100, calc125, calc150, calc175, calc200, payment}}
+
+        # תעריף בסיס ממוצע - לחישוב תעריף בגשר (כולל תוספות סוג דירה)
+        "regular_minutes_sum": 0,
+        "regular_rate_x_minutes_sum": 0.0,
     }
 
     # ספירת ימי עבודה, חופשה ומחלה
@@ -3153,9 +3159,10 @@ def aggregate_daily_segments_to_monthly(
             effective_rate = chain.get("effective_rate", minimum_wage)
 
             # תעריף משתנה = משמרת עם תעריף שעתי מיוחד (is_special_hourly),
-            # או תעריף שונה משכר מינימום
+            # או תעריף שונה משכר מינימום + תוספת סוג דירה
             is_special_hourly = chain.get("is_special_hourly", False)
-            is_variable_rate = is_special_hourly or abs(effective_rate - minimum_wage) > 0.01
+            supplement = float(chain.get("hourly_wage_supplement", 0)) / 100
+            is_variable_rate = is_special_hourly or abs(effective_rate - minimum_wage - supplement) > 0.01
 
             if chain_type == "work":
                 # אתחול מילון לתעריף משתנה אם צריך
@@ -3261,6 +3268,13 @@ def aggregate_daily_segments_to_monthly(
                         monthly_totals["variable_rates"][rate_key]["payment"] += escort_bonus
                     else:
                         monthly_totals["payment_calc100"] += escort_bonus
+
+                # צבירת תעריף בסיס ממוצע עבור שעות רגילות (לא תעריף משתנה)
+                if not is_variable_rate:
+                    total_chain_minutes = c100 + c125 + c150 + c175 + c200
+                    if total_chain_minutes > 0:
+                        monthly_totals["regular_minutes_sum"] += total_chain_minutes
+                        monthly_totals["regular_rate_x_minutes_sum"] += total_chain_minutes * rounded_rate
 
             elif chain_type == "standby":
                 standby_days_set.add(day_date)
@@ -3423,6 +3437,14 @@ def aggregate_daily_segments_to_monthly(
         round(round(monthly_totals.get("holiday_payment", 0) or 0, 2), 1) +
         round(round(monthly_totals.get("extras", 0) or 0, 2), 1)
     )
+
+    # תעריף בסיס ממוצע - ממוצע משוקלל של כל התעריפים בשעות רגילות (כולל תוספות סוג דירה)
+    if monthly_totals["regular_minutes_sum"] > 0:
+        monthly_totals["average_base_rate"] = (
+            monthly_totals["regular_rate_x_minutes_sum"] / monthly_totals["regular_minutes_sum"]
+        )
+    else:
+        monthly_totals["average_base_rate"] = minimum_wage
 
     monthly_totals["gesher_total"] = round(gesher_total, 2)
     # display_total = סכום השורות המעוגלות (ללא round(2) בסוף) - מתאים לחישוב ידני
