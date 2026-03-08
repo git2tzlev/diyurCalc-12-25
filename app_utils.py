@@ -70,6 +70,11 @@ from core.constants import (
     # Night hours threshold
     NIGHT_HOURS_THRESHOLD,
     JERUSALEM_CITY_NAMES,
+    # Sick/Vacation constants
+    WEEKDAY_SHIFT_TYPE_ID,
+    WEEKDAY_STANDBY_START,
+    WEEKDAY_STANDBY_END,
+    calculate_weekday_work_minutes,
 )
 
 logger = logging.getLogger(__name__)
@@ -166,6 +171,112 @@ def _get_purim_standby_rate(
     if shabbat_seg_id:
         return get_standby_rate(conn, shabbat_seg_id, apt_type, married, year, month)
     return None
+
+
+# =============================================================================
+# Sick/Vacation Work Hours from Overrides
+# =============================================================================
+
+
+def _build_sick_vacation_segments(start_time: str, end_time: str) -> list[dict]:
+    """
+    בניית סגמנטי עבודה לחופשה/מחלה מתוך שעות override של משמרת חול.
+
+    מחזיר סגמנטים של עבודה בלבד (ללא כוננות 22:00-06:30).
+    לדוגמה: override 15:00-08:00 → [{15:00-22:00, work}, {06:30-08:00, work}]
+
+    Args:
+        start_time: שעת תחילת משמרת (HH:MM)
+        end_time: שעת סיום משמרת (HH:MM)
+
+    Returns:
+        רשימת סגמנטים בפורמט התואם ל-seg_list
+    """
+    start_min, end_min = span_minutes(start_time, end_time)
+
+    standby_start = WEEKDAY_STANDBY_START  # 1320 (22:00)
+    standby_end = WEEKDAY_STANDBY_END + MINUTES_PER_DAY  # 1830 (06:30 למחרת)
+
+    segments = []
+
+    # עבודה לפני כוננות (תחילת משמרת עד 22:00)
+    if start_min < standby_start:
+        seg_end = min(end_min, standby_start)
+        if seg_end > start_min:
+            segments.append({
+                "start_time": _minutes_to_hhmm(start_min),
+                "end_time": _minutes_to_hhmm(seg_end),
+                "segment_type": "work",
+                "id": None,
+            })
+
+    # עבודה אחרי כוננות (06:30 עד סיום משמרת)
+    if end_min > standby_end:
+        seg_start = max(start_min, standby_end)
+        if end_min > seg_start:
+            segments.append({
+                "start_time": _minutes_to_hhmm(seg_start),
+                "end_time": _minutes_to_hhmm(end_min),
+                "segment_type": "work",
+                "id": None,
+            })
+
+    return segments
+
+
+def _minutes_to_hhmm(minutes: int) -> str:
+    """המרת דקות מחצות למחרוזת HH:MM."""
+    m = minutes % MINUTES_PER_DAY
+    return f"{m // 60:02d}:{m % 60:02d}"
+
+
+def _build_weekday_work_overrides(
+    conn,
+    apartment_ids: set[int],
+    apartment_housing_map: dict[int, int | None],
+) -> dict[int, list[dict]]:
+    """
+    בניית מפת סגמנטי עבודה לחופשה/מחלה לכל דירה מתוך shift_time_overrides.
+
+    עדיפות: override ספציפי לדירה > ברירת מחדל למערך דיור.
+
+    Args:
+        conn: חיבור לDB
+        apartment_ids: מזהי דירות
+        apartment_housing_map: מיפוי apartment_id -> housing_array_id
+
+    Returns:
+        מיפוי apartment_id -> רשימת סגמנטי עבודה
+    """
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    try:
+        cursor.execute("""
+            SELECT apartment_id, housing_array_id, start_time, end_time
+            FROM shift_time_overrides
+            WHERE shift_type_id = %s AND is_active = true
+        """, (WEEKDAY_SHIFT_TYPE_ID,))
+
+        apt_overrides: dict[int, tuple[str, str]] = {}
+        ha_defaults: dict[int, tuple[str, str]] = {}
+        for row in cursor.fetchall():
+            if row["apartment_id"] is not None:
+                apt_overrides[row["apartment_id"]] = (row["start_time"], row["end_time"])
+            elif row["housing_array_id"] is not None:
+                ha_defaults[row["housing_array_id"]] = (row["start_time"], row["end_time"])
+
+        result: dict[int, list[dict]] = {}
+        for apt_id in apartment_ids:
+            override = apt_overrides.get(apt_id)
+            if override is None:
+                ha_id = apartment_housing_map.get(apt_id)
+                if ha_id:
+                    override = ha_defaults.get(ha_id)
+            if override:
+                result[apt_id] = _build_sick_vacation_segments(override[0], override[1])
+
+        return result
+    finally:
+        cursor.close()
 
 
 # =============================================================================
@@ -1109,6 +1220,18 @@ def get_daily_segments_data(
     # Build apartment type change dates cache
     apartment_change_dates = get_all_apartment_type_change_dates(conn, list(apartment_ids))
 
+    # טעינת שעות עבודה בחול לפי דירה (מתוך shift_time_overrides) לשימוש בחופשה/מחלה
+    # חל רק מ-02/2026 ואילך
+    weekday_work_overrides: dict[int, list[dict]] = {}
+    apartment_housing_map: dict[int, int | None] = {}
+    if (year, month) >= (2026, 2):
+        for r in reports:
+            apt_id = r.get("apartment_id")
+            ha_id = r.get("housing_array_id")
+            if apt_id and ha_id:
+                apartment_housing_map[apt_id] = ha_id
+        weekday_work_overrides = _build_weekday_work_overrides(conn, apartment_ids, apartment_housing_map)
+
     # Apply historical overrides to reports
     processed_reports = []
     for r in reports:
@@ -1249,16 +1372,28 @@ def get_daily_segments_data(
 
         # אם אין שעות - בודקים אם יש סגמנטים מוגדרים למשמרת (למשל יום מחלה/חופשה)
         if not has_times:
-            seg_list_check = segments_by_shift.get(r["shift_type_id"], [])
-            if seg_list_check:
-                # יש סגמנטים - נשתמש בשעות מהסגמנט הראשון
-                first_seg = seg_list_check[0]
-                r = dict(r)  # יצירת עותק כדי לא לשנות את המקור
-                r["start_time"] = first_seg["start_time"]
-                r["end_time"] = first_seg["end_time"]
+            shift_name_check = (r.get("shift_name") or "")
+            is_sick_or_vacation_no_times = ("מחלה" in shift_name_check or "חופשה" in shift_name_check)
+            apt_id = r.get("apartment_id")
+
+            if is_sick_or_vacation_no_times and apt_id and apt_id in weekday_work_overrides:
+                # חופשה/מחלה: שעות לפי override של משמרת חול לדירה
+                override_segs = weekday_work_overrides[apt_id]
+                if override_segs:
+                    r = dict(r)
+                    r["start_time"] = override_segs[0]["start_time"]
+                    r["end_time"] = override_segs[-1]["end_time"]
+                else:
+                    continue
             else:
-                # אין סגמנטים ואין שעות - דלג
-                continue
+                seg_list_check = segments_by_shift.get(r["shift_type_id"], [])
+                if seg_list_check:
+                    first_seg = seg_list_check[0]
+                    r = dict(r)
+                    r["start_time"] = first_seg["start_time"]
+                    r["end_time"] = first_seg["end_time"]
+                else:
+                    continue
 
         # Split shifts across midnight
         rep_start_orig, rep_end_orig = span_minutes(r["start_time"], r["end_time"])
@@ -1301,6 +1436,12 @@ def get_daily_segments_data(
         # כולל: משמרות תגבור, יום חופשה, יום מחלה
         shift_type_id = r.get("shift_type_id")
         is_fixed_segments_shift = is_tagbur_shift(shift_type_id) or is_vacation_report or is_sick_report
+
+        # חופשה/מחלה: החלפת seg_list בסגמנטי עבודה לפי override של משמרת חול לדירה
+        if (is_sick_report or is_vacation_report):
+            apt_id = r.get("apartment_id")
+            if apt_id and apt_id in weekday_work_overrides:
+                seg_list = weekday_work_overrides[apt_id]
 
         # משמרת לילה - סגמנטים דינמיים לפי זמן הכניסה בפועל
         # החוק: 2 שעות ראשונות עבודה, עד 06:30 כוננות, 06:30-08:00 עבודה
@@ -1491,7 +1632,12 @@ def get_daily_segments_data(
                 prev_seg_end = seg_end
 
                 # קביעת התאריך האמיתי של הסגמנט
-                actual_seg_date = r_date + timedelta(days=days_offset)
+                # חופשה/מחלה: כל הסגמנטים שייכים ליום הדיווח (גם חלק הבוקר של למחרת)
+                # כדי שחיפוש ברצף ימי מחלה יחזיר את מספר היום הנכון
+                if is_sick_report or is_vacation_report:
+                    actual_seg_date = r_date
+                else:
+                    actual_seg_date = r_date + timedelta(days=days_offset)
 
                 # קביעת סוג אפקטיבי
                 if is_sick_report:

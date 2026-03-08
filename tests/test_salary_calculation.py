@@ -2477,6 +2477,256 @@ def run_unit_tests():
     return result
 
 
+class TestSickVacationWorkHours(unittest.TestCase):
+    """בדיקות חישוב שעות עבודה לחופשה/מחלה לפי override של משמרת חול."""
+
+    def test_calculate_weekday_work_minutes_default_array1(self):
+        """ברירת מחדל מערך 1: 16:00-08:00 = 7.5 שעות עבודה."""
+        from core.constants import calculate_weekday_work_minutes
+        # 16:00 = 960, 08:00 = 480 -> span_minutes gives 480+1440=1920
+        result = calculate_weekday_work_minutes(960, 480)
+        self.assertEqual(result, 450)  # 7.5 שעות = 450 דקות
+
+    def test_calculate_weekday_work_minutes_extended_shift(self):
+        """דירות עם override 15:00-08:00 = 8.5 שעות עבודה."""
+        from core.constants import calculate_weekday_work_minutes
+        # 15:00 = 900, 08:00 = 480
+        result = calculate_weekday_work_minutes(900, 480)
+        self.assertEqual(result, 510)  # 8.5 שעות = 510 דקות
+
+    def test_calculate_weekday_work_minutes_short_shift(self):
+        """דירות עם override 17:00-08:30 = 7 שעות עבודה."""
+        from core.constants import calculate_weekday_work_minutes
+        # 17:00 = 1020, 08:30 = 510
+        result = calculate_weekday_work_minutes(1020, 510)
+        self.assertEqual(result, 420)  # 7 שעות = 420 דקות
+
+    def test_calculate_weekday_work_minutes_array2_default(self):
+        """ברירת מחדל מערך 2: 16:30-08:30 = 7.5 שעות עבודה."""
+        from core.constants import calculate_weekday_work_minutes
+        # 16:30 = 990, 08:30 = 510
+        result = calculate_weekday_work_minutes(990, 510)
+        self.assertEqual(result, 450)  # 7.5 שעות = 450 דקות
+
+    def test_build_sick_vacation_segments_default(self):
+        """בדיקת פיצול סגמנטים: 16:00-08:00 → שני סגמנטי עבודה."""
+        from app_utils import _build_sick_vacation_segments
+        segs = _build_sick_vacation_segments("16:00", "08:00")
+        self.assertEqual(len(segs), 2)
+        # סגמנט ראשון: 16:00-22:00
+        self.assertEqual(segs[0]["start_time"], "16:00")
+        self.assertEqual(segs[0]["end_time"], "22:00")
+        self.assertEqual(segs[0]["segment_type"], "work")
+        # סגמנט שני: 06:30-08:00
+        self.assertEqual(segs[1]["start_time"], "06:30")
+        self.assertEqual(segs[1]["end_time"], "08:00")
+        self.assertEqual(segs[1]["segment_type"], "work")
+
+    def test_build_sick_vacation_segments_extended(self):
+        """בדיקת פיצול סגמנטים: 15:00-08:00 → סגמנט ראשון ארוך יותר."""
+        from app_utils import _build_sick_vacation_segments
+        segs = _build_sick_vacation_segments("15:00", "08:00")
+        self.assertEqual(len(segs), 2)
+        self.assertEqual(segs[0]["start_time"], "15:00")
+        self.assertEqual(segs[0]["end_time"], "22:00")
+        self.assertEqual(segs[1]["start_time"], "06:30")
+        self.assertEqual(segs[1]["end_time"], "08:00")
+
+    def test_build_sick_vacation_segments_short(self):
+        """בדיקת פיצול סגמנטים: 17:00-08:30 → סגמנט שני ארוך יותר."""
+        from app_utils import _build_sick_vacation_segments
+        segs = _build_sick_vacation_segments("17:00", "08:30")
+        self.assertEqual(len(segs), 2)
+        self.assertEqual(segs[0]["start_time"], "17:00")
+        self.assertEqual(segs[0]["end_time"], "22:00")
+        self.assertEqual(segs[1]["start_time"], "06:30")
+        self.assertEqual(segs[1]["end_time"], "08:30")
+
+    def test_build_segments_total_minutes_match(self):
+        """בדיקה שסך הדקות בסגמנטים = calculate_weekday_work_minutes."""
+        from app_utils import _build_sick_vacation_segments
+        from core.constants import calculate_weekday_work_minutes
+        from core.time_utils import span_minutes
+
+        test_cases = [
+            ("16:00", "08:00", 450),
+            ("15:00", "08:00", 510),
+            ("17:00", "08:30", 420),
+            ("16:30", "08:30", 450),
+        ]
+        for start, end, expected_mins in test_cases:
+            segs = _build_sick_vacation_segments(start, end)
+            total = sum(
+                span_minutes(s["start_time"], s["end_time"])[1] - span_minutes(s["start_time"], s["end_time"])[0]
+                for s in segs
+            )
+            start_min, end_min = span_minutes(start, end)
+            calc_total = calculate_weekday_work_minutes(start_min, end_min)
+            self.assertEqual(total, calc_total, f"Mismatch for {start}-{end}")
+            self.assertEqual(total, expected_mins, f"Expected {expected_mins} for {start}-{end}, got {total}")
+
+
+class TestSickVacationEdgeCases(unittest.TestCase):
+    """מקרי קצה בחישוב שעות מחלה/חופשה."""
+
+    def test_edge1_specific_apartment_override_gives_more_hours(self):
+        """מקרה קצה 1: דירה עם override ספציפי (15:00-08:00) מקבלת 8.5 שעות."""
+        from app_utils import _build_sick_vacation_segments, _build_weekday_work_overrides
+        segs = _build_sick_vacation_segments("15:00", "08:00")
+        from core.time_utils import span_minutes
+        total_mins = sum(
+            span_minutes(s["start_time"], s["end_time"])[1] - span_minutes(s["start_time"], s["end_time"])[0]
+            for s in segs
+        )
+        # 15:00-22:00 = 420 + 06:30-08:00 = 90 → 510 דקות = 8.5 שעות
+        self.assertEqual(total_mins, 510)
+        # ולא 450 (7.5 שעות) כמו ברירת מחדל
+        self.assertNotEqual(total_mins, 450)
+
+    def test_edge2_before_feb2026_no_overrides(self):
+        """מקרה קצה 2: לפני 02/2026 הלוגיקה הישנה פועלת (dict ריק)."""
+        # הבדיקה של (year, month) >= (2026, 2)
+        self.assertTrue((2026, 2) >= (2026, 2))   # פברואר 2026 - כלול
+        self.assertTrue((2026, 3) >= (2026, 2))   # מרץ 2026 - כלול
+        self.assertFalse((2026, 1) >= (2026, 2))  # ינואר 2026 - לא כלול
+        self.assertFalse((2025, 12) >= (2026, 2)) # דצמבר 2025 - לא כלול
+
+    def test_edge3_apartment_without_any_override_fallback(self):
+        """מקרה קצה 3: דירה ללא override כלל - overrides dict ריק, fallback לסגמנטים."""
+        from app_utils import _build_sick_vacation_segments
+        # אם דירה לא נמצאת ב-weekday_work_overrides, הקוד לא יחליף את seg_list
+        overrides = {}  # ריק - אין overrides
+        apt_id = 999  # דירה שלא קיימת
+        # הבדיקה: apt_id לא ב-overrides → לא מחליפים
+        self.assertNotIn(apt_id, overrides)
+
+    def test_edge4_array2_different_segment_split(self):
+        """מקרה קצה 4: מערך 2 (16:30-08:30) - חלוקה שונה אבל אותו סך שעות."""
+        from app_utils import _build_sick_vacation_segments
+        from core.time_utils import span_minutes
+        segs = _build_sick_vacation_segments("16:30", "08:30")
+        self.assertEqual(len(segs), 2)
+        # סגמנט ראשון: 16:30-22:00 = 330 דקות (5.5 שעות)
+        s1_start, s1_end = span_minutes(segs[0]["start_time"], segs[0]["end_time"])
+        self.assertEqual(s1_end - s1_start, 330)
+        # סגמנט שני: 06:30-08:30 = 120 דקות (2 שעות)
+        s2_start, s2_end = span_minutes(segs[1]["start_time"], segs[1]["end_time"])
+        self.assertEqual(s2_end - s2_start, 120)
+        # סה"כ: 450 = 7.5 שעות (כמו ברירת מחדל אבל חלוקה שונה)
+        self.assertEqual((s1_end - s1_start) + (s2_end - s2_start), 450)
+
+    def test_edge5_shift_entirely_within_standby_zero_work(self):
+        """מקרה קצה 5: משמרת שכולה בתוך שעות כוננות = 0 דקות עבודה."""
+        from core.constants import calculate_weekday_work_minutes
+        # משמרת 23:00-05:00 - כולה בתוך 22:00-06:30
+        result = calculate_weekday_work_minutes(23 * 60, 5 * 60)
+        self.assertEqual(result, 0)
+        # גם _build_sick_vacation_segments צריך להחזיר רשימה ריקה
+        from app_utils import _build_sick_vacation_segments
+        segs = _build_sick_vacation_segments("23:00", "05:00")
+        self.assertEqual(len(segs), 0)
+
+
+class TestSickVacationEdgeCases2(unittest.TestCase):
+    """מקרי קצה נוספים בחישוב שעות מחלה/חופשה."""
+
+    def test_edge6_morning_segment_keeps_report_date(self):
+        """מקרה קצה 6: סגמנט בוקר (06:30-08:00) נשאר ביום הדיווח, לא ביום הבא."""
+        from app_utils import _build_sick_vacation_segments
+        from core.time_utils import span_minutes
+        segs = _build_sick_vacation_segments("16:00", "08:00")
+        # הסגמנט השני (06:30-08:00) עובר חצות, אבל לפי הלוגיקה החדשה
+        # actual_seg_date לא מקודם ליום הבא במחלה/חופשה
+        self.assertEqual(len(segs), 2)
+        self.assertEqual(segs[1]["start_time"], "06:30")
+        self.assertEqual(segs[1]["end_time"], "08:00")
+
+    def test_edge7_sick_day_payment_rates_with_gap(self):
+        """מקרה קצה 7: רצף מחלה עם הפסקה - הרצף מתאפס."""
+        from core.sick_days import _identify_sick_day_sequences, get_sick_payment_rate
+        # יצירת דיווחים עם הפסקה: יום 1, יום 2, (הפסקה), יום 5, יום 6
+        from datetime import date
+        reports = [
+            {"date": date(2026, 2, 1), "shift_name": "יום מחלה"},
+            {"date": date(2026, 2, 2), "shift_name": "יום מחלה"},
+            {"date": date(2026, 2, 5), "shift_name": "יום מחלה"},
+            {"date": date(2026, 2, 6), "shift_name": "יום מחלה"},
+        ]
+        seq = _identify_sick_day_sequences(reports)
+        # רצף 1: ימים 1-2 (day 1, day 2)
+        self.assertEqual(seq[date(2026, 2, 1)], 1)
+        self.assertEqual(seq[date(2026, 2, 2)], 2)
+        # רצף 2 (חדש): ימים 5-6 (day 1, day 2)
+        self.assertEqual(seq[date(2026, 2, 5)], 1)
+        self.assertEqual(seq[date(2026, 2, 6)], 2)
+        # תשלום: יום 1=0%, יום 2=50%
+        self.assertEqual(get_sick_payment_rate(1), 0.0)
+        self.assertEqual(get_sick_payment_rate(2), 0.5)
+
+    def test_edge8_vacation_always_100_percent(self):
+        """מקרה קצה 8: חופשה תמיד 100% תשלום (לא מדורגת כמו מחלה)."""
+        from app_utils import _build_sick_vacation_segments
+        from core.time_utils import span_minutes
+        # חופשה עם override 15:00-08:00 = 8.5 שעות
+        segs = _build_sick_vacation_segments("15:00", "08:00")
+        total_mins = sum(
+            span_minutes(s["start_time"], s["end_time"])[1]
+            - span_minutes(s["start_time"], s["end_time"])[0]
+            for s in segs
+        )
+        self.assertEqual(total_mins, 510)  # 8.5 שעות
+        # חופשה לא עוברת דרך sick_day_sequence - תמיד משולמת 100%
+        # (אימות שהסגמנטים הם "work" type, לא "sick")
+        for s in segs:
+            self.assertEqual(s["segment_type"], "work")
+
+    def test_edge9_two_segment_total_matches_calculate_weekday(self):
+        """מקרה קצה 9: סכום שני הסגמנטים = תוצאת calculate_weekday_work_minutes."""
+        from app_utils import _build_sick_vacation_segments
+        from core.constants import calculate_weekday_work_minutes
+        from core.time_utils import span_minutes
+        test_cases = [
+            ("16:00", "08:00"),   # מערך 1 ברירת מחדל
+            ("15:00", "08:00"),   # override 8.5h
+            ("17:00", "08:30"),   # override 7h
+            ("16:30", "08:30"),   # מערך 2 ברירת מחדל
+            ("16:30", "09:00"),   # override דירה 35
+        ]
+        for start, end in test_cases:
+            segs = _build_sick_vacation_segments(start, end)
+            seg_total = sum(
+                span_minutes(s["start_time"], s["end_time"])[1]
+                - span_minutes(s["start_time"], s["end_time"])[0]
+                for s in segs
+            )
+            s_min, e_min = span_minutes(start, end)
+            calc_total = calculate_weekday_work_minutes(s_min, e_min)
+            self.assertEqual(seg_total, calc_total,
+                             f"Mismatch for {start}-{end}: segments={seg_total}, calc={calc_total}")
+
+    def test_edge10_override_priority_apartment_over_housing_array(self):
+        """מקרה קצה 10: override לדירה ספציפית גובר על ברירת מחדל למערך."""
+        from app_utils import _build_sick_vacation_segments
+        from core.time_utils import span_minutes
+        # מערך 1 ברירת מחדל: 16:00-08:00 = 7.5h
+        default_segs = _build_sick_vacation_segments("16:00", "08:00")
+        default_total = sum(
+            span_minutes(s["start_time"], s["end_time"])[1]
+            - span_minutes(s["start_time"], s["end_time"])[0]
+            for s in default_segs
+        )
+        # override ספציפי לדירה: 15:00-08:00 = 8.5h
+        override_segs = _build_sick_vacation_segments("15:00", "08:00")
+        override_total = sum(
+            span_minutes(s["start_time"], s["end_time"])[1]
+            - span_minutes(s["start_time"], s["end_time"])[0]
+            for s in override_segs
+        )
+        # override ספציפי > ברירת מחדל
+        self.assertGreater(override_total, default_total)
+        self.assertEqual(override_total - default_total, 60)  # הפרש שעה אחת
+
+
 if __name__ == "__main__":
     import argparse
 

@@ -33,6 +33,8 @@ HOSPITAL_ESCORT_SHIFT_ID = 120  # משמרת ליווי בי"ח
 MEDICAL_ESCORT_SHIFT_ID = 148   # משמרת ליווי רפואי
 WORK_HOUR_SHIFT_ID = 138        # שעת עבודה (לשעות מחוץ לסגמנטים מוגדרים)
 WEEKDAY_SHIFT_TYPE_ID = 103     # משמרת חול רגיל
+SICK_SHIFT_TYPE_ID = 143        # יום מחלה
+VACATION_SHIFT_TYPE_ID = 146    # יום חופשה
 
 # Holiday Payment (תשלום חג)
 HOLIDAY_PAYMENT_INTERNAL_KEY = "holiday_payment"
@@ -88,6 +90,16 @@ NIGHT_OVERTIME_125_LIMIT = 540          # 9 hours = 125% (for night shifts)
 NIGHT_HOURS_START = 22 * 60             # 1320 = 22:00
 NIGHT_HOURS_END = 6 * 60                # 360 = 06:00
 NIGHT_HOURS_THRESHOLD = 120             # 2 hours required to qualify as night shift
+
+# =============================================================================
+# Sick/Vacation Constants
+# =============================================================================
+
+SICK_VACATION_SHIFT_IDS: Set[int] = {SICK_SHIFT_TYPE_ID, VACATION_SHIFT_TYPE_ID}
+
+# שעות כוננות קבועות במשמרת חול (לחישוב שעות עבודה לחופשה/מחלה)
+WEEKDAY_STANDBY_START = 22 * 60     # 1320 = 22:00
+WEEKDAY_STANDBY_END = 6 * 60 + 30   # 390 = 06:30
 
 # =============================================================================
 # Standby Constants
@@ -241,3 +253,31 @@ def qualifies_as_night_shift(work_segments: list) -> bool:
         for start, end in work_segments
     )
     return total_night >= NIGHT_HOURS_THRESHOLD
+
+
+def calculate_weekday_work_minutes(start_min: int, end_min: int) -> int:
+    """
+    חישוב דקות עבודה במשמרת חול, בניכוי כוננות (22:00-06:30).
+
+    כל מה שבטווח המשמרת מחוץ לכוננות = עבודה.
+
+    Args:
+        start_min: זמן תחילת משמרת בדקות מחצות
+        end_min: זמן סיום משמרת בדקות מחצות (עשוי להיות >1440)
+
+    Returns:
+        סך דקות עבודה (ללא כוננות)
+    """
+    if end_min <= start_min:
+        end_min += 1440
+
+    standby_start = WEEKDAY_STANDBY_START  # 1320 (22:00)
+    standby_end = WEEKDAY_STANDBY_END + 1440  # 1830 (06:30 למחרת)
+
+    total = end_min - start_min
+
+    overlap_start = max(start_min, standby_start)
+    overlap_end = min(end_min, standby_end)
+    standby_overlap = max(0, overlap_end - overlap_start)
+
+    return total - standby_overlap
