@@ -230,23 +230,12 @@ def _minutes_to_hhmm(minutes: int) -> str:
     return f"{m // 60:02d}:{m % 60:02d}"
 
 
-def _build_weekday_work_overrides(
-    conn,
-    apartment_ids: set[int],
-    apartment_housing_map: dict[int, int | None],
-) -> dict[int, list[dict]]:
+def _fetch_weekday_overrides(conn) -> tuple[dict[int, tuple[str, str]], dict[int, tuple[str, str]]]:
     """
-    בניית מפת סגמנטי עבודה לחופשה/מחלה לכל דירה מתוך shift_time_overrides.
-
-    עדיפות: override ספציפי לדירה > ברירת מחדל למערך דיור.
-
-    Args:
-        conn: חיבור לDB
-        apartment_ids: מזהי דירות
-        apartment_housing_map: מיפוי apartment_id -> housing_array_id
+    שאילתה אחת ל-shift_time_overrides עבור משמרת חול.
 
     Returns:
-        מיפוי apartment_id -> רשימת סגמנטי עבודה
+        (apt_overrides, ha_defaults) — מיפוי דירה/מערך -> (start_time, end_time)
     """
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     try:
@@ -264,19 +253,90 @@ def _build_weekday_work_overrides(
             elif row["housing_array_id"] is not None:
                 ha_defaults[row["housing_array_id"]] = (row["start_time"], row["end_time"])
 
-        result: dict[int, list[dict]] = {}
-        for apt_id in apartment_ids:
-            override = apt_overrides.get(apt_id)
-            if override is None:
-                ha_id = apartment_housing_map.get(apt_id)
-                if ha_id:
-                    override = ha_defaults.get(ha_id)
-            if override:
-                result[apt_id] = _build_sick_vacation_segments(override[0], override[1])
-
-        return result
+        return apt_overrides, ha_defaults
     finally:
         cursor.close()
+
+
+def _resolve_override_for_apartment(
+    apt_id: int,
+    apt_overrides: dict[int, tuple[str, str]],
+    ha_defaults: dict[int, tuple[str, str]],
+    apartment_housing_map: dict[int, int | None],
+) -> tuple[str, str] | None:
+    """מציאת override לדירה — עדיפות: דירה ספציפית > מערך דיור."""
+    override = apt_overrides.get(apt_id)
+    if override is None:
+        ha_id = apartment_housing_map.get(apt_id)
+        if ha_id:
+            override = ha_defaults.get(ha_id)
+    return override
+
+
+def _build_weekday_work_overrides(
+    apartment_ids: set[int],
+    apartment_housing_map: dict[int, int | None],
+    apt_overrides: dict[int, tuple[str, str]],
+    ha_defaults: dict[int, tuple[str, str]],
+) -> dict[int, list[dict]]:
+    """
+    בניית מפת סגמנטי עבודה לחופשה/מחלה לכל דירה (ללא כוננות).
+
+    Returns:
+        מיפוי apartment_id -> רשימת סגמנטי עבודה (work בלבד)
+    """
+    result: dict[int, list[dict]] = {}
+    for apt_id in apartment_ids:
+        override = _resolve_override_for_apartment(apt_id, apt_overrides, ha_defaults, apartment_housing_map)
+        if override:
+            result[apt_id] = _build_sick_vacation_segments(override[0], override[1])
+    return result
+
+
+def _build_weekday_shift_overrides(
+    apartment_ids: set[int],
+    apartment_housing_map: dict[int, int | None],
+    apt_overrides: dict[int, tuple[str, str]],
+    ha_defaults: dict[int, tuple[str, str]],
+    base_segments: list[dict],
+) -> dict[int, list[dict]]:
+    """
+    בניית מפת סגמנטים מלאים (work + standby) למשמרת חול לפי override.
+
+    הכוננות נשמרת כמו שהיא (עם segment_id המקורי).
+    רק סגמנטי העבודה משתנים לפי override.
+
+    Returns:
+        מיפוי apartment_id -> רשימת סגמנטים [work, standby, work]
+    """
+    # מציאת סגמנט הכוננות המקורי
+    standby_seg = None
+    for seg in base_segments:
+        if seg.get("segment_type") == "standby":
+            standby_seg = dict(seg)
+            break
+
+    if not standby_seg:
+        return {}
+
+    standby_start_str = standby_seg["start_time"]
+    standby_end_str = standby_seg["end_time"]
+
+    result: dict[int, list[dict]] = {}
+    for apt_id in apartment_ids:
+        override = _resolve_override_for_apartment(apt_id, apt_overrides, ha_defaults, apartment_housing_map)
+        if not override:
+            continue
+
+        override_start, override_end = override
+        segments = [
+            {"start_time": override_start, "end_time": standby_start_str, "segment_type": "work", "id": None},
+            standby_seg,
+            {"start_time": standby_end_str, "end_time": override_end, "segment_type": "work", "id": None},
+        ]
+        result[apt_id] = segments
+
+    return result
 
 
 # =============================================================================
@@ -1220,9 +1280,37 @@ def get_daily_segments_data(
     # Build apartment type change dates cache
     apartment_change_dates = get_all_apartment_type_change_dates(conn, list(apartment_ids))
 
+    # Fetch segments early - needed for weekday overrides when (year, month) >= (2026, 2)
+    shift_ids = {r["shift_type_id"] for r in reports if r["shift_type_id"]}
+    if (year, month) >= (2026, 2):
+        shift_ids.add(WEEKDAY_SHIFT_TYPE_ID)
+    if preloaded_segments is not None:
+        segments_by_shift = {
+            sid: segs for sid, segs in preloaded_segments.items()
+            if sid in shift_ids
+        }
+    else:
+        shift_segments = []
+        if shift_ids:
+            placeholders = ",".join(["%s"] * len(shift_ids))
+            shift_segments = conn.execute(
+                """
+                SELECT seg.*, st.name AS shift_name
+                FROM shift_time_segments seg
+                JOIN shift_types st ON st.id = seg.shift_type_id
+                WHERE seg.shift_type_id IN ({})
+                ORDER BY seg.shift_type_id, seg.order_index, seg.id
+                """.format(placeholders),
+                tuple(shift_ids),
+            ).fetchall()
+        segments_by_shift = {}
+        for seg in shift_segments:
+            segments_by_shift.setdefault(seg["shift_type_id"], []).append(seg)
+
     # טעינת שעות עבודה בחול לפי דירה (מתוך shift_time_overrides) לשימוש בחופשה/מחלה
     # חל רק מ-02/2026 ואילך
     weekday_work_overrides: dict[int, list[dict]] = {}
+    weekday_shift_overrides: dict[int, list[dict]] = {}
     apartment_housing_map: dict[int, int | None] = {}
     if (year, month) >= (2026, 2):
         for r in reports:
@@ -1230,7 +1318,14 @@ def get_daily_segments_data(
             ha_id = r.get("housing_array_id")
             if apt_id and ha_id:
                 apartment_housing_map[apt_id] = ha_id
-        weekday_work_overrides = _build_weekday_work_overrides(conn, apartment_ids, apartment_housing_map)
+        apt_overrides, ha_defaults = _fetch_weekday_overrides(conn)
+        weekday_work_overrides = _build_weekday_work_overrides(
+            apartment_ids, apartment_housing_map, apt_overrides, ha_defaults
+        )
+        base_segs = segments_by_shift.get(WEEKDAY_SHIFT_TYPE_ID, [])
+        weekday_shift_overrides = _build_weekday_shift_overrides(
+            apartment_ids, apartment_housing_map, apt_overrides, ha_defaults, base_segs
+        )
 
     # Apply historical overrides to reports
     processed_reports = []
@@ -1271,33 +1366,6 @@ def get_daily_segments_data(
     # זיהוי רצפי ימי מחלה לחישוב אחוזי תשלום מדורגים
     sick_day_sequence = _identify_sick_day_sequences(reports)
 
-    # Fetch segments - use preloaded if available (bulk optimization)
-    shift_ids = {r["shift_type_id"] for r in reports if r["shift_type_id"]}
-    if preloaded_segments is not None:
-        # Use preloaded segments - filter to only needed shift_ids
-        segments_by_shift = {
-            sid: segs for sid, segs in preloaded_segments.items()
-            if sid in shift_ids
-        }
-    else:
-        shift_segments = []
-        if shift_ids:
-            placeholders = ",".join(["%s"] * len(shift_ids))
-            shift_segments = conn.execute(
-                f"""
-                SELECT seg.*, st.name AS shift_name
-                FROM shift_time_segments seg
-                JOIN shift_types st ON st.id = seg.shift_type_id
-                WHERE seg.shift_type_id IN ({placeholders})
-                ORDER BY seg.shift_type_id, seg.order_index, seg.id
-                """,
-                tuple(shift_ids),
-            ).fetchall()
-
-        segments_by_shift = {}
-        for seg in shift_segments:
-            segments_by_shift.setdefault(seg["shift_type_id"], []).append(seg)
-    
     # Build a map of (shift_type_id, housing_array_id) -> {"weekday": rate, "shabbat": rate}
     # This allows using custom rates for different housing arrays
     shift_rates = {}
@@ -1418,6 +1486,15 @@ def get_daily_segments_data(
 
         seg_list = segments_by_shift.get(r["shift_type_id"], [])
         has_predefined_segments = bool(seg_list)  # האם יש סגמנטים מוגדרים מראש למשמרת
+
+        # משמרת חול: החלפת seg_list לפי override של הדירה (work + standby)
+        shift_type_id = r.get("shift_type_id")
+        if shift_type_id == WEEKDAY_SHIFT_TYPE_ID:
+            apt_id = r.get("apartment_id")
+            if apt_id and apt_id in weekday_shift_overrides:
+                seg_list = weekday_shift_overrides[apt_id]
+                has_predefined_segments = True
+
         if not seg_list:
             # אין סגמנטים מוגדרים - יצירת סגמנט דינמי
             seg_list = [{
@@ -1434,7 +1511,6 @@ def get_daily_segments_data(
 
         # משמרות עם סגמנטים קבועים - משתמשים בסגמנטים המוגדרים ישירות (לא לפי שעות דיווח)
         # כולל: משמרות תגבור, יום חופשה, יום מחלה
-        shift_type_id = r.get("shift_type_id")
         is_fixed_segments_shift = is_tagbur_shift(shift_type_id) or is_vacation_report or is_sick_report
 
         # חופשה/מחלה: החלפת seg_list בסגמנטי עבודה לפי override של משמרת חול לדירה

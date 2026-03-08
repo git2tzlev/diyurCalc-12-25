@@ -2727,6 +2727,276 @@ class TestSickVacationEdgeCases2(unittest.TestCase):
         self.assertEqual(override_total - default_total, 60)  # הפרש שעה אחת
 
 
+class TestWeekdayShiftOverrides(unittest.TestCase):
+    """בדיקות החלפת סגמנטים למשמרת חול (103) לפי override של הדירה."""
+
+    BASE_SEGMENTS = [
+        {"start_time": "16:00", "end_time": "22:00", "segment_type": "work", "id": 4},
+        {"start_time": "22:00", "end_time": "06:30", "segment_type": "standby", "id": 5},
+        {"start_time": "06:30", "end_time": "08:00", "segment_type": "work", "id": 6},
+    ]
+
+    def test_override_segments_include_standby_with_original_id(self):
+        """סגמנטים עם override כוללים standby עם segment_id מקורי."""
+        from app_utils import _build_weekday_shift_overrides
+        apt_overrides = {11: ("15:00", "08:00")}
+        ha_defaults = {}
+        apartment_housing_map = {11: 1}
+        result = _build_weekday_shift_overrides(
+            {11}, apartment_housing_map, apt_overrides, ha_defaults, self.BASE_SEGMENTS
+        )
+        self.assertIn(11, result)
+        segs = result[11]
+        self.assertEqual(len(segs), 3)
+        # סגמנט כוננות שומר על segment_id מקורי
+        standby = segs[1]
+        self.assertEqual(standby["segment_type"], "standby")
+        self.assertEqual(standby["start_time"], "22:00")
+        self.assertEqual(standby["end_time"], "06:30")
+        self.assertEqual(standby["id"], 5)
+
+    def test_override_15_00_work_segments(self):
+        """דירה 11 (override 15:00-08:00): סגמנטי עבודה 15:00-22:00 ו-06:30-08:00."""
+        from app_utils import _build_weekday_shift_overrides
+        apt_overrides = {11: ("15:00", "08:00")}
+        ha_defaults = {}
+        result = _build_weekday_shift_overrides(
+            {11}, {11: 1}, apt_overrides, ha_defaults, self.BASE_SEGMENTS
+        )
+        segs = result[11]
+        # סגמנט עבודה ראשון: 15:00-22:00
+        self.assertEqual(segs[0]["start_time"], "15:00")
+        self.assertEqual(segs[0]["end_time"], "22:00")
+        self.assertEqual(segs[0]["segment_type"], "work")
+        # סגמנט עבודה שני: 06:30-08:00
+        self.assertEqual(segs[2]["start_time"], "06:30")
+        self.assertEqual(segs[2]["end_time"], "08:00")
+        self.assertEqual(segs[2]["segment_type"], "work")
+
+    def test_override_17_00_shorter_work(self):
+        """דירות 32,33,36 (override 17:00-08:30): סגמנט עבודה ראשון 17:00-22:00."""
+        from app_utils import _build_weekday_shift_overrides
+        apt_overrides = {32: ("17:00", "08:30")}
+        ha_defaults = {}
+        result = _build_weekday_shift_overrides(
+            {32}, {32: 2}, apt_overrides, ha_defaults, self.BASE_SEGMENTS
+        )
+        segs = result[32]
+        self.assertEqual(segs[0]["start_time"], "17:00")
+        self.assertEqual(segs[0]["end_time"], "22:00")
+        self.assertEqual(segs[2]["start_time"], "06:30")
+        self.assertEqual(segs[2]["end_time"], "08:30")
+
+    def test_no_override_uses_default_segments(self):
+        """דירה רגילה ללא override: לא מופיעה במפה."""
+        from app_utils import _build_weekday_shift_overrides
+        apt_overrides = {11: ("15:00", "08:00")}
+        ha_defaults = {}
+        apartment_housing_map = {99: 3}  # מערך ללא override
+        result = _build_weekday_shift_overrides(
+            {99}, apartment_housing_map, apt_overrides, ha_defaults, self.BASE_SEGMENTS
+        )
+        self.assertNotIn(99, result)
+
+    def test_housing_array_default_applies(self):
+        """דירה ללא override ספציפי מקבלת ברירת מחדל ממערך הדיור."""
+        from app_utils import _build_weekday_shift_overrides
+        apt_overrides = {}
+        ha_defaults = {1: ("16:00", "08:00")}
+        result = _build_weekday_shift_overrides(
+            {50}, {50: 1}, apt_overrides, ha_defaults, self.BASE_SEGMENTS
+        )
+        self.assertIn(50, result)
+        segs = result[50]
+        self.assertEqual(segs[0]["start_time"], "16:00")
+        self.assertEqual(segs[0]["end_time"], "22:00")
+
+    def test_apartment_override_beats_housing_array(self):
+        """override לדירה ספציפית גובר על ברירת מחדל של מערך."""
+        from app_utils import _resolve_override_for_apartment
+        apt_overrides = {11: ("15:00", "08:00")}
+        ha_defaults = {1: ("16:00", "08:00")}
+        result = _resolve_override_for_apartment(11, apt_overrides, ha_defaults, {11: 1})
+        self.assertEqual(result, ("15:00", "08:00"))
+
+    def test_no_standby_returns_empty(self):
+        """אם אין סגמנט כוננות בבסיס, מחזיר מפה ריקה."""
+        from app_utils import _build_weekday_shift_overrides
+        base_no_standby = [
+            {"start_time": "16:00", "end_time": "08:00", "segment_type": "work", "id": 4},
+        ]
+        apt_overrides = {11: ("15:00", "08:00")}
+        result = _build_weekday_shift_overrides(
+            {11}, {11: 1}, apt_overrides, {}, base_no_standby
+        )
+        self.assertEqual(result, {})
+
+
+class TestWeekdayShiftOverrideEdgeCases(unittest.TestCase):
+    """10 מקרי קצה על הלוגיקה החדשה של החלפת סגמנטים למשמרת חול."""
+
+    # סגמנטים מקוריים כמו ב-DB (shift 103)
+    BASE_SEGMENTS = [
+        {"start_time": "16:00", "end_time": "22:00", "segment_type": "work", "id": 23},
+        {"start_time": "22:00", "end_time": "06:30", "segment_type": "standby", "id": 2},
+        {"start_time": "06:30", "end_time": "08:00", "segment_type": "work", "id": 3},
+    ]
+
+    # Overrides כמו ב-DB האמיתי
+    APT_OVERRIDES = {
+        10: ("15:00", "08:00"),
+        11: ("15:00", "08:00"),
+        17: ("15:00", "08:00"),
+        20: ("15:00", "08:00"),
+        21: ("15:20", "08:00"),
+        25: ("15:00", "08:00"),
+        32: ("17:00", "08:30"),
+        33: ("17:00", "08:30"),
+        35: ("16:30", "09:00"),
+        36: ("17:00", "08:30"),
+    }
+    HA_DEFAULTS = {
+        1: ("16:00", "08:00"),
+        2: ("16:30", "08:30"),
+    }
+
+    def _seg_work_minutes(self, segs: list[dict]) -> int:
+        """סכום דקות עבודה (work בלבד, ללא standby) מרשימת סגמנטים."""
+        from core.time_utils import span_minutes
+        total = 0
+        for s in segs:
+            if s["segment_type"] == "work":
+                start, end = span_minutes(s["start_time"], s["end_time"])
+                total += end - start
+        return total
+
+    def _seg_standby_minutes(self, segs: list[dict]) -> int:
+        """סכום דקות כוננות מרשימת סגמנטים."""
+        from core.time_utils import span_minutes
+        total = 0
+        for s in segs:
+            if s["segment_type"] == "standby":
+                start, end = span_minutes(s["start_time"], s["end_time"])
+                total += end - start
+        return total
+
+    def test_edge1_non_round_override_start_15_20(self):
+        """מקרה קצה 1: דירה 21 עם override 15:20-08:00 — סגמנט עבודה ראשון 15:20-22:00."""
+        from app_utils import _build_weekday_shift_overrides
+        result = _build_weekday_shift_overrides(
+            {21}, {21: 1}, self.APT_OVERRIDES, self.HA_DEFAULTS, self.BASE_SEGMENTS
+        )
+        segs = result[21]
+        self.assertEqual(segs[0]["start_time"], "15:20")
+        self.assertEqual(segs[0]["end_time"], "22:00")
+        self.assertEqual(segs[0]["segment_type"], "work")
+
+    def test_edge2_override_end_past_0800_apartment_35(self):
+        """מקרה קצה 2: דירה 35 עם override 16:30-09:00 — סגמנט עבודה שני 06:30-09:00."""
+        from app_utils import _build_weekday_shift_overrides
+        result = _build_weekday_shift_overrides(
+            {35}, {35: 2}, self.APT_OVERRIDES, self.HA_DEFAULTS, self.BASE_SEGMENTS
+        )
+        segs = result[35]
+        self.assertEqual(segs[2]["start_time"], "06:30")
+        self.assertEqual(segs[2]["end_time"], "09:00")
+        self.assertEqual(segs[2]["segment_type"], "work")
+
+    def test_edge3_work_minutes_override_15_00_is_510(self):
+        """מקרה קצה 3: override 15:00-08:00 = 510 דקות עבודה (8.5h)."""
+        from app_utils import _build_weekday_shift_overrides
+        result = _build_weekday_shift_overrides(
+            {11}, {11: 1}, self.APT_OVERRIDES, self.HA_DEFAULTS, self.BASE_SEGMENTS
+        )
+        self.assertEqual(self._seg_work_minutes(result[11]), 510)
+
+    def test_edge4_work_minutes_override_17_00_is_420(self):
+        """מקרה קצה 4: override 17:00-08:30 = 420 דקות עבודה (7h)."""
+        from app_utils import _build_weekday_shift_overrides
+        result = _build_weekday_shift_overrides(
+            {32}, {32: 2}, self.APT_OVERRIDES, self.HA_DEFAULTS, self.BASE_SEGMENTS
+        )
+        self.assertEqual(self._seg_work_minutes(result[32]), 420)
+
+    def test_edge5_work_minutes_override_16_30_09_00_is_480(self):
+        """מקרה קצה 5: override 16:30-09:00 = 480 דקות עבודה (8h)."""
+        from app_utils import _build_weekday_shift_overrides
+        result = _build_weekday_shift_overrides(
+            {35}, {35: 2}, self.APT_OVERRIDES, self.HA_DEFAULTS, self.BASE_SEGMENTS
+        )
+        self.assertEqual(self._seg_work_minutes(result[35]), 480)
+
+    def test_edge6_standby_always_510_regardless_of_override(self):
+        """מקרה קצה 6: כוננות תמיד 510 דקות (22:00-06:30) ללא קשר ל-override."""
+        from app_utils import _build_weekday_shift_overrides
+        all_apts = {10, 11, 21, 32, 35}
+        housing_map = {10: 1, 11: 1, 21: 1, 32: 2, 35: 2}
+        result = _build_weekday_shift_overrides(
+            all_apts, housing_map, self.APT_OVERRIDES, self.HA_DEFAULTS, self.BASE_SEGMENTS
+        )
+        for apt_id in all_apts:
+            self.assertEqual(
+                self._seg_standby_minutes(result[apt_id]), 510,
+                f"Standby not 510 for apt {apt_id}"
+            )
+
+    def test_edge7_multiple_apartments_each_gets_own_override(self):
+        """מקרה קצה 7: מספר דירות - כל אחת מקבלת override שונה."""
+        from app_utils import _build_weekday_shift_overrides
+        apts = {11, 32, 35}
+        housing_map = {11: 1, 32: 2, 35: 2}
+        result = _build_weekday_shift_overrides(
+            apts, housing_map, self.APT_OVERRIDES, self.HA_DEFAULTS, self.BASE_SEGMENTS
+        )
+        # דירה 11: 15:00-22:00
+        self.assertEqual(result[11][0]["start_time"], "15:00")
+        # דירה 32: 17:00-22:00
+        self.assertEqual(result[32][0]["start_time"], "17:00")
+        # דירה 35: 16:30-22:00
+        self.assertEqual(result[35][0]["start_time"], "16:30")
+
+    def test_edge8_ha_default_same_as_base_segments(self):
+        """מקרה קצה 8: HA default 16:00-08:00 = זהה לסגמנטים מקוריים, אך עדיין נוצרים סגמנטים."""
+        from app_utils import _build_weekday_shift_overrides
+        # דירה 99 שייכת למערך 1, אין לה override ספציפי, HA default = 16:00-08:00
+        result = _build_weekday_shift_overrides(
+            {99}, {99: 1}, {}, self.HA_DEFAULTS, self.BASE_SEGMENTS
+        )
+        segs = result[99]
+        # סגמנטים זהים לברירת מחדל — אין שינוי בפועל
+        self.assertEqual(segs[0]["start_time"], "16:00")
+        self.assertEqual(segs[0]["end_time"], "22:00")
+        self.assertEqual(segs[2]["start_time"], "06:30")
+        self.assertEqual(segs[2]["end_time"], "08:00")
+        self.assertEqual(self._seg_work_minutes(segs), 450)  # 7.5h כמו default
+
+    def test_edge9_apt_specific_overrides_ha_default_in_same_array(self):
+        """מקרה קצה 9: דירה 32 (override 17:00-08:30) ודירה ללא override במערך 2 (HA 16:30-08:30)."""
+        from app_utils import _build_weekday_shift_overrides
+        # דירה 32 = ספציפי, דירה 40 = HA default
+        apts = {32, 40}
+        housing_map = {32: 2, 40: 2}
+        result = _build_weekday_shift_overrides(
+            apts, housing_map, self.APT_OVERRIDES, self.HA_DEFAULTS, self.BASE_SEGMENTS
+        )
+        # דירה 32: ספציפי 17:00
+        self.assertEqual(result[32][0]["start_time"], "17:00")
+        self.assertEqual(result[32][2]["end_time"], "08:30")
+        # דירה 40: HA default 16:30
+        self.assertEqual(result[40][0]["start_time"], "16:30")
+        self.assertEqual(result[40][2]["end_time"], "08:30")
+
+    def test_edge10_apt_in_ha_without_override_not_in_result(self):
+        """מקרה קצה 10: דירה במערך ללא override כלל — לא מופיעה בתוצאה."""
+        from app_utils import _build_weekday_shift_overrides
+        # מערך 5 לא קיים ב-HA_DEFAULTS
+        result = _build_weekday_shift_overrides(
+            {100}, {100: 5}, self.APT_OVERRIDES, self.HA_DEFAULTS, self.BASE_SEGMENTS
+        )
+        self.assertNotIn(100, result)
+        self.assertEqual(result, {})
+
+
 if __name__ == "__main__":
     import argparse
 
