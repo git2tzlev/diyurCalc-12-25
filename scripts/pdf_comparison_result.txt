@@ -1,0 +1,52 @@
+=== PDF vs System comparison 11/2025 ===
+Matched: 74 / 87
+
+Discrepancies in 13 guides:
+
+--- איתן אילה (emp=7293, page=10) ---
+  363 (variable): PDF=0.00 SYS=1.00 diff=+1.00
+
+--- ברהמי רחל (emp=4515, page=22) ---
+  363 (variable): PDF=0.00 SYS=1.00 diff=+1.00
+
+--- גרמין חננאל (emp=9091, page=28) ---
+  360 (calc100): PDF=0.00 SYS=3.50 diff=+3.50
+  370 (travel): PDF=0.00 SYS=16.00 diff=+16.00
+
+--- דהן חנינא (emp=9098, page=29) ---
+  360 (calc100): PDF=0.00 SYS=30.00 diff=+30.00
+  370 (travel): PDF=0.00 SYS=64.00 diff=+64.00
+
+--- הימל גדליהו (emp=10717, page=35) ---
+  363 (variable): PDF=0.00 SYS=1.00 diff=+1.00
+  370 (travel): PDF=0.00 SYS=48.00 diff=+48.00
+
+--- טל טליקר יהודה (emp=7331, page=45) ---
+  360 (calc100): PDF=110.68 SYS=111.35 diff=+0.67
+  363 (variable): PDF=1.00 SYS=0.00 diff=-1.00
+
+--- מדר עובדיה יוסף (emp=1734, page=58) ---
+  360 (calc100): PDF=2.25 SYS=0.00 diff=-2.25
+  363 (variable): PDF=0.00 SYS=1.00 diff=+1.00
+
+--- מזרחי אביחי (emp=5924, page=59) ---
+  360 (calc100): PDF=106.67 SYS=111.17 diff=+4.50
+  363 (variable): PDF=1.00 SYS=0.00 diff=-1.00
+
+--- משעלי אהרן (emp=6746, page=64) ---
+  434 (calc200): PDF=0.00 SYS=25.13 diff=+25.13
+
+--- פרץ חנה (emp=4569, page=71) ---
+  366 (calc125): PDF=0.00 SYS=0.52 diff=+0.52
+
+--- קרמר ריבה (emp=9027, page=79) ---
+  373 (standby): PDF=287.50 SYS=505.00 diff=+217.50
+
+--- שטראוס טובה (emp=7377, page=82) ---
+  373 (standby): PDF=173.00 SYS=2249.00 diff=+2076.00
+
+--- שליח צבור לשם (emp=3893, page=84) ---
+  373 (standby): PDF=80.71 SYS=490.00 diff=+409.29
+
+
+Clean: 61/74

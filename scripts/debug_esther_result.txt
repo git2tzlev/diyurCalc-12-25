@@ -1,0 +1,132 @@
+=== סוגי דירות ותוספות ===
+  ID=1: רגילה | תוספת=0 אגורות
+  ID=2: טיפולית | תוספת=0 אגורות
+  ID=3: בראשית | תוספת=0 אגורות
+  ID=4: ניצנים | תוספת=0 אגורות
+  ID=5: כלניות | תוספת=0 אגורות
+  ID=6: תפקוד גבוה | תוספת=0 אגורות
+  ID=7: תפקוד נמוך | תוספת=300 אגורות *** 
+
+
+=== חיפוש אסיאט/אסתר ===
+
+  שם: אטיאס אסתר (ID=83, נשוי=False)
+  דיווחים 11/2025: 39
+    2025-11-01 | 08:00-19:41 | משמרת: תגבור שבת / חג (ID=109) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-02 | 15:00-16:00 | משמרת: שעת עבודה (ID=138) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-02 | 16:00-08:00 | משמרת: משמרת חול (ID=103) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-03 | 15:00-16:00 | משמרת: שעת עבודה (ID=138) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-03 | 16:00-08:00 | משמרת: משמרת חול (ID=103) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-04 | 15:00-16:00 | משמרת: שעת עבודה (ID=138) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-04 | 16:00-08:00 | משמרת: משמרת חול (ID=103) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-05 | 15:00-16:00 | משמרת: שעת עבודה (ID=138) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-05 | 16:00-08:00 | משמרת: משמרת חול (ID=103) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-07 | 15:27-08:00 | משמרת: תגבור שישי /ערב חג (ID=108) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-08 | 08:00-19:35 | משמרת: תגבור שבת / חג (ID=109) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-10 | 13:45-15:00 | משמרת: שעת עבודה (ID=138) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-10 | 19:00-08:00 | משמרת: משמרת חול (ID=103) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-12 | 17:15-18:15 | משמרת: שעת עבודה (ID=138) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-16 | 15:00-21:30 | משמרת: שעת עבודה (ID=138) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-19 | 15:00-16:00 | משמרת: שעת עבודה (ID=138) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-19 | 16:00-08:00 | משמרת: משמרת חול (ID=103) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-20 | 15:00-16:00 | משמרת: שעת עבודה (ID=138) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-20 | 16:00-08:00 | משמרת: משמרת חול (ID=103) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-21 | 08:00-12:00 | משמרת: שעת עבודה (ID=138) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-21 | 12:00-08:00 | משמרת: משמרת שישי/ערב חג (ID=105) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-22 | 08:00-08:00 | משמרת: משמרת שבת/חג (ID=106) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-23 | 17:00-08:00 | משמרת: משמרת חול (ID=103) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-23 | 22:00-03:00 | משמרת: שעת עבודה (ID=138) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-24 | 08:00-16:00 | משמרת: שעת עבודה (ID=138) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-24 | 16:00-08:00 | משמרת: משמרת חול (ID=103) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-25 | 08:00-16:00 | משמרת: שעת עבודה (ID=138) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-25 | 16:00-08:00 | משמרת: משמרת חול (ID=103) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-26 | 08:00-16:00 | משמרת: שעת עבודה (ID=138) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-26 | 16:00-08:00 | משמרת: משמרת חול (ID=103) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-26 | 22:00-01:00 | משמרת: שעת עבודה (ID=138) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-27 | 03:00-06:30 | משמרת: שעת עבודה (ID=138) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-27 | 08:00-16:00 | משמרת: שעת עבודה (ID=138) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-27 | 16:00-08:00 | משמרת: משמרת חול (ID=103) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-28 | 08:00-12:00 | משמרת: שעת עבודה (ID=138) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-28 | 12:00-08:00 | משמרת: משמרת שישי/ערב חג (ID=105) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-29 | 08:00-08:00 | משמרת: משמרת שבת/חג (ID=106) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-30 | 15:00-16:00 | משמרת: שעת עבודה (ID=138) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-30 | 16:00-08:00 | משמרת: משמרת חול (ID=103) | דירה: יהלום (סוג=רגילה, תוספת=0, מערך=1)
+
+  סוגי דירות ייחודיים:
+    דירה יהלום | סוג: רגילה | תוספת: 0
+
+  שם: טרופ אסתר מלכה (ID=53, נשוי=False)
+  דיווחים 11/2025: 0
+
+  סוגי דירות ייחודיים:
+
+  שם: ינוקא אסתר חיה (ID=154, נשוי=False)
+  דיווחים 11/2025: 0
+
+  סוגי דירות ייחודיים:
+
+  שם: כהן אסתר (ID=55, נשוי=True)
+  דיווחים 11/2025: 0
+
+  סוגי דירות ייחודיים:
+
+  שם: פישמן אסתר (ID=64, נשוי=True)
+  דיווחים 11/2025: 0
+
+  סוגי דירות ייחודיים:
+
+  שם: צפניה אסתר (ID=296, נשוי=False)
+  דיווחים 11/2025: 0
+
+  סוגי דירות ייחודיים:
+
+  שם: שפיגל אסתר מרים (ID=223, נשוי=False)
+  דיווחים 11/2025: 20
+    2025-11-01 | 08:00-08:00 | משמרת: משמרת שבת/חג (ID=106) | דירה: סביונים (סוג=None, תוספת=0, מערך=1)
+    2025-11-03 | 20:00-08:00 | משמרת: משמרת לילה (ID=107) | דירה: סביונים (סוג=None, תוספת=0, מערך=1)
+    2025-11-05 | 15:30-16:00 | משמרת: שעת עבודה (ID=138) | דירה: סביונים (סוג=None, תוספת=0, מערך=1)
+    2025-11-05 | 16:00-08:00 | משמרת: משמרת חול (ID=103) | דירה: סביונים (סוג=None, תוספת=0, מערך=1)
+    2025-11-06 | 16:00-08:00 | משמרת: משמרת חול (ID=103) | דירה: סביונים (סוג=None, תוספת=0, מערך=1)
+    2025-11-07 | 08:00-10:00 | משמרת: שעת עבודה (ID=138) | דירה: סביונים (סוג=None, תוספת=0, מערך=1)
+    2025-11-12 | 16:00-08:00 | משמרת: משמרת חול (ID=103) | דירה: סביונים (סוג=None, תוספת=0, מערך=1)
+    2025-11-13 | 16:00-21:20 | משמרת: שעת עבודה (ID=138) | דירה: סביונים (סוג=None, תוספת=0, מערך=1)
+    2025-11-16 | 17:00-08:00 | משמרת: משמרת חול (ID=103) | דירה: סביונים (סוג=None, תוספת=0, מערך=1)
+    2025-11-17 | 19:00-08:00 | משמרת: משמרת חול (ID=103) | דירה: סביונים (סוג=None, תוספת=0, מערך=1)
+    2025-11-20 | 20:00-08:00 | משמרת: משמרת לילה (ID=107) | דירה: סביונים (סוג=None, תוספת=0, מערך=1)
+    2025-11-21 | 08:00-09:30 | משמרת: שעת עבודה (ID=138) | דירה: סביונים (סוג=None, תוספת=0, מערך=1)
+    2025-11-21 | 12:00-08:00 | משמרת: משמרת שישי/ערב חג (ID=105) | דירה: סביונים (סוג=None, תוספת=0, מערך=1)
+    2025-11-22 | 08:00-08:00 | משמרת: משמרת שבת/חג (ID=106) | דירה: סביונים (סוג=None, תוספת=0, מערך=1)
+    2025-11-23 | 16:00-08:00 | משמרת: משמרת חול (ID=103) | דירה: סביונים (סוג=None, תוספת=0, מערך=1)
+    2025-11-24 | 20:00-08:00 | משמרת: משמרת לילה (ID=107) | דירה: סביונים (סוג=None, תוספת=0, מערך=1)
+    2025-11-25 | 16:00-08:00 | משמרת: משמרת חול (ID=103) | דירה: סביונים (סוג=None, תוספת=0, מערך=1)
+    2025-11-26 | 15:30-17:30 | משמרת: שעת עבודה (ID=138) | דירה: סביונים (סוג=None, תוספת=0, מערך=1)
+    2025-11-30 | 08:00-12:00 | משמרת: שעת עבודה (ID=138) | דירה: השלמות (סוג=רגילה, תוספת=0, מערך=1)
+    2025-11-30 | 17:00-08:00 | משמרת: משמרת חול (ID=103) | דירה: סביונים (סוג=None, תוספת=0, מערך=1)
+
+  סוגי דירות ייחודיים:
+    דירה סביונים | סוג: None | תוספת: 0
+    דירה השלמות | סוג: רגילה | תוספת: 0
+
+
+=== תעריפי מערכי דיור - עמודות: ['id', 'shift_type_id', 'housing_array_id', 'is_active', 'created_at', 'updated_at', 'weekday_single_rate', 'weekday_single_wage_percentage', 'weekday_married_rate', 'weekday_married_wage_percentage', 'shabbat_rate', 'shabbat_wage_percentage'] ===
+  {'id': 1, 'shift_type_id': 103, 'housing_array_id': 1, 'is_active': True, 'created_at': datetime.datetime(2026, 1, 27, 7, 8, 34, 31392), 'updated_at': datetime.datetime(2026, 1, 27, 9, 25, 45, 758000), 'weekday_single_rate': None, 'weekday_single_wage_percentage': None, 'weekday_married_rate': None, 'weekday_married_wage_percentage': None, 'shabbat_rate': None, 'shabbat_wage_percentage': None}
+  {'id': 2, 'shift_type_id': 103, 'housing_array_id': 2, 'is_active': True, 'created_at': datetime.datetime(2026, 1, 27, 7, 8, 34, 44087), 'updated_at': datetime.datetime(2026, 1, 27, 9, 25, 45, 783000), 'weekday_single_rate': None, 'weekday_single_wage_percentage': None, 'weekday_married_rate': None, 'weekday_married_wage_percentage': None, 'shabbat_rate': None, 'shabbat_wage_percentage': None}
+  {'id': 3, 'shift_type_id': 105, 'housing_array_id': 1, 'is_active': True, 'created_at': datetime.datetime(2026, 1, 27, 7, 8, 34, 55929), 'updated_at': datetime.datetime(2026, 1, 27, 7, 8, 34, 55929), 'weekday_single_rate': None, 'weekday_single_wage_percentage': None, 'weekday_married_rate': None, 'weekday_married_wage_percentage': None, 'shabbat_rate': None, 'shabbat_wage_percentage': None}
+  {'id': 4, 'shift_type_id': 105, 'housing_array_id': 2, 'is_active': True, 'created_at': datetime.datetime(2026, 1, 27, 7, 8, 34, 67411), 'updated_at': datetime.datetime(2026, 1, 27, 7, 8, 34, 67411), 'weekday_single_rate': None, 'weekday_single_wage_percentage': None, 'weekday_married_rate': None, 'weekday_married_wage_percentage': None, 'shabbat_rate': None, 'shabbat_wage_percentage': None}
+  {'id': 5, 'shift_type_id': 106, 'housing_array_id': 1, 'is_active': True, 'created_at': datetime.datetime(2026, 1, 27, 7, 8, 34, 77233), 'updated_at': datetime.datetime(2026, 1, 27, 7, 8, 34, 77233), 'weekday_single_rate': None, 'weekday_single_wage_percentage': None, 'weekday_married_rate': None, 'weekday_married_wage_percentage': None, 'shabbat_rate': None, 'shabbat_wage_percentage': None}
+  {'id': 6, 'shift_type_id': 106, 'housing_array_id': 2, 'is_active': True, 'created_at': datetime.datetime(2026, 1, 27, 7, 8, 34, 86520), 'updated_at': datetime.datetime(2026, 1, 27, 7, 8, 34, 86520), 'weekday_single_rate': None, 'weekday_single_wage_percentage': None, 'weekday_married_rate': None, 'weekday_married_wage_percentage': None, 'shabbat_rate': None, 'shabbat_wage_percentage': None}
+  {'id': 7, 'shift_type_id': 107, 'housing_array_id': 1, 'is_active': True, 'created_at': datetime.datetime(2026, 1, 27, 7, 8, 34, 95421), 'updated_at': datetime.datetime(2026, 1, 27, 7, 8, 34, 95421), 'weekday_single_rate': None, 'weekday_single_wage_percentage': None, 'weekday_married_rate': None, 'weekday_married_wage_percentage': None, 'shabbat_rate': None, 'shabbat_wage_percentage': None}
+  {'id': 9, 'shift_type_id': 108, 'housing_array_id': 1, 'is_active': True, 'created_at': datetime.datetime(2026, 1, 27, 7, 8, 34, 116190), 'updated_at': datetime.datetime(2026, 1, 27, 8, 12, 40, 499000), 'weekday_single_rate': None, 'weekday_single_wage_percentage': 100.0, 'weekday_married_rate': None, 'weekday_married_wage_percentage': 100.0, 'shabbat_rate': None, 'shabbat_wage_percentage': None}
+  {'id': 11, 'shift_type_id': 109, 'housing_array_id': 1, 'is_active': True, 'created_at': datetime.datetime(2026, 1, 27, 7, 8, 34, 136148), 'updated_at': datetime.datetime(2026, 1, 27, 8, 12, 6, 710000), 'weekday_single_rate': None, 'weekday_single_wage_percentage': 100.0, 'weekday_married_rate': None, 'weekday_married_wage_percentage': 100.0, 'shabbat_rate': None, 'shabbat_wage_percentage': None}
+  {'id': 13, 'shift_type_id': 120, 'housing_array_id': 1, 'is_active': True, 'created_at': datetime.datetime(2026, 1, 27, 7, 8, 34, 155676), 'updated_at': datetime.datetime(2026, 1, 27, 7, 57, 58, 430000), 'weekday_single_rate': 4200, 'weekday_single_wage_percentage': None, 'weekday_married_rate': 4200, 'weekday_married_wage_percentage': None, 'shabbat_rate': None, 'shabbat_wage_percentage': None}
+  {'id': 15, 'shift_type_id': 138, 'housing_array_id': 1, 'is_active': True, 'created_at': datetime.datetime(2026, 1, 27, 7, 8, 34, 176900), 'updated_at': datetime.datetime(2026, 2, 8, 8, 39, 33, 940000), 'weekday_single_rate': None, 'weekday_single_wage_percentage': None, 'weekday_married_rate': 4000, 'weekday_married_wage_percentage': None, 'shabbat_rate': None, 'shabbat_wage_percentage': None}
+  {'id': 16, 'shift_type_id': 138, 'housing_array_id': 2, 'is_active': True, 'created_at': datetime.datetime(2026, 1, 27, 7, 8, 34, 187302), 'updated_at': datetime.datetime(2026, 2, 8, 8, 39, 33, 966000), 'weekday_single_rate': None, 'weekday_single_wage_percentage': None, 'weekday_married_rate': 4000, 'weekday_married_wage_percentage': None, 'shabbat_rate': None, 'shabbat_wage_percentage': None}
+  {'id': 17, 'shift_type_id': 143, 'housing_array_id': 1, 'is_active': True, 'created_at': datetime.datetime(2026, 1, 27, 7, 8, 34, 201091), 'updated_at': datetime.datetime(2026, 1, 27, 9, 27, 1, 505000), 'weekday_single_rate': None, 'weekday_single_wage_percentage': None, 'weekday_married_rate': None, 'weekday_married_wage_percentage': None, 'shabbat_rate': None, 'shabbat_wage_percentage': None}
+  {'id': 18, 'shift_type_id': 143, 'housing_array_id': 2, 'is_active': True, 'created_at': datetime.datetime(2026, 1, 27, 7, 8, 34, 211084), 'updated_at': datetime.datetime(2026, 1, 27, 9, 27, 1, 521000), 'weekday_single_rate': None, 'weekday_single_wage_percentage': None, 'weekday_married_rate': None, 'weekday_married_wage_percentage': None, 'shabbat_rate': None, 'shabbat_wage_percentage': None}
+  {'id': 19, 'shift_type_id': 146, 'housing_array_id': 1, 'is_active': True, 'created_at': datetime.datetime(2026, 1, 27, 7, 8, 34, 234042), 'updated_at': datetime.datetime(2026, 1, 27, 9, 26, 53, 517000), 'weekday_single_rate': None, 'weekday_single_wage_percentage': None, 'weekday_married_rate': None, 'weekday_married_wage_percentage': None, 'shabbat_rate': None, 'shabbat_wage_percentage': None}
+  {'id': 20, 'shift_type_id': 146, 'housing_array_id': 2, 'is_active': True, 'created_at': datetime.datetime(2026, 1, 27, 7, 8, 34, 244458), 'updated_at': datetime.datetime(2026, 1, 27, 9, 26, 53, 545000), 'weekday_single_rate': None, 'weekday_single_wage_percentage': None, 'weekday_married_rate': None, 'weekday_married_wage_percentage': None, 'shabbat_rate': None, 'shabbat_wage_percentage': None}
+  {'id': 21, 'shift_type_id': 147, 'housing_array_id': 1, 'is_active': True, 'created_at': datetime.datetime(2026, 1, 27, 7, 8, 34, 254679), 'updated_at': datetime.datetime(2026, 1, 27, 12, 5, 43, 640000), 'weekday_single_rate': 5000, 'weekday_single_wage_percentage': None, 'weekday_married_rate': 5000, 'weekday_married_wage_percentage': None, 'shabbat_rate': 5000, 'shabbat_wage_percentage': None}
+  {'id': 22, 'shift_type_id': 147, 'housing_array_id': 2, 'is_active': True, 'created_at': datetime.datetime(2026, 1, 27, 7, 8, 34, 264637), 'updated_at': datetime.datetime(2026, 1, 27, 12, 5, 43, 617000), 'weekday_single_rate': 5500, 'weekday_single_wage_percentage': None, 'weekday_married_rate': 5500, 'weekday_married_wage_percentage': None, 'shabbat_rate': 5500, 'shabbat_wage_percentage': None}
+  {'id': 23, 'shift_type_id': 148, 'housing_array_id': 1, 'is_active': True, 'created_at': datetime.datetime(2026, 1, 27, 7, 8, 34, 274494), 'updated_at': datetime.datetime(2026, 1, 27, 9, 27, 10, 89000), 'weekday_single_rate': None, 'weekday_single_wage_percentage': None, 'weekday_married_rate': None, 'weekday_married_wage_percentage': None, 'shabbat_rate': None, 'shabbat_wage_percentage': None}
+  {'id': 24, 'shift_type_id': 148, 'housing_array_id': 2, 'is_active': True, 'created_at': datetime.datetime(2026, 1, 27, 7, 8, 34, 285452), 'updated_at': datetime.datetime(2026, 1, 27, 9, 27, 10, 101000), 'weekday_single_rate': None, 'weekday_single_wage_percentage': None, 'weekday_married_rate': None, 'weekday_married_wage_percentage': None, 'shabbat_rate': None, 'shabbat_wage_percentage': None}
+  {'id': 25, 'shift_type_id': 149, 'housing_array_id': 1, 'is_active': True, 'created_at': datetime.datetime(2026, 1, 27, 7, 8, 34, 295181), 'updated_at': datetime.datetime(2026, 1, 27, 11, 53, 3, 534000), 'weekday_single_rate': 4000, 'weekday_single_wage_percentage': None, 'weekday_married_rate': 4000, 'weekday_married_wage_percentage': None, 'shabbat_rate': 4000, 'shabbat_wage_percentage': None}

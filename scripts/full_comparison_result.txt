@@ -1,0 +1,3 @@
+=== Full comparison: old (>60) vs new (>=60) for ALL guides 11/2025 ===
+
+No differences found.

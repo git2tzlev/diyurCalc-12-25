@@ -79,6 +79,7 @@
           <input type="email" class="guide-email-input" value="{{ g.email }}" placeholder="הזן מייל" style="width: 100%; padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px;">
         </td>
         <td>
+          <a href="/guide/{{ g.id }}/shifts/preview?month={{ selected_month }}&year={{ selected_year }}" target="_blank" class="preview-btn" style="padding: 4px 10px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; text-decoration: none; display: inline-block;">צפה</a>
           <button class="send-btn" onclick="sendGuideEmail({{ g.id }}, this)" style="padding: 4px 12px; background: #1f6feb; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">
             📧 שלח
           </button>

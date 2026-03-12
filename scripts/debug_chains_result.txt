@@ -1,0 +1,408 @@
+=== Per-Chain Breakdown: אטיאס אסתר 11/2025 ===
+
+
+--- None ---
+  Chain #1: 10:00-16:00 (360min, offset=0)
+    apartment=?, shift=תגבור שבת / חג
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=0min (0.00h), 150%=360min (6.00h)
+  Chain #2: 17:00-17:41 (41min, offset=0)
+    apartment=?, shift=תגבור שבת / חג
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=0min (0.00h), 150%=41min (0.68h)
+  Chain #3: 17:41-19:41 (120min, offset=0)
+    apartment=?, shift=תגבור שבת / חג
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=120min (2.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+
+--- None ---
+  Chain #4: 15:00-16:00 (60min, offset=0)
+    apartment=?, shift=שעת עבודה
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=60min (1.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+  Chain #5: 16:00-22:00 (360min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=360min (6.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+  Chain #6: 06:30-08:00 (90min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=90min (1.50h), 125%=0min (0.00h), 150%=0min (0.00h)
+
+--- None ---
+  Chain #7: 15:00-16:00 (60min, offset=0)
+    apartment=?, shift=שעת עבודה
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=60min (1.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+  Chain #8: 16:00-22:00 (360min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=360min (6.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+  Chain #9: 06:30-08:00 (90min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=90min (1.50h), 125%=0min (0.00h), 150%=0min (0.00h)
+
+--- None ---
+  Chain #10: 15:00-16:00 (60min, offset=0)
+    apartment=?, shift=שעת עבודה
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=60min (1.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+  Chain #11: 16:00-22:00 (360min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=360min (6.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+  Chain #12: 06:30-08:00 (90min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=90min (1.50h), 125%=0min (0.00h), 150%=0min (0.00h)
+
+--- None ---
+  Chain #13: 15:00-16:00 (60min, offset=0)
+    apartment=?, shift=שעת עבודה
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=60min (1.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+  Chain #14: 16:00-22:00 (360min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=360min (6.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+  Chain #15: 06:30-08:00 (90min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=90min (1.50h), 125%=0min (0.00h), 150%=0min (0.00h)
+
+--- None ---
+  Chain #16: 15:27-16:27 (60min, offset=0)
+    apartment=?, shift=תגבור שישי /ערב חג
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=60min (1.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+  Chain #17: 16:27-22:00 (333min, offset=0)
+    apartment=?, shift=תגבור שישי /ערב חג
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=0min (0.00h), 150%=333min (5.55h)
+
+--- None ---
+  Chain #18: 10:00-16:00 (360min, offset=0)
+    apartment=?, shift=תגבור שבת / חג
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=0min (0.00h), 150%=360min (6.00h)
+  Chain #19: 17:00-17:35 (35min, offset=0)
+    apartment=?, shift=תגבור שבת / חג
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=0min (0.00h), 150%=35min (0.58h)
+  Chain #20: 17:35-19:35 (120min, offset=0)
+    apartment=?, shift=תגבור שבת / חג
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=120min (2.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+
+--- None ---
+  Chain #21: 13:45-15:00 (75min, offset=0)
+    apartment=?, shift=שעת עבודה
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=75min (1.25h), 125%=0min (0.00h), 150%=0min (0.00h)
+  Chain #22: 19:00-22:00 (180min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=180min (3.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+  Chain #23: 06:30-08:00 (90min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=90min (1.50h), 125%=0min (0.00h), 150%=0min (0.00h)
+
+--- None ---
+  Chain #24: 17:15-18:15 (60min, offset=0)
+    apartment=?, shift=שעת עבודה
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=60min (1.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+
+--- None ---
+  Chain #25: 15:00-21:30 (390min, offset=0)
+    apartment=?, shift=שעת עבודה
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=390min (6.50h), 125%=0min (0.00h), 150%=0min (0.00h)
+
+--- None ---
+  Chain #26: 15:00-16:00 (60min, offset=0)
+    apartment=?, shift=שעת עבודה
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=60min (1.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+  Chain #27: 16:00-22:00 (360min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=360min (6.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+  Chain #28: 06:30-08:00 (90min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=90min (1.50h), 125%=0min (0.00h), 150%=0min (0.00h)
+
+--- None ---
+  Chain #29: 15:00-16:00 (60min, offset=0)
+    apartment=?, shift=שעת עבודה
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=60min (1.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+  Chain #30: 16:00-22:00 (360min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=360min (6.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+  Chain #31: 06:30-08:00 (90min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=90min (1.50h), 125%=0min (0.00h), 150%=0min (0.00h)
+
+--- None ---
+  Chain #32: 08:00-12:00 (240min, offset=0)
+    apartment=?, shift=שעת עבודה
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=240min (4.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+  Chain #33: 12:00-14:30 (150min, offset=0)
+    apartment=?, shift=משמרת שישי/ערב חג
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=150min (2.50h), 125%=0min (0.00h), 150%=0min (0.00h)
+  Chain #34: 14:30-16:20 (110min, offset=0)
+    apartment=?, shift=משמרת שישי/ערב חג
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=110min (1.83h), 150%=0min (0.00h)
+  Chain #35: 16:20-16:30 (10min, offset=0)
+    apartment=?, shift=משמרת שישי/ערב חג
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+    175%=10min, 200%=0min
+  Chain #36: 16:30-17:00 (30min, offset=0)
+    apartment=?, shift=משמרת שישי/ערב חג
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+    175%=0min, 200%=30min
+  Chain #37: 17:00-20:00 (180min, offset=0)
+    apartment=?, shift=משמרת שישי/ערב חג
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+    175%=0min, 200%=180min
+  Chain #38: 20:00-22:00 (120min, offset=0)
+    apartment=?, shift=משמרת שישי/ערב חג
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+    175%=0min, 200%=120min
+
+--- None ---
+  Chain #39: 08:00-16:00 (480min, offset=0)
+    apartment=?, shift=משמרת שבת/חג
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=0min (0.00h), 150%=480min (8.00h)
+  Chain #40: 16:00-17:28 (88min, offset=0)
+    apartment=?, shift=משמרת שבת/חג
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+    175%=88min, 200%=0min
+  Chain #41: 17:28-18:00 (32min, offset=0)
+    apartment=?, shift=משמרת שבת/חג
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=32min (0.53h), 150%=0min (0.00h)
+  Chain #42: 18:00-22:00 (240min, offset=0)
+    apartment=?, shift=משמרת שבת/חג
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=0min (0.00h), 150%=240min (4.00h)
+  Chain #43: 06:30-08:00 (90min, offset=0)
+    apartment=?, shift=משמרת שבת/חג
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=90min (1.50h), 125%=0min (0.00h), 150%=0min (0.00h)
+
+--- None ---
+  Chain #44: 17:00-22:00 (300min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=300min (5.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+  Chain #45: 22:00-00:00 (120min, offset=0)
+    apartment=?, shift=שעת עבודה
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=120min (2.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+  Chain #46: 00:00-02:00 (120min, offset=0)
+    apartment=?, shift=שעת עבודה
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=120min (2.00h), 150%=0min (0.00h)
+  Chain #47: 02:00-03:00 (60min, offset=0)
+    apartment=?, shift=שעת עבודה
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=0min (0.00h), 150%=60min (1.00h)
+  Chain #48: 06:30-08:00 (90min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=90min (1.50h), 125%=0min (0.00h), 150%=0min (0.00h)
+
+--- None ---
+  Chain #49: 08:00-14:30 (390min, offset=0)
+    apartment=?, shift=שעת עבודה
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=390min (6.50h), 125%=0min (0.00h), 150%=0min (0.00h)
+  Chain #50: 14:30-16:00 (90min, offset=0)
+    apartment=?, shift=שעת עבודה
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=90min (1.50h), 150%=0min (0.00h)
+  Chain #51: 16:00-16:30 (30min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=30min (0.50h), 150%=0min (0.00h)
+  Chain #52: 16:30-22:00 (330min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=0min (0.00h), 150%=330min (5.50h)
+  Chain #53: 06:30-08:00 (90min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=90min (1.50h), 125%=0min (0.00h), 150%=0min (0.00h)
+
+--- None ---
+  Chain #54: 08:00-14:30 (390min, offset=0)
+    apartment=?, shift=שעת עבודה
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=390min (6.50h), 125%=0min (0.00h), 150%=0min (0.00h)
+  Chain #55: 14:30-16:00 (90min, offset=0)
+    apartment=?, shift=שעת עבודה
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=90min (1.50h), 150%=0min (0.00h)
+  Chain #56: 16:00-16:30 (30min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=30min (0.50h), 150%=0min (0.00h)
+  Chain #57: 16:30-22:00 (330min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=0min (0.00h), 150%=330min (5.50h)
+  Chain #58: 06:30-08:00 (90min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=90min (1.50h), 125%=0min (0.00h), 150%=0min (0.00h)
+
+--- None ---
+  Chain #59: 08:00-13:30 (330min, offset=0)
+    apartment=?, shift=שעת עבודה
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=330min (5.50h), 125%=0min (0.00h), 150%=0min (0.00h)
+  Chain #60: 13:30-15:30 (120min, offset=0)
+    apartment=?, shift=שעת עבודה
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=120min (2.00h), 150%=0min (0.00h)
+  Chain #61: 15:30-16:00 (30min, offset=0)
+    apartment=?, shift=שעת עבודה
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=0min (0.00h), 150%=30min (0.50h)
+  Chain #62: 16:00-22:00 (360min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=0min (0.00h), 150%=360min (6.00h)
+  Chain #63: 22:00-00:00 (120min, offset=0)
+    apartment=?, shift=שעת עבודה
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=0min (0.00h), 150%=120min (2.00h)
+  Chain #64: 00:00-01:00 (60min, offset=0)
+    apartment=?, shift=שעת עבודה
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=0min (0.00h), 150%=60min (1.00h)
+  Chain #65: 06:30-08:00 (90min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=90min (1.50h), 125%=0min (0.00h), 150%=0min (0.00h)
+
+--- None ---
+  Chain #66: 08:00-14:30 (390min, offset=0)
+    apartment=?, shift=שעת עבודה
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=390min (6.50h), 125%=0min (0.00h), 150%=0min (0.00h)
+  Chain #67: 14:30-16:00 (90min, offset=0)
+    apartment=?, shift=שעת עבודה
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=90min (1.50h), 150%=0min (0.00h)
+  Chain #68: 16:00-16:30 (30min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=30min (0.50h), 150%=0min (0.00h)
+  Chain #69: 16:30-22:00 (330min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=0min (0.00h), 150%=330min (5.50h)
+  Chain #70: 03:00-06:30 (210min, offset=0)
+    apartment=?, shift=שעת עבודה
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=210min (3.50h), 125%=0min (0.00h), 150%=0min (0.00h)
+  Chain #71: 06:30-08:00 (90min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=90min (1.50h), 125%=0min (0.00h), 150%=0min (0.00h)
+
+--- None ---
+  Chain #72: 08:00-10:00 (120min, offset=0)
+    apartment=?, shift=שעת עבודה
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=120min (2.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+  Chain #73: 10:00-12:00 (120min, offset=0)
+    apartment=?, shift=שעת עבודה
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=120min (2.00h), 150%=0min (0.00h)
+  Chain #74: 12:00-16:18 (258min, offset=0)
+    apartment=?, shift=משמרת שישי/ערב חג
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=0min (0.00h), 150%=258min (4.30h)
+  Chain #75: 16:18-17:00 (42min, offset=0)
+    apartment=?, shift=משמרת שישי/ערב חג
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+    175%=0min, 200%=42min
+  Chain #76: 17:00-20:00 (180min, offset=0)
+    apartment=?, shift=משמרת שישי/ערב חג
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+    175%=0min, 200%=180min
+  Chain #77: 20:00-22:00 (120min, offset=0)
+    apartment=?, shift=משמרת שישי/ערב חג
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+    175%=0min, 200%=120min
+
+--- None ---
+  Chain #78: 08:00-16:00 (480min, offset=0)
+    apartment=?, shift=משמרת שבת/חג
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=0min (0.00h), 150%=480min (8.00h)
+  Chain #79: 16:00-17:26 (86min, offset=0)
+    apartment=?, shift=משמרת שבת/חג
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+    175%=86min, 200%=0min
+  Chain #80: 17:26-18:00 (34min, offset=0)
+    apartment=?, shift=משמרת שבת/חג
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=34min (0.57h), 150%=0min (0.00h)
+  Chain #81: 18:00-22:00 (240min, offset=0)
+    apartment=?, shift=משמרת שבת/חג
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=0min (0.00h), 125%=0min (0.00h), 150%=240min (4.00h)
+  Chain #82: 06:30-08:00 (90min, offset=0)
+    apartment=?, shift=משמרת שבת/חג
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=90min (1.50h), 125%=0min (0.00h), 150%=0min (0.00h)
+
+--- None ---
+  Chain #83: 15:00-16:00 (60min, offset=0)
+    apartment=?, shift=שעת עבודה
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=60min (1.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+  Chain #84: 16:00-22:00 (360min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=360min (6.00h), 125%=0min (0.00h), 150%=0min (0.00h)
+  Chain #85: 06:30-08:00 (90min, offset=0)
+    apartment=?, shift=משמרת חול
+    is_night=?, rate=34.4, supplement=0, special=False
+    100%=90min (1.50h), 125%=0min (0.00h), 150%=0min (0.00h)
+
+
+=== TOTALS ===
+  Total calc100: 7935min = 132.25h
+  Total calc125: 896min = 14.93h
+  Total calc150: 4447min = 74.12h
+  Total calc175: 184min = 3.07h
+  Total calc200: 672min = 11.20h
+
+  Payslip expected:
+    calc100: 130.98h = 7858.8min
+    calc125: 16.20h = 972.0min
+  Difference: 76.2min in calc100, -76.0min in calc125

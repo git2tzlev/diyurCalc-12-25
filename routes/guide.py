@@ -1117,7 +1117,7 @@ def shifts_report_pdf(
     )
 
 
-def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int) -> Optional[Dict]:
+def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_filter: Optional[int] = None) -> Optional[Dict]:
     """
     הכנת נתונים לדוח PDF של מדריך.
 
@@ -1126,6 +1126,7 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int) -> Optio
         person_id: מזהה המדריך
         year: שנה
         month: חודש
+        housing_filter: מזהה מערך דיור לסינון (None = ללא סינון)
 
     Returns:
         Dict עם כל הנתונים הנדרשים לתבנית guide_shifts_pdf.html, או None אם המדריך לא נמצא
@@ -1516,6 +1517,33 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int) -> Optio
         "variable_shifts": variable_shifts,
         "variable_rate_total": variable_rate_total,
     }
+
+
+def shifts_report_preview(
+    request: Request,
+    person_id: int,
+    month: Optional[int] = None,
+    year: Optional[int] = None
+) -> HTMLResponse:
+    """תצוגה מקדימה של הדוח שנשלח במייל - למנהל על בלבד."""
+    housing_filter = get_housing_array_filter()
+    _validate_guide_access(person_id, housing_filter)
+
+    if month is None or year is None:
+        now = datetime.now(config.LOCAL_TZ)
+        year, month = now.year, now.month
+
+    with get_conn() as conn:
+        pdf_data = prepare_guide_pdf_data(conn, person_id, year, month)
+
+    if not pdf_data:
+        raise HTTPException(status_code=404, detail="מדריך לא נמצא")
+
+    return templates.TemplateResponse("guide_shifts_pdf.html", {
+        "request": request,
+        "show_total_salary": True,
+        **pdf_data,
+    })
 
 
 def _generate_shifts_pdf(person_id: int, year: int, month: int, session_token: Optional[str] = None) -> Optional[bytes]:

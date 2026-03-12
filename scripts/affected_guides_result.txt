@@ -1,0 +1,6 @@
+=== Guides affected by break threshold change (11/2025) ===
+Change: gap > 60 → gap >= 60 (commit dc511af, 2026-02-22)
+
+No affected guides found.
+
+Total affected: 0 guides

@@ -33,7 +33,7 @@ from routes.home import home
 from routes.reports import reports_management
 from routes.guide import (
     simple_summary_view, guide_view, shifts_report_view,
-    shifts_report_pdf, shifts_report_email, chains_report_email
+    shifts_report_pdf, shifts_report_preview, shifts_report_email, chains_report_email
 )
 from routes.admin import (
     manage_payment_codes, update_payment_codes,
@@ -333,6 +333,12 @@ def simple_summary_route(request: Request, person_id: int, month: int | None = N
 def guide_route(request: Request, person_id: int, month: int | None = None, year: int | None = None):
     """Detailed guide view."""
     return guide_view(request, person_id, month, year)
+
+
+@app.get("/guide/{person_id}/shifts/preview", response_class=HTMLResponse)
+def shifts_report_preview_route(request: Request, person_id: int, month: int | None = None, year: int | None = None):
+    """תצוגה מקדימה של הדוח שנשלח במייל."""
+    return shifts_report_preview(request, person_id, month, year)
 
 
 @app.get("/guide/{person_id}/shifts/pdf")

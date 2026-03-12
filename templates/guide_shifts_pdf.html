@@ -170,6 +170,12 @@
         <span class="summary-value">{{ "%.2f"|format(total_additions_no_travel) }}</span>
       </td>
       {% endif %}
+      {% if show_total_salary and total_salary %}
+      <td>
+        <span class="summary-label">סה"כ לתשלום (&#8362;)</span><br>
+        <span class="summary-value">{{ "%.2f"|format(total_salary) }}</span>
+      </td>
+      {% endif %}
     </tr>
   </table>
 

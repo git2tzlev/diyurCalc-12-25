@@ -175,8 +175,20 @@ def export_gesher_preview(
         export_codes = gesher_exporter.load_export_config_from_db(conn)
         if not export_codes:
             export_codes = gesher_exporter.load_export_config()
-        # שליפת מפעלים מהטבלה
-        employers = conn.execute("SELECT code, name FROM employers WHERE is_active::integer = 1 ORDER BY code").fetchall()
+        # שליפת מפעלים - רק אלו שיש להם עובדים במערך הנבחר
+        housing_filter = get_housing_array_filter()
+        if housing_filter is not None:
+            employers = conn.execute("""
+                SELECT DISTINCT e.code, e.name
+                FROM employers e
+                JOIN people p ON p.employer_id = e.id
+                WHERE e.is_active::integer = 1 AND p.housing_array_id = %s
+                ORDER BY e.code
+            """, (housing_filter,)).fetchall()
+        else:
+            employers = conn.execute(
+                "SELECT code, name FROM employers WHERE is_active::integer = 1 ORDER BY code"
+            ).fetchall()
 
         # מציאת מדריכים ללא קוד מירב - רק אלו שיש להם נתונים בחודש הנבחר
         raw_conn = conn.conn if hasattr(conn, 'conn') else conn

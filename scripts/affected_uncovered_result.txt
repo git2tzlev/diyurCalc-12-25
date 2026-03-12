@@ -1,0 +1,17 @@
+=== Guides affected by uncovered hours fix (vacation/sick) 11/2025 ===
+Old = day-of-week logic (is_saturday/is_friday) for uncovered hours
+New = shift-type logic (tagbur + vacation/sick blocking)
+Positive delta = old had MORE hours (overpaid)
+Negative delta = old had FEWER hours (underpaid)
+Minimum wage: 34.4 ILS
+
+Name                       100%old  100%new    d100   125%old  125%new    d125   150%old  150%new    d150      Amount
+---------------------------------------------------------------------------------------------------------------------
+אטיאס אהרון                 138.00   124.00  +14.00      9.25     6.25   +3.00     16.50    16.50   +0.00     +610.60
+דנינו שמעון                 152.52   145.52   +7.00      9.40     7.90   +1.50     75.48    75.48   +0.00     +305.30
+---------------------------------------------------------------------------------------------------------------------
+TOTAL                                                                                                         +915.90
+
+Total affected: 2 guides
+Total monetary impact: +915.90 ILS
+(Positive = organization overpaid with old logic)

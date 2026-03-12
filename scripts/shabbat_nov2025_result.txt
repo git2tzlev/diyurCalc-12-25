@@ -1,0 +1,52 @@
+=== shabbat_cache entries for Oct-Dec 2025 ===
+
+  2025-10-02: {'enter': '18:07', 'exit': '19:14', 'parsha': None, 'holiday': 'יום כיפור'}
+  2025-10-04: {'enter': '18:05', 'exit': '19:12', 'parsha': 'פרשת האזינו', 'holiday': None}
+  2025-10-07: {'enter': '18:01', 'exit': '19:08', 'parsha': None, 'holiday': 'סוכות'}
+  2025-10-11: {'enter': '17:56', 'exit': '19:03', 'parsha': None, 'holiday': 'חול המועד סוכות'}
+  2025-10-14: {'enter': '17:52', 'exit': '19:00', 'parsha': None, 'holiday': 'שמיני עצרת'}
+  2025-10-18: {'enter': '17:48', 'exit': '18:55', 'parsha': 'פרשת בראשית', 'holiday': None}
+  2025-10-25: {'enter': '17:40', 'exit': '18:47', 'parsha': 'פרשת נח', 'holiday': None}
+  2025-11-01: {'enter': '16:33', 'exit': '17:41', 'parsha': 'פרשת לך לך', 'holiday': None}
+  2025-11-08: {'enter': '16:27', 'exit': '17:35', 'parsha': 'פרשת וירא', 'holiday': None}
+  2025-11-15: {'enter': '16:23', 'exit': '17:31', 'parsha': 'פרשת חיי שרה', 'holiday': None}
+  2025-11-22: {'enter': '16:20', 'exit': '17:28', 'parsha': 'פרשת תולדות', 'holiday': None}
+  2025-11-29: {'enter': '16:18', 'exit': '17:26', 'parsha': 'פרשת ויצא', 'holiday': None}
+  2025-12-06: {'enter': '16:18', 'exit': '17:26', 'parsha': 'פרשת וישלח', 'holiday': None}
+  2025-12-13: {'enter': '16:19', 'exit': '17:27', 'parsha': 'פרשת וישב', 'holiday': None}
+  2025-12-20: {'enter': '16:21', 'exit': '17:30', 'parsha': 'פרשת מקץ', 'holiday': None}
+  2025-12-27: {'enter': '16:25', 'exit': '17:34', 'parsha': 'פרשת ויגש', 'holiday': None}
+
+
+=== entries with exit=00:00 ===
+  2026-05-22: {'enter': '18:52', 'exit': '00:00', 'parsha': None, 'holiday': 'שבועות'}
+  2026-09-12: {'enter': '18:10', 'exit': '00:00', 'parsha': None, 'holiday': 'ראש השנה'}
+
+
+=== entries with holiday key ===
+  2025-04-13: {'enter': '19:58', 'exit': '19:59', 'parsha': None, 'holiday': 'פסח'}
+  2025-04-19: {'enter': '18:54', 'exit': '20:03', 'parsha': None, 'holiday': 'פסח'}
+  2025-06-02: {'enter': '19:24', 'exit': '20:33', 'parsha': None, 'holiday': 'שבועות'}
+  2025-09-24: {'enter': '19:26', 'exit': '19:25', 'parsha': None, 'holiday': 'ראש השנה'}
+  2025-10-02: {'enter': '18:07', 'exit': '19:14', 'parsha': None, 'holiday': 'יום כיפור'}
+  2025-10-07: {'enter': '18:01', 'exit': '19:08', 'parsha': None, 'holiday': 'סוכות'}
+  2025-10-11: {'enter': '17:56', 'exit': '19:03', 'parsha': None, 'holiday': 'חול המועד סוכות'}
+  2025-10-14: {'enter': '17:52', 'exit': '19:00', 'parsha': None, 'holiday': 'שמיני עצרת'}
+  2026-04-02: {'enter': '18:18', 'exit': '19:49', 'parsha': None, 'holiday': 'פסח'}
+  2026-04-04: {'enter': '18:19', 'exit': '19:51', 'parsha': None, 'holiday': 'חול המועד פסח'}
+  2026-04-08: {'enter': '18:22', 'exit': '19:53', 'parsha': None, 'holiday': 'פסח'}
+  2026-05-22: {'enter': '18:52', 'exit': '00:00', 'parsha': None, 'holiday': 'שבועות'}
+  2026-09-12: {'enter': '18:10', 'exit': '00:00', 'parsha': None, 'holiday': 'ראש השנה'}
+  2026-09-13: {'enter': '19:39', 'exit': '19:38', 'parsha': None, 'holiday': 'ראש השנה'}
+  2026-09-21: {'enter': '17:58', 'exit': '19:27', 'parsha': None, 'holiday': 'יום כיפור'}
+  2026-09-26: {'enter': '17:52', 'exit': '19:21', 'parsha': None, 'holiday': 'סוכות'}
+  2026-10-03: {'enter': '17:43', 'exit': '19:12', 'parsha': None, 'holiday': 'שמיני עצרת'}
+  2027-04-22: {'enter': '18:56', 'exit': '20:05', 'parsha': None, 'holiday': 'פסח'}
+  2027-04-24: {'enter': '18:57', 'exit': '20:06', 'parsha': None, 'holiday': 'חול המועד פסח'}
+  2027-04-28: {'enter': '19:00', 'exit': '20:09', 'parsha': None, 'holiday': 'פסח'}
+  2027-06-11: {'enter': '19:28', 'exit': '20:37', 'parsha': None, 'holiday': 'שבועות'}
+  2027-10-02: {'enter': '18:08', 'exit': '19:14', 'parsha': None, 'holiday': 'ראש השנה'}
+  2027-10-03: {'enter': '19:15', 'exit': '19:14', 'parsha': None, 'holiday': 'ראש השנה'}
+  2027-10-11: {'enter': '17:56', 'exit': '19:04', 'parsha': None, 'holiday': 'יום כיפור'}
+  2027-10-16: {'enter': '17:50', 'exit': '18:58', 'parsha': None, 'holiday': 'סוכות'}
+  2027-10-23: {'enter': '17:43', 'exit': '18:50', 'parsha': None, 'holiday': 'שמיני עצרת'}

@@ -65,7 +65,11 @@
       "WebFetch(domain:www.kolzchut.org.il)",
       "Bash(\"C:\\\\Users\\\\leahsc\\\\AppData\\\\Local\\\\Python\\\\bin\\\\python.exe\" -c \"import py_compile; py_compile.compile\\(''f:/DiyurClock/104/diyur003/app_utils.py''\\); py_compile.compile\\(''f:/DiyurClock/104/diyur003/routes/guide.py''\\); print\\(''OK''\\)\")",
       "Bash(\"C:\\\\Users\\\\leahsc\\\\AppData\\\\Local\\\\Python\\\\bin\\\\python.exe\" -m pytest:*)",
-      "Bash(\"C:\\\\Users\\\\leahsc\\\\AppData\\\\Local\\\\Python\\\\bin\\\\python.exe\" -m pytest tests/test_holiday_payment.py tests/test_logic.py tests/test_salary_calculation.py -v)"
+      "Bash(\"C:\\\\Users\\\\leahsc\\\\AppData\\\\Local\\\\Python\\\\bin\\\\python.exe\" -m pytest tests/test_holiday_payment.py tests/test_logic.py tests/test_salary_calculation.py -v)",
+      "Bash(PYTHONIOENCODING=utf-8 py -c \":*)",
+      "Bash(PYTHONIOENCODING=utf-8 py _compare.py)",
+      "Bash(for commit in 565c70b bc0ffb4 9b158a8 86816b3 cd1de5f 300563b 90c21ba)",
+      "Bash(do echo \"=== $commit ===\")"
     ],
     "deny": [],
     "ask": []

@@ -1,0 +1,11 @@
+WARNING: Using default SECRET_KEY. Change this in production!
+id=83, name=ΰθιΰρ ΰρϊψ
+id=84, name=ΰθιΰρ ΰτψϊ
+id=82, name=ΰθιΰρ ΰδψεο
+id=85, name=ΰθιΰρ ιωψΰμ ξΰιψ
+id=86, name=ΰθιΰρ ξιλμ
+id=83, name=ΧΧΧ™ΧΧ΅ ΧΧ΅ΧªΧ¨
+id=84, name=ΧΧΧ™ΧΧ΅ ΧΧ¤Χ¨Χª
+id=82, name=ΧΧΧ™ΧΧ΅ ΧΧ”Χ¨Χ•Χ
+id=85, name=ΧΧΧ™ΧΧ΅ Χ™Χ©Χ¨ΧΧ ΧΧΧ™Χ¨
+id=86, name=ΧΧΧ™ΧΧ΅ ΧΧ™Χ›Χ
