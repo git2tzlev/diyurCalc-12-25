@@ -1,409 +1,362 @@
-# DiyurCalc - מערכת חישוב שכר ומשמרות
-
-## תיאור כללי
-
-מערכת DiyurCalc היא מערכת לחישוב שכר עבודה עבור מדריכים בדיור מוגן. המערכת מטפלת בחישובי שכר מורכבים הכוללים שעות נוספות, משמרות שבת/חג, כוננויות, וסוגי משמרות מיוחדים.
-
-**גרסה:** 2.09
-**מסגרת:** FastAPI
-**בסיס נתונים:** PostgreSQL
-
----
-
-## מבנה הפרויקט
-
-```
-diyur003/
-├── app.py                      # נקודת כניסה ראשית - FastAPI
-├── app_utils.py               # פונקציות עזר לעיבוד סגמנטים יומיים
-├── requirements.txt           # תלויות Python
-│
-├── core/                      # לוגיקה עסקית מרכזית
-│   ├── config.py             # הגדרות תצורה
-│   ├── database.py           # ניהול חיבורי PostgreSQL
-│   ├── logic.py              # API ראשי לחישובים חודשיים
-│   ├── wage_calculator.py    # מנוע חישוב שכר
-│   ├── segments.py           # עיבוד סגמנטי משמרות
-│   ├── time_utils.py         # פונקציות זמן ושבת
-│   └── history.py            # נתונים היסטוריים
-│
-├── routes/                    # נתיבי Web
-│   ├── home.py               # דף הבית
-│   ├── guide.py              # דפי מדריך
-│   ├── summary.py            # סיכומים חודשיים
-│   ├── admin.py              # ניהול
-│   ├── export.py             # ייצוא (Gesher, Excel)
-│   └── email.py              # שליחת מיילים
-│
-├── services/                  # שירותים עסקיים
-│   ├── email_service.py      # שליחת מיילים ו-PDF
-│   └── gesher_exporter.py    # ייצוא לפורמט גשר
-│
-├── utils/                     # כלי עזר
-│   ├── utils.py              # פונקציות כלליות
-│   ├── cache_manager.py      # ניהול מטמון
-│   └── error_handler.py      # טיפול בשגיאות
-│
-├── templates/                # תבניות HTML (Jinja2)
-├── static/                   # קבצים סטטיים
-├── tests/                    # בדיקות
-└── scripts/                  # סקריפטים
-```
+# PROJECT_DOCUMENTATION
 
----
+מסמך זה מתאר את הארכיטקטורה הנוכחית של פרויקט `diyur003` כפי שהיא ממומשת בקוד היום. הוא נועד לספק תמונת על למי שנכנס לפרויקט, לאתר במהירות את מקור האמת של כל שכבה, ולהפחית כניסה לאזורים לא נכונים בקוד.
 
-## לוגיקת חישוב השכר
+## תמונת על
 
-### 1. מבנה יום עבודה
+DiyurCalc היא מערכת פנימית לניהול משמרות וחישוב שכר למדריכים בדיור. המערכת בנויה כיישום FastAPI עם שכבת תצוגה ב-Jinja2, בסיס נתונים PostgreSQL, וחישוב שכר מורכב הכולל:
 
-יום עבודה מוגדר **מ-08:00 עד 08:00 למחרת** (לא מחצות לחצות).
+- שעות רגילות ושעות נוספות
+- שבת, חג ופורים
+- כוננויות וקיזוזי כוננות
+- משמרות לילה, תגבור, ליווי בי"ח וליווי רפואי
+- חופשה, מחלה ותשלום חג
+- ייצוא גשר, Excel, PDF ושליחת מיילים
 
-- דיווחים שמסתיימים לפני 08:00 שייכים ליום העבודה **הקודם**
-- דיווחים שמתחילים אחרי 08:00 שייכים ליום העבודה **הנוכחי**
+## מקור האמת לחישוב
 
-### 2. חישוב אחוזי שכר
+החישוב בפועל מתבצע היום בשני שלבים עיקריים, שניהם ב-`app_utils.py`:
 
-| שעות ברצף | חול | שבת/חג |
-|-----------|------|--------|
-| 0-8 שעות | 100% | 150% |
-| 8-10 שעות | 125% | 175% |
-| 10+ שעות | 150% | 200% |
+1. `get_daily_segments_data(...)`
+2. `aggregate_daily_segments_to_monthly(...)`
 
-**הערה חשובה:** ה-150% בשעות נוספות (overtime) שונה מ-150% בשבת:
-- `calc150_overtime` - שעות נוספות בימי חול
-- `calc150_shabbat` - שעות בשבת (100% + 50% תוספת)
+הפונקציות ב-`core/logic.py` אינן מנוע חישוב חלופי. הן עוטפות את `app_utils.py`, מוסיפות bulk loading, cache ושליפות רוחביות, ומשמשות את ה-routes ואת הייצוא.
 
-### 3. רצפי עבודה (Chains)
+המשמעות המעשית: כשיש שינוי לוגי בחישוב השכר, צריך להתחיל ב-`app_utils.py`.
 
-- משמרות עם הפסקה של **פחות מ-60 דקות** נחשבות כרצף אחד
-- משמרות עם הפסקה של **60 דקות או יותר** מתחילות רצף חדש
-- כל רצף מתחיל את ספירת השעות מחדש
+## מבנה שכבות
 
-```
-דוגמה:
-08:00-16:00 (8 שעות 100%)
-הפסקה 30 דקות
-16:30-18:30 (2 שעות 125%) - המשך אותו רצף
-```
+### 1. כניסה ורישום routes
 
-### 4. זיהוי שבת
+`app.py` אחראי על:
 
-שעות שבת נקבעות לפי **זמני כניסת/יציאת שבת** מטבלת `shabbat_times`:
-- **כניסת שבת:** זמן הדלקת נרות ביום שישי (ברירת מחדל: 16:00)
-- **יציאת שבת:** צאת הכוכבים בשבת (ברירת מחדל: 22:00)
+- יצירת מופע FastAPI
+- רישום filters ל-Jinja2
+- רישום middleware
+- חיבור כל ה-routes
+- endpoint-ים מערכתיים כמו `health`, `login`, `toggle demo mode`
+- startup/shutdown
 
----
+בנוסף, `app.py` מוודא ב-startup שקודי תשלום מסוימים קיימים גם במסד הראשי וגם במסד הדמו.
 
-## סוגי משמרות
+### 2. תצורה
 
-### IDs של משמרות
+`core/config.py` מרכז את כל הגדרות הסביבה:
 
-| ID | סוג משמרת | תיאור |
-|----|-----------|--------|
-| 105 | FRIDAY_SHIFT | משמרת שישי/ערב חג |
-| 106 | SHABBAT_SHIFT | משמרת שבת/חג |
-| 107 | NIGHT_SHIFT | משמרת לילה |
-| 108 | TAGBUR_FRIDAY | תגבור שישי/ערב חג |
-| 109 | TAGBUR_SHABBAT | תגבור שבת/חג |
-| 120 | HOSPITAL_ESCORT | לווי בי"ח |
-| 148 | MEDICAL_ESCORT | ליווי רפואי |
+- `DATABASE_URL`
+- `DEMO_DATABASE_URL` דרך `core/database.py`
+- `HOST`, `PORT`, `DEBUG`
+- `SECRET_KEY`
+- `ENABLE_CACHING`, `CACHE_TIMEOUT`
+- `DEMO_MODE_PASSWORD`
+- `DEFAULT_EXPORT_ENCODING`
+- `LOCAL_TZ`
 
-### משמרת לילה (107)
+גרסת האפליקציה שמוצגת ב-UI מגיעה מ-`config.VERSION`.
 
-מבנה דינמי לפי זמן כניסה:
-1. **2 שעות ראשונות:** עבודה (לפי אחוז רצף)
-2. **עד 06:30:** כוננות (24%)
-3. **06:30-08:00:** עבודה (לפי אחוז רצף)
+### 3. מסד נתונים וקונטקסט בקשה
 
-### משמרות תגבור (108, 109)
+`core/database.py` אחראי על:
 
-משמרות עם **אחוזים קבועים** מסגמנטים מוגדרים מראש - לא מחושבות לפי רצף.
+- connection pooling ל-production ול-demo
+- מעבר בין DB ראשי ל-DB דמו
+- context per request עבור `demo_mode`
+- context per request עבור `housing_array_filter`
+- helperים לעוגיות: מערך דיור, תקופה נבחרת, מצב דמו
+- `get_conn()` שמחזיר wrapper תואם לעבודה מול PostgreSQL
 
-### תגבור משתמע (Implicit Tagbur)
+המערכת משתמשת ב-PostgreSQL בלבד. אין כיום נתיב פעיל ל-SQLite.
 
-משמרת שישי/שבת (105/106) בדירה טיפולית (type=2) עם תעריף דירה רגילה (rate_apt=1) = תגבור.
+### 4. אימות והרשאות
 
-### משמרת לווי בי"ח (120)
+`core/auth.py` מטפל ב:
 
-חוקים מיוחדים:
-- **חול:** תעריף קבוע מטבלה
-- **שבת הלכתית:** שכר מינימום בלבד
+- אימות סיסמה
+- session token חתום
+- בדיקת תפקידים מורשים
+- עזרי הרשאה ל-`super_admin` ול-`framework_manager`
 
----
+ב-`app.py` יש `AuthMiddleware` שמחייב התחברות לכל הנתיבים חוץ מ:
 
-## סוגי דירות
+- `/login`
+- `/static`
+- `/health`
 
-| ID | סוג | תיאור |
-|----|-----|--------|
-| 1 | REGULAR | דירה רגילה |
-| 2 | THERAPEUTIC | דירה טיפולית |
+אם המשתמש הוא `framework_manager`, המערכת כופה פילטר לפי `housing_array_id` שלו.
 
-דירות טיפוליות מקבלות תעריפי כוננות גבוהים יותר.
+### 5. מנוע חישוב שכר
 
----
+#### `app_utils.py`
 
-## כוננות (Standby)
+זהו הקובץ המרכזי ביותר בפרויקט מבחינה עסקית.
 
-### חוקי ביטול כוננות
+אחריות עיקרית:
 
-- **חפיפה >= 70%** עם עבודה: כוננות מתבטלת
-  - מנוכה עד 70 ש"ח
-  - אם תעריף > 70 ש"ח, משלמים את ההפרש
-- **חפיפה < 70%:** הכוננות נשמרת, זמן העבודה מקוזז
+- שליפת דיווחים וסגמנטים
+- החלת נתונים היסטוריים
+- בניית סגמנטים יומיים
+- פיצול רצפים וחישוב אחוזים
+- תמחור לפי תעריפים, שבת, חג, פורים וסוג דירה
+- אגרגציה חודשית לשדות היצוא והמסכים
 
-### תעריפי כוננות
+#### `core/time_utils.py`
 
-נקבעים לפי:
-- סוג סגמנט (`segment_id`)
-- סוג דירה (`apartment_type_id`)
-- מצב משפחתי (`marital_status`: married/single)
-- עדיפות (`priority`: 10=ספציפי, 0=כללי)
+מרכז פונקציות זמן:
 
----
+- המרת תאריכים וזמנים
+- cache לזמני שבת
+- סיווג יום: חול, ערב, יום קדוש
+- גבולות שבת/חג
+- גבולות פורים
 
-## נתונים היסטוריים
+#### `core/constants.py`
 
-המערכת תומכת ב"שמירה בעת שינוי" (Save on Change):
+מקור האמת לקבועים העסקיים:
 
-### טבלאות היסטוריה
+- מזהי סוגי משמרות
+- מזהי סוגי דירה
+- קבועי לילה
+- קבועי כוננות
+- קבועי carryover ו-breaks
+- קבועי פורים
 
-| טבלה | תיאור |
-|------|--------|
-| `person_status_history` | מצב אישי (נשוי, סוג עובד) |
-| `apartment_status_history` | סוג דירה |
-| `shift_type_housing_rates_history` | תעריפי משמרות לפי מערך דיור |
-| `standby_rates_history` | תעריפי כוננות |
+#### `core/history.py`
 
-### לוגיקת "Valid Until"
+מטפל בנתונים שתוקפם משתנה לפי חודש:
 
-- רשומה היסטורית מכילה `(year, month)` = "תקף עד"
-- הערך הישן היה תקף **עד לפני** אותו חודש
-- אם אין רשומה היסטורית - משתמשים בערך הנוכחי
+- סטטוס עובד
+- סוג דירה
+- תעריפי משמרות לפי מערך דיור
+- תעריפי כוננות
+- שכר מינימום היסטורי
+- נעילת חודשים
 
----
+לוגיקת ההיסטוריה היא בגישת "valid until": רשומה היסטורית מגדירה עד איזה חודש הערך הישן היה תקף.
 
-## פונקציות מרכזיות
+#### `core/sick_days.py`
 
-### core/logic.py
+מחשב רצפי ימי מחלה ואחוזי התשלום לפי חוק:
 
-```python
-calculate_person_monthly_totals(conn, person_id, year, month, shabbat_cache, minimum_wage)
-```
-**חישוב סיכומים חודשיים לעובד**
+- יום 1 = 0%
+- ימים 2-3 = 50%
+- יום 4 ואילך = 100%
 
-מחזיר:
-- `calc100`, `calc125`, `calc150`, `calc175`, `calc200` - דקות לפי אחוז
-- `calc150_shabbat`, `calc150_overtime` - פירוט 150%
-- `calc150_shabbat_100`, `calc150_shabbat_50` - פיצול לפנסיה
-- `standby`, `standby_payment` - כוננויות
-- `vacation_minutes`, `vacation_payment` - חופשה
-- `travel`, `extras` - רכיבי תשלום נוספים
+#### `core/holiday_payment.py`
 
-### core/wage_calculator.py
+מחשב תשלום חג למדריכים קבועים שלא עבדו בחג, על בסיס דיווחים חודשיים, סוג עובד וטבלת `shabbat_times`.
 
-```python
-calculate_wage_rate(minutes_in_chain, is_shabbat) -> str
-```
-**קביעת אחוז שכר** לפי דקות ברצף וסטטוס שבת
+### 6. facade לחישוב רוחבי
 
-```python
-_calculate_chain_wages(chain_segments, day_date, shabbat_cache, minutes_offset)
-```
-**חישוב שכר לרצף עבודה** בשיטת בלוקים
+`core/logic.py` מספק:
 
-```python
-_process_daily_map(daily_map, shabbat_cache, get_standby_rate_fn, year, month)
-```
-**עיבוד מפת ימים** וחישוב סיכומים
+- `calculate_person_monthly_totals()` לעובד יחיד
+- `calculate_monthly_summary()` לחישוב רוחבי לכלל המדריכים
+- שליפות bulk של reports, segments ו-payment components
+- שליפת קודי תשלום
+- עזרי startup לקודי תשלום מובנים
 
-### core/segments.py
+בפועל, `calculate_monthly_summary()` משתמש ב-bulk loading כדי להקטין משמעותית את מספר השאילתות.
 
-```python
-_build_daily_map(reports, segments_by_shift, year, month)
-```
-**בניית מפת ימים** מדיווחים
+### 7. routes
 
-```python
-get_hospital_escort_shabbat_ranges(r_date, start, end, shabbat_cache)
-```
-**זיהוי טווחי שבת** במשמרת לווי בי"ח
+#### `routes/home.py`
 
-### app_utils.py
+דף הבית:
 
-```python
-get_daily_segments_data(conn, person_id, year, month, shabbat_cache, minimum_wage)
-```
-**נתוני סגמנטים יומיים מפורטים** לתצוגה
+- רשימת מדריכים פעילים
+- בחירת חודש/שנה
+- חיפוש לפי שם
+- סינון לפי מערך דיור
 
----
+#### `routes/guide.py`
 
-## זרימת החישוב
+המסך העשיר ביותר במערכת:
 
-```
-1. שליפת דיווחים מ-time_reports
-           ↓
-2. החלת נתונים היסטוריים (מצב אישי, סוג דירה, תעריפים)
-           ↓
-3. בניית daily_map - מיפוי דיווחים לימי עבודה
-           ↓
-4. לכל יום:
-   a. פיצול לסגמנטים (עבודה, כוננות, חופשה)
-   b. זיהוי וביטול/קיזוז כוננויות
-   c. חלוקה לרצפי עבודה (chains)
-           ↓
-5. לכל רצף:
-   a. חישוב אחוזים לפי שעות ברצף
-   b. פיצול לפי גבולות שבת
-   c. צבירת דקות לפי אחוז
-           ↓
-6. סיכום חודשי:
-   - שעות לפי אחוז
-   - תשלום עבודה
-   - תשלום כוננות
-   - רכיבי תשלום נוספים (נסיעות, תוספות)
-```
+- דף מדריך מלא
+- סיכום פשוט
+- פירוט רצפים
+- תצוגת PDF
+- יצירת PDF
+- שליחת דוחות במייל
+- בדיקות הרשאה לפי מערך דיור
 
----
+#### `routes/summary.py`
 
-## ייצוא גשר (Gesher)
+סיכום חודשי כללי לכלל המדריכים.
 
-פורמט תקני לשכר בישראל. המערכת מייצאת:
-- קודי תשלום (`payment_codes`)
-- המרת ערכים (שעות/דקות/כסף)
-- תמיכה בקידודים: ASCII, Windows-1255, UTF-8
+#### `routes/reports.py`
 
----
+מסך ניהול דוחות ושליחת דוחות במייל לפי תקופה ומערך דיור.
 
-## Code Review - ממצאים
+#### `routes/export.py`
 
-### פונקציות לא בשימוש
+ייצוא:
 
-הפונקציות הבאות מוגדרות אך אינן נקראות מהקוד הפעיל:
+- Gesher לכל המפעל
+- Gesher לעובד בודד
+- Gesher למספר עובדים
+- תצוגה מקדימה ל-Gesher
+- Excel
 
-| קובץ | פונקציה | הערה |
-|------|---------|------|
-| `core/logic.py` | `get_db_connection()` | Legacy - השתמש ב-`get_conn()` |
-| `core/logic.py` | `dict_cursor()` | Legacy - לא בשימוש |
-| `core/history.py` | `get_historical_months()` | לדיבוג בלבד |
-| `core/history.py` | `get_segments_for_shift_month()` | נקרא רק מ-`get_all_segments_for_month` |
-| `core/history.py` | `get_all_segments_for_month()` | לא בשימוש |
-| `utils/utils.py` | `available_months()` | Legacy - הועבר ל-SQL |
-| `utils/utils.py` | `to_local_date_for_months()` | נקרא רק מ-`available_months` |
+#### `routes/stats.py`
 
-### כפילויות קוד
+דשבורד סטטיסטיקות ו-API לגרפים. משתמש ב-cache פנימי על בסיס `calculate_monthly_summary()`.
 
-1. **קבועי משמרות** מוגדרים בשני מקומות:
-   - `core/segments.py`
-   - `app_utils.py`
+#### `routes/admin.py`
 
-   **המלצה:** לאחד ב-`core/segments.py` ולייבא משם
+פונקציות admin:
 
-2. **MAX_CANCELLED_STANDBY_DEDUCTION** מוגדר ב:
-   - `core/wage_calculator.py`
-   - `app_utils.py`
+- ניהול קודי תשלום
+- sync ל-DB דמו
+- נעילה ופתיחה של חודש
 
-   **המלצה:** לייבא מ-`wage_calculator.py`
+#### `routes/email.py`
 
-3. **לוגיקת משמרת לילה** מופיעה פעמיים:
-   - `core/segments.py`: `_build_night_shift_segments()`
-   - `app_utils.py`: inline בפונקציה `get_daily_segments_data()`
+ניהול הגדרות מייל ושליחת דוחות.
 
-   **המלצה:** להשתמש בפונקציה מ-`segments.py`
+#### `routes/auth.py`
 
-### פרמטר לא בשימוש
+עמודי login/logout והגדרת session cookie.
 
-ב-`core/time_utils.py`:
-```python
-def is_shabbat_time(day_of_week, minute_in_day, shift_id, current_date, shabbat_cache)
-```
-הפרמטר `shift_id` לא בשימוש (הערה קיימת בקוד).
+### 8. services
 
----
+#### `services/gesher_exporter.py`
 
-## קבועים חשובים
+אחראי על:
 
-```python
-# זמן
-MINUTES_PER_HOUR = 60
-MINUTES_PER_DAY = 1440
-WORK_DAY_START_MINUTES = 480  # 08:00
+- טעינת מיפוי קודי יצוא
+- תרגום שדות חישוב לכמות/תעריף
+- יצירת קבצי `.mrv`
+- תצוגה מקדימה של יצוא
 
-# שעות נוספות
-REGULAR_HOURS_LIMIT = 480     # 8 שעות = 100%
-OVERTIME_125_LIMIT = 600      # 10 שעות = 125%
+#### `services/email_service.py`
 
-# הפסקות
-BREAK_THRESHOLD_MINUTES = 60  # הפסקה > 60 = רצף חדש
+אחראי על:
 
-# כוננות
-STANDBY_CANCEL_OVERLAP_THRESHOLD = 0.70  # 70%
-DEFAULT_STANDBY_RATE = 70.0
-MAX_CANCELLED_STANDBY_DEDUCTION = 70.0
+- שמירת הגדרות SMTP ב-DB
+- בדיקת תקינות חיבור SMTP
+- יצירת PDF לדוחות
+- שליחת דוחות בודדים ומרוכזים
 
-# שבת (ברירות מחדל)
-SHABBAT_ENTER_DEFAULT = 960   # 16:00
-SHABBAT_EXIT_DEFAULT = 1320   # 22:00
-```
+יצירת PDF בדוחות מדריך נשענת בפועל על רינדור HTML והרצת Edge/Chrome headless.
 
----
+## זרימות עיקריות במערכת
 
-## טבלאות בסיס נתונים
+### זרימת login
 
-### טבלאות ראשיות
+1. המשתמש שולח תעודת זהות וסיסמה
+2. `core/auth.py` מאמת משתמש מול `people`
+3. נוצר session token חתום
+4. `AuthMiddleware` משתמש ב-cookie בכל בקשה הבאה
 
-| טבלה | תיאור |
-|------|--------|
-| `people` | עובדים |
-| `apartments` | דירות |
-| `apartment_types` | סוגי דירות |
-| `employers` | מעסיקים |
-| `time_reports` | דיווחי עבודה |
-| `shift_types` | סוגי משמרות |
-| `shift_time_segments` | סגמנטי זמן למשמרת |
-| `standby_rates` | תעריפי כוננות |
-| `minimum_wage_rates` | שכר מינימום היסטורי |
-| `payment_codes` | קודי תשלום |
-| `payment_components` | רכיבי תשלום (נסיעות וכו') |
-| `shabbat_times` | זמני שבת |
-| `month_locks` | נעילת חודשים |
+### זרימת דף מדריך
 
----
+1. route ב-`routes/guide.py` בודק הרשאה לפי מערך דיור
+2. נשלפים reports, segments, cache לזמני שבת ושכר מינימום
+3. `get_daily_segments_data()` בונה פירוט יומי
+4. `aggregate_daily_segments_to_monthly()` בונה totals חודשיים
+5. route מרנדר את הנתונים לתבנית
 
-## API Endpoints
+### זרימת סיכום חודשי כללי
 
-### דפים ראשיים
+1. `routes/summary.py` קורא ל-`calculate_monthly_summary()`
+2. `core/logic.py` טוען bulk את כל הנתונים לחודש
+3. לכל מדריך מחושב daily + monthly דרך `app_utils.py`
+4. נבנים `summary_data` ו-`grand_totals`
 
-| נתיב | תיאור |
-|------|--------|
-| `GET /` | דף הבית |
-| `GET /guide/{person_id}` | דף מדריך |
-| `GET /summary` | סיכום חודשי |
-| `GET /admin/payment-codes` | ניהול קודי תשלום |
+### זרימת יצוא גשר
 
-### ייצוא
+1. `routes/export.py` בודק הרשאות וסינון
+2. `services/gesher_exporter.py` קורא ל-`calculate_monthly_summary()` או לחישוב פר-אדם
+3. totals מתורגמים לסמלי גשר לפי `payment_codes`
+4. נוצר קובץ `.mrv`
 
-| נתיב | תיאור |
-|------|--------|
-| `GET /export/gesher` | ייצוא גשר |
-| `GET /export/excel` | ייצוא Excel |
+## כללים עסקיים מרכזיים
 
-### API
+### יום עבודה
 
-| נתיב | תיאור |
-|------|--------|
-| `POST /api/lock-month` | נעילת חודש |
-| `POST /api/unlock-month` | פתיחת חודש |
-| `POST /api/send-guide-email/{id}` | שליחת דוח למדריך |
+- יום עבודה מוגדר מ-`08:00` עד `08:00` למחרת
+- נרמול זמנים לפני `08:00` מתבצע בתוך מנוע החישוב
 
----
+### רצפים
 
-## סיכום
+- ברירת המחדל הנוכחית היא שהפסקה של `60` דקות ומעלה שוברת רצף
+- יש לוגיקת תאימות היסטורית עבור חודשים ישנים יותר בקוד
 
-מערכת DiyurCalc היא מערכת מורכבת לחישוב שכר עם:
-- תמיכה בסוגי משמרות מגוונים
-- חישוב שעות נוספות ושבת
-- ניהול כוננויות
-- נתונים היסטוריים
-- ייצוא לפורמטים תקניים
+### מדרגות שכר
 
-הקוד מאורגן היטב עם הפרדה ברורה בין שכבות (לוגיקה, נתיבים, שירותים).
+- חול: 100%, 125%, 150%
+- שבת/חג: 150%, 175%, 200%
+- משמרת לילה משתמשת בספי 7/9 שעות במקום 8/10
+
+### שבת, חג ופורים
+
+- זמני שבת וחג מגיעים מטבלת `shabbat_times`
+- פורים מחושב כיום בתעריף חג רק בין `08:00` ל-`22:00` באותו יום
+
+### כוננות
+
+- כוננות מתומחרת לפי סוג סגמנט, סוג דירה ומצב משפחתי
+- אם חפיפה לעבודה היא לפחות 70%, הכוננות מתבטלת או מתקזזת לפי הכללים בקבועים
+
+### נתונים היסטוריים
+
+- סטטוס עובד, סוג דירה, תעריפים ושכר מינימום נלקחים לפי החודש המבוקש
+- לכן שינוי נתון נוכחי לא בהכרח משפיע רטרואקטיבית
+
+## טבלאות חשובות במסד הנתונים
+
+- `people`
+- `roles`
+- `apartments`
+- `apartment_types`
+- `housing_arrays`
+- `employers`
+- `time_reports`
+- `shift_types`
+- `shift_time_segments`
+- `shift_time_overrides`
+- `shift_type_housing_rates_history`
+- `standby_rates_history`
+- `payment_components`
+- `payment_codes`
+- `minimum_wage_rates`
+- `shabbat_times`
+- `month_locks`
+- `email_settings`
+
+## בדיקות
+
+קבצי בדיקות מרכזיים:
+
+- `tests/test_logic.py`
+- `tests/test_salary_calculation.py`
+- `tests/test_holiday_payment.py`
+
+הבדיקות מכסות בעיקר:
+
+- מדרגות שכר
+- שבת/חג
+- carryover
+- משמרות לילה
+- חופשה/מחלה
+- תשלום חג
+- overrides למשמרת חול
+
+## Hotspots לשינויים
+
+הקבצים הרגישים ביותר לשינוי:
+
+- `app_utils.py`
+- `routes/guide.py`
+- `core/time_utils.py`
+- `core/history.py`
+
+כל שינוי בהם דורש זהירות, בדיקות ממוקדות, והשוואה מול המסכים והיצוא.
+
+## מסמכים משלימים
+
+- `README.md` - הוראות הרצה והיכרות מהירה
+- `docs/LOGIC.md` - חוקי החישוב בפועל
+- `CHANGELOG.md` - יומן השינויים הפעיל
+- `docs/CHANGES_LOG.md` - ארכיון שינויים היסטורי

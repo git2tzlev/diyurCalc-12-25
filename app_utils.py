@@ -161,7 +161,7 @@ def _get_purim_standby_rate(
     apt_city: str, year: int = None, month: int = None
 ) -> float | None:
     """
-    אם הכוננות חלה בשעות פורים, מחזיר תעריף כוננות שבת.
+    אם הכוננות חלה בשעות פורים (08:00-22:00), מחזיר תעריף כוננות שבת.
     אחרת מחזיר None (להשתמש בתעריף הרגיל).
     """
     is_jerusalem = (apt_city or "") in JERUSALEM_CITY_NAMES
@@ -239,6 +239,64 @@ def _round_pay(value: float, decimals: int = 1) -> float:
 def _mul_pay(hours: float, rate: float) -> float:
     """מכפלת שעות×תעריף ועיגול לעשרון בשיטת מירב (Decimal למניעת שגיאות float)."""
     return float((Decimal(str(hours)) * Decimal(str(rate))).quantize(Decimal('0.1'), rounding=ROUND_HALF_UP))
+
+
+def _display_base_hourly(
+    seg_rate: float,
+    minimum_wage: float,
+    rate_supplement_agorot: int | float,
+    actual_supplement_agorot: int | float,
+) -> float:
+    """
+    תעריף שעתי לעמודת «בסיס» בטבלה: תעריף מהמערך + תוספת שעתית לפי סוג דירה בפועל.
+
+    כאשר התעריף כבר כולל את תוספת סוג הדירה לתשלום (שכר מינימום + תוספת), לא מכפילים.
+    """
+    rate_supp_nis = float(rate_supplement_agorot or 0) / 100.0
+    actual_supp_nis = float(actual_supplement_agorot or 0) / 100.0
+    if rate_supp_nis > 0 and abs(seg_rate - minimum_wage - rate_supp_nis) < 0.02:
+        return round(minimum_wage + actual_supp_nis, 2)
+    return round(seg_rate + actual_supp_nis, 2)
+
+
+def _register_asd_night_labels(
+    entry: dict,
+    r: dict,
+    has_asd_night: bool,
+    actual_apt_id_for_asd: int | None,
+) -> None:
+    """רישום תוויות תצוגה לכוננות ASD לילה לפי סוג תפקוד (דירה)."""
+    if not has_asd_night or actual_apt_id_for_asd is None:
+        return
+    apt_nm = (r.get("apartment_name") or "").strip()
+    if actual_apt_id_for_asd == HIGH_FUNCTIONING_APT_TYPE:
+        if apt_nm:
+            entry.setdefault("asd_night_label_by_apt", {})[apt_nm] = "שינה בסלון"
+        entry.setdefault("asd_night_label_by_apt_type", {})[HIGH_FUNCTIONING_APT_TYPE] = "שינה בסלון"
+    elif actual_apt_id_for_asd == LOW_FUNCTIONING_APT_TYPE:
+        if apt_nm:
+            entry.setdefault("asd_night_label_by_apt", {})[apt_nm] = "ערות בלילה"
+        entry.setdefault("asd_night_label_by_apt_type", {})[LOW_FUNCTIONING_APT_TYPE] = "ערות בלילה"
+
+
+def _asd_night_label_for_row(
+    label_by_apt: dict[str, str] | None,
+    label_by_type: dict[int, str] | None,
+    apt_name: str,
+    apt_type_id: int | None,
+) -> str:
+    """תווית טקסט לשורה בטבלה כשיש סימון asd_night_marking בדיווח."""
+    if label_by_apt and apt_name:
+        apt_name = apt_name.strip()
+        if apt_name in label_by_apt:
+            return label_by_apt[apt_name]
+        for part in apt_name.split(","):
+            p = part.strip()
+            if p in label_by_apt:
+                return label_by_apt[p]
+    if label_by_type and apt_type_id is not None:
+        return label_by_type.get(apt_type_id, "")
+    return ""
 
 
 def _fetch_weekday_overrides(conn) -> tuple[dict[int, tuple[str, str]], dict[int, tuple[str, str]]]:
@@ -483,29 +541,15 @@ def _calculate_chain_wages(
             block_size = min(minutes_until_tier_change, minutes_left_in_seg)
 
             # גבולות פורים - חיתוך הבלוק כדי שכל בלוק יהיה כולו בפורים או כולו מחוצה לו
+            # פורים: תעריף חג מ-08:00 עד 22:00 באותו יום בלבד
             block_in_purim = False
             if seg_is_purim:
                 actual_minute = current_abs_minute % MINUTES_PER_DAY
-                # בדיקה אם חצינו חצות בתוך הסגמנט (ולא נורמליזציה של +1440)
-                # סגמנט שמתחיל מעל 1440 הוא סגמנט מנורמל - actual_date כבר נכון
-                crossed_midnight = (seg_start < MINUTES_PER_DAY) and (current_abs_minute >= MINUTES_PER_DAY)
-                if crossed_midnight:
-                    # חצינו חצות בתוך הסגמנט - בדיקת גבולות פורים של היום הבא
-                    next_pe, next_px = _get_purim_boundaries(
-                        seg_actual_date + timedelta(days=1), is_jerusalem)
-                    if next_pe >= 0:
-                        if next_pe <= actual_minute < next_px:
-                            block_in_purim = True
-                            block_size = min(block_size, next_px - actual_minute)
-                        elif actual_minute < next_pe:
-                            block_size = min(block_size, next_pe - actual_minute)
-                else:
-                    # סגמנט רגיל או מנורמל - שימוש בגבולות פורים של actual_date
-                    if purim_enter <= actual_minute < purim_exit:
-                        block_in_purim = True
-                        block_size = min(block_size, purim_exit - actual_minute)
-                    elif actual_minute < purim_enter:
-                        block_size = min(block_size, purim_enter - actual_minute)
+                if purim_enter <= actual_minute < purim_exit:
+                    block_in_purim = True
+                    block_size = min(block_size, purim_exit - actual_minute)
+                elif actual_minute < purim_enter:
+                    block_size = min(block_size, purim_enter - actual_minute)
 
             # Helper to add segment detail
             def add_segment_detail(start_min, end_min, rate_label, is_shabbat):
@@ -1210,8 +1254,6 @@ def get_daily_segments_data(
                 SELECT tr.*,
                        st.name AS shift_name,
                        st.color AS shift_color,
-                       st.for_friday_eve,
-                       st.for_shabbat_holiday,
                        st.is_special_hourly AS shift_is_special_hourly,
                        ap.name AS apartment_name,
                        ap.apartment_type_id,
@@ -1240,8 +1282,6 @@ def get_daily_segments_data(
                 SELECT tr.*,
                        st.name AS shift_name,
                        st.color AS shift_color,
-                       st.for_friday_eve,
-                       st.for_shabbat_holiday,
                        st.is_special_hourly AS shift_is_special_hourly,
                        ap.name AS apartment_name,
                        ap.apartment_type_id,
@@ -1345,6 +1385,8 @@ def get_daily_segments_data(
 
         # Save actual apartment type for visual indicator (from apartments table)
         r_dict["actual_apartment_type_id"] = r_dict.get("apartment_type_id")
+        # תוספת שעתית של סוג הדירה בפועל (לפני החלפת apartment_type_id לחישוב תעריף)
+        r_dict["actual_hourly_wage_supplement"] = r_dict.get("hourly_wage_supplement") or 0
 
         # Override apartment_type_id for rate calculation
         # Priority: rate_apartment_type_id (if set) > historical > current
@@ -1404,12 +1446,15 @@ def get_daily_segments_data(
                 shift_names_map[shift_id] = r.get("shift_name", "")
             if shift_id not in shift_is_special_hourly:
                 shift_is_special_hourly[shift_id] = r.get("shift_is_special_hourly", False)
-            if r.get("for_shabbat_holiday"):
+            if shift_id in SHABBAT_SHIFT_IDS or shift_id in TAGBUR_SHIFT_IDS:
                 shabbat_shifts.add(shift_id)
-        # מילוי תוספת סוג דירה
+        # מילוי תוספת סוג דירה (לתשלום / לתעריף)
         apt_type_id = r.get("apartment_type_id")
         if apt_type_id and apt_type_id not in apt_type_supplement:
             apt_type_supplement[apt_type_id] = r.get("hourly_wage_supplement") or 0
+        actual_apt_tid = r.get("actual_apartment_type_id")
+        if actual_apt_tid and actual_apt_tid not in apt_type_supplement:
+            apt_type_supplement[actual_apt_tid] = r.get("actual_hourly_wage_supplement") or 0
 
     # טעינת תעריפי "שעת עבודה" לכל housing_array_id שנמצא בדיווחים
     # כי Uncovered Minutes ישולמו לפי תעריף זה
@@ -1541,7 +1586,10 @@ def get_daily_segments_data(
         if has_asd_night and actual_apt_id_for_asd == HIGH_FUNCTIONING_APT_TYPE:
             asd_night_high_func = True
 
-        if is_night:
+        # ASD (תפקוד גבוה/נמוך): משמרת לילה משתמשת בסגמנטים מהטבלה כמו שהם
+        is_asd_apartment = actual_apt_id_for_asd in (HIGH_FUNCTIONING_APT_TYPE, LOW_FUNCTIONING_APT_TYPE)
+
+        if is_night and not is_asd_apartment:
             # יצירת סגמנטים דינמיים לפי זמן הכניסה בפועל
             entry_time = rep_start_orig  # זמן הכניסה בדקות
             exit_time = rep_end_orig if rep_end_orig > entry_time else rep_end_orig + MINUTES_PER_DAY
@@ -1670,6 +1718,7 @@ def get_daily_segments_data(
             entry = daily_map.setdefault(day_key, {"shifts": set(), "segments": [], "is_fixed_segments": False, "escort_bonus_minutes": 0, "day_shift_types": set()})
             entry["is_fixed_segments"] = True  # סימון שזו משמרת קבועה
             entry["day_shift_types"].add(r["shift_type_id"])  # Track shift types for Shabbat detection
+            _register_asd_night_labels(entry, r, has_asd_night, actual_apt_id_for_asd)
             # ASD + תפקוד גבוה: סימון לתשלום כוננות 150 ש"ח
             if asd_night_high_func:
                 entry["asd_night_high_func"] = True
@@ -1822,6 +1871,7 @@ def get_daily_segments_data(
                     }
                 entry = daily_map[day_key]
                 entry["day_shift_types"].add(r["shift_type_id"])  # Track shift types for Shabbat detection
+                _register_asd_night_labels(entry, r, has_asd_night, actual_apt_id_for_asd)
 
                 # ASD לילה + תפקוד גבוה: סימון לתשלום כוננות 150 ש"ח
                 if asd_night_high_func:
@@ -2453,6 +2503,20 @@ def get_daily_segments_data(
 
                     start_str = f"{sb_start // 60 % 24:02d}:{sb_start % 60:02d}"
                     end_str = f"{sb_end // 60 % 24:02d}:{sb_end % 60:02d}"
+                    tb_asd_lbl = _asd_night_label_for_row(
+                        entry.get("asd_night_label_by_apt"),
+                        entry.get("asd_night_label_by_apt_type"),
+                        "",
+                        actual_apt_type,
+                    )
+
+                    # ASD לילה: סימון המשמרת והסוג — לפי סוג דירה + משמרת לילה ביום
+                    tb_is_asd_night = (
+                        actual_apt_type in (HIGH_FUNCTIONING_APT_TYPE, LOW_FUNCTIONING_APT_TYPE)
+                        and NIGHT_SHIFT_ID in entry.get("day_shift_types", set())
+                    )
+                    tb_sb_shift_name = "לילה" if tb_is_asd_night else "כוננות"
+                    tb_sb_shift_type = "כוננות לילה" if tb_is_asd_night else "כוננות"
 
                     chains.append({
                         "start_time": start_str,
@@ -2466,13 +2530,14 @@ def get_daily_segments_data(
                         "apartment_type_name": "",
                         "rate_apartment_type_name": "",
                         "housing_array_name": "",
-                        "shift_name": "כוננות",
-                        "shift_type": "כוננות",
+                        "shift_name": tb_sb_shift_name,
+                        "shift_type": tb_sb_shift_type,
                         "segments": [(start_str, end_str, "כוננות")],
                         "break_reason": "",
                         "from_prev_day": False,
                         "effective_rate": 0,
                         "standby_rate": standby_rate,
+                        "asd_night_label": tb_asd_lbl,
                     })
 
             total_minutes = sum(w[1]-w[0] for w in work_segments) + sum(v[1]-v[0] for v in vacation_segments) + sum(s[1]-s[0] for s in sick_segments)
@@ -2829,11 +2894,9 @@ def get_daily_segments_data(
                 # בחירת תעריף שבת או חול לפי is_shabbat (מטבלת shift_type_housing_rates)
                 seg_rate = seg_rates_dict["shabbat"] if is_shabbat else seg_rates_dict["weekday"]
 
-                # הוספת תוספת סוג דירה לתווית אם קיימת (מטבלת apartment_types)
+                # תוספת סוג דירה מוצגת בעמודת «בסיס» בטבלה, לא בתווית הפירוט (אחוזים בלבד)
                 hourly_supplement = apt_type_supplement.get(seg_actual_apt, 0)
-                if hourly_supplement:
-                    # התוספת באגורות - ממירים לשקלים
-                    seg_label = f"{seg_label} +{hourly_supplement / 100:.2f}"
+                apartment_supplement_nis = round(hourly_supplement / 100, 2) if hourly_supplement else 0.0
 
                 # חישוב תשלום בנוסחת גשר: round(שעות,2) × round(תעריף×מכפיל,2) → עיגול לעשרון (שיטת מירב)
                 seg_pay = (
@@ -2917,6 +2980,12 @@ def get_daily_segments_data(
                 # שם המשמרת הספציפי של הסגמנט (לא כל המשמרות של היום)
                 seg_shift_name = shift_names_map.get(current_shift_id, "") if current_shift_id else shift_name_str
 
+                rate_supp_ag = seg_rates_dict.get("supplement", 0)
+                actual_supp_ag = apt_type_supplement.get(seg_actual_apt, 0)
+                display_base = _display_base_hourly(
+                    seg_rate, minimum_wage, rate_supp_ag, actual_supp_ag
+                )
+
                 chains.append({
                     "start_time": start_str,
                     "end_time": end_str,
@@ -2944,7 +3013,15 @@ def get_daily_segments_data(
                     "break_reason": final_reason,
                     "from_prev_day": (seg_start >= MINUTES_PER_DAY) if is_first else False,
                     "effective_rate": seg_rate,  # שימוש בתעריף הנכון (שבת או חול) לפי is_shabbat
+                    "display_base_rate": display_base,  # תעריף בסיס לתצוגה (כולל תוספת דירה בפועל)
+                    "apartment_hourly_supplement_nis": apartment_supplement_nis,  # תוספת דירה לשעה (שקלים) — מוצגת בעמודת בסיס
                     "hourly_wage_supplement": seg_rates_dict.get("supplement", 0),  # תוספת סוג דירה באגורות
+                    "asd_night_label": _asd_night_label_for_row(
+                        entry.get("asd_night_label_by_apt"),
+                        entry.get("asd_night_label_by_apt_type"),
+                        display_apt_name or "",
+                        display_apt_type,
+                    ),
                 })
 
             # Check if chain ends at 08:00 boundary (1920 = 08:00 + 1440)
@@ -3131,6 +3208,21 @@ def get_daily_segments_data(
                         d_standby_pay += rate
                         paid_standby_ids.add(standby_key)
 
+                    sb_asd_lbl = _asd_night_label_for_row(
+                        entry.get("asd_night_label_by_apt"),
+                        entry.get("asd_night_label_by_apt_type"),
+                        event.get("apartment_name") or "",
+                        event.get("actual_apt_type"),
+                    )
+
+                    # ASD לילה: סימון המשמרת והסוג — לפי סוג דירה + משמרת לילה ביום
+                    is_asd_night_standby = (
+                        event.get("actual_apt_type") in (HIGH_FUNCTIONING_APT_TYPE, LOW_FUNCTIONING_APT_TYPE)
+                        and NIGHT_SHIFT_ID in entry.get("day_shift_types", set())
+                    )
+                    sb_shift_name = "לילה" if is_asd_night_standby else "כוננות"
+                    sb_shift_type = "כוננות לילה" if is_asd_night_standby else "כוננות"
+
                     chains.append({
                         "start_time": f"{start // 60 % 24:02d}:{start % 60:02d}",
                         "end_time": f"{end // 60 % 24:02d}:{end % 60:02d}",
@@ -3143,12 +3235,13 @@ def get_daily_segments_data(
                         "apartment_type_name": "",
                         "rate_apartment_type_name": "",
                         "housing_array_name": "",
-                        "shift_name": "כוננות",
-                        "shift_type": "כוננות",
+                        "shift_name": sb_shift_name,
+                        "shift_type": sb_shift_type,
                         "segments": [],
                         "break_reason": "",
                         "from_prev_day": start >= MINUTES_PER_DAY,
                         "effective_rate": minimum_wage,
+                        "asd_night_label": sb_asd_lbl,
                     })
                 elif etype == "vacation" or etype == "sick":
                     duration = end - start

@@ -12,12 +12,40 @@
     }
     body {
       margin: 0;
-      padding: 0;
+      padding: 24px 16px;
       min-height: 100vh;
       display: flex;
+      flex-direction: column;
       align-items: center;
       justify-content: center;
+      gap: 24px;
       background: linear-gradient(135deg, #1f6feb 0%, #0d47a1 100%);
+    }
+    .login-brand {
+      text-align: center;
+    }
+    .login-brand-inner {
+      display: inline-block;
+      background: #fff;
+      padding: 16px 28px;
+      border-radius: 14px;
+      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.18);
+    }
+    .login-brand img {
+      display: block;
+      height: 72px;
+      width: auto;
+      max-width: min(280px, 85vw);
+      object-fit: contain;
+      margin: 0 auto;
+    }
+    .login-brand .org-name {
+      margin: 10px 0 0;
+      font-size: 15px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.95);
+      letter-spacing: 0.02em;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
     }
     .login-container {
       background: #fff;
@@ -27,11 +55,6 @@
       width: 100%;
       max-width: 400px;
       text-align: center;
-    }
-    .logo {
-      height: 60px;
-      margin-bottom: 20px;
-      border-radius: 6px;
     }
     h1 {
       margin: 0 0 30px;
@@ -55,6 +78,44 @@
       border-radius: 8px;
       font-size: 16px;
       box-sizing: border-box;
+    }
+    .password-wrap {
+      position: relative;
+      display: block;
+    }
+    .password-wrap input {
+      padding-inline-end: 44px;
+    }
+    .password-toggle {
+      position: absolute;
+      inset-inline-end: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 36px;
+      height: 36px;
+      padding: 0;
+      border: none;
+      background: transparent;
+      color: #666;
+      cursor: pointer;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 0.15s, background 0.15s;
+    }
+    .password-toggle:hover {
+      color: #1f6feb;
+      background: rgba(31, 111, 235, 0.08);
+    }
+    .password-toggle:focus {
+      outline: 2px solid #1f6feb;
+      outline-offset: 2px;
+    }
+    .password-toggle svg {
+      width: 22px;
+      height: 22px;
+      flex-shrink: 0;
     }
     input:focus {
       outline: none;
@@ -92,8 +153,16 @@
   </style>
 </head>
 <body>
+  <header class="login-brand" role="banner">
+    <div class="login-brand-inner">
+      <img id="company-logo" src="/static/logo_tzohar_new.jpg"
+           alt="לוגו עמותת צהר" width="200" height="72" loading="eager" fetchpriority="high"
+           onerror="this.onerror=null; if(this.src.indexOf('logo_tzohar.jpg')===-1){this.src='/static/logo_tzohar.jpg';} else {this.style.display='none';}">
+    </div>
+    <p class="org-name">עמותת צהר</p>
+  </header>
+
   <div class="login-container">
-    <img src="/static/logo_tzohar_new.jpg" alt="לוגו עמותת צהר" class="logo">
     <h1>התחברות למערכת</h1>
 
     {% if error %}
@@ -109,13 +178,48 @@
       </div>
       <div class="form-group">
         <label for="password">סיסמה</label>
-        <input type="password" id="password" name="password"
-               placeholder="הזן סיסמה" required autocomplete="current-password">
+        <div class="password-wrap">
+          <input type="password" id="password" name="password"
+                 placeholder="הזן סיסמה" required autocomplete="current-password">
+          <button type="button" class="password-toggle" id="password-toggle"
+                  aria-label="הצג סיסמה" aria-pressed="false" title="הצג סיסמה">
+            <svg class="icon-eye" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/>
+              <circle cx="12" cy="12" r="3"/>
+            </svg>
+            <svg class="icon-eye-off" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:none">
+              <path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.988 3.18"/>
+              <path d="M14.084 14.158a3 3 0 0 1-4.087-4.087"/>
+              <path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"/>
+              <path d="m2 2 20 20"/>
+            </svg>
+          </button>
+        </div>
       </div>
       <button type="submit">התחבר</button>
     </form>
 
     <div class="version">גרסה {{ app_version }}</div>
   </div>
+  <script>
+    (function () {
+      var input = document.getElementById("password");
+      var btn = document.getElementById("password-toggle");
+      if (!input || !btn) return;
+      var eye = btn.querySelector(".icon-eye");
+      var eyeOff = btn.querySelector(".icon-eye-off");
+      btn.addEventListener("click", function () {
+        var show = input.type === "password";
+        input.type = show ? "text" : "password";
+        btn.setAttribute("aria-pressed", show ? "true" : "false");
+        btn.setAttribute("aria-label", show ? "הסתר סיסמה" : "הצג סיסמה");
+        btn.title = show ? "הסתר סיסמה" : "הצג סיסמה";
+        if (eye && eyeOff) {
+          eye.style.display = show ? "none" : "";
+          eyeOff.style.display = show ? "" : "none";
+        }
+      });
+    })();
+  </script>
 </body>
 </html>

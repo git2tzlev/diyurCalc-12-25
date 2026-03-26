@@ -6,10 +6,12 @@ from __future__ import annotations
 
 import logging
 import smtplib
+import time
+import uuid
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import os
 import re
 from core.config import config
@@ -1011,3 +1013,247 @@ def _generate_combined_guides_pdf(guides, year: int, month: int):
     except Exception as e:
         logger.error(f"Error generating combined PDF: {e}", exc_info=True)
         return None, 0, failed_guides
+
+
+# ─── Email Logs ───────────────────────────────────────────────
+
+
+def _ensure_email_logs_table(conn) -> None:
+    """יצירת טבלת email_logs אם לא קיימת."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS email_logs (
+            id SERIAL PRIMARY KEY,
+            recipient_id INTEGER,
+            recipient_email VARCHAR(255),
+            recipient_name VARCHAR(255),
+            email_type VARCHAR(50) NOT NULL,
+            subject VARCHAR(500),
+            status VARCHAR(20) NOT NULL,
+            error_message TEXT,
+            month INTEGER,
+            year INTEGER,
+            sent_by INTEGER,
+            sent_at TIMESTAMP DEFAULT NOW(),
+            batch_id VARCHAR(100)
+        )
+    """)
+    conn.commit()
+
+
+def insert_email_log(
+    conn,
+    *,
+    recipient_id: Optional[int] = None,
+    recipient_email: str = "",
+    recipient_name: str = "",
+    email_type: str = "shifts_report",
+    subject: str = "",
+    status: str = "sent",
+    error_message: Optional[str] = None,
+    month: Optional[int] = None,
+    year: Optional[int] = None,
+    sent_by: Optional[int] = None,
+    batch_id: Optional[str] = None,
+) -> None:
+    """הוספת רשומת לוג שליחת מייל."""
+    try:
+        conn.execute("""
+            INSERT INTO email_logs
+            (recipient_id, recipient_email, recipient_name, email_type,
+             subject, status, error_message, month, year, sent_by, batch_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            recipient_id, recipient_email, recipient_name, email_type,
+            subject, status, error_message, month, year, sent_by, batch_id,
+        ))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"Error inserting email log: {e}")
+        try:
+            conn.rollback()
+            _ensure_email_logs_table(conn)
+            conn.execute("""
+                INSERT INTO email_logs
+                (recipient_id, recipient_email, recipient_name, email_type,
+                 subject, status, error_message, month, year, sent_by, batch_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                recipient_id, recipient_email, recipient_name, email_type,
+                subject, status, error_message, month, year, sent_by, batch_id,
+            ))
+            conn.commit()
+        except Exception as e2:
+            logger.error(f"Error inserting email log after table creation: {e2}")
+
+
+def get_email_logs(
+    conn,
+    *,
+    batch_id: Optional[str] = None,
+    recipient_id: Optional[int] = None,
+    month: Optional[int] = None,
+    year: Optional[int] = None,
+    status: Optional[str] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    """שליפת לוגי שליחת מייל עם סינון."""
+    try:
+        conditions = []
+        params: list = []
+
+        if batch_id:
+            conditions.append("batch_id = %s")
+            params.append(batch_id)
+        if recipient_id:
+            conditions.append("recipient_id = %s")
+            params.append(recipient_id)
+        if month:
+            conditions.append("month = %s")
+            params.append(month)
+        if year:
+            conditions.append("year = %s")
+            params.append(year)
+        if status:
+            conditions.append("status = %s")
+            params.append(status)
+
+        where_clause = " AND ".join(conditions) if conditions else "TRUE"
+        params.append(limit)
+
+        rows = conn.execute(f"""
+            SELECT id, recipient_id, recipient_email, recipient_name,
+                   email_type, subject, status, error_message,
+                   month, year, sent_by, sent_at, batch_id
+            FROM email_logs
+            WHERE {where_clause}
+            ORDER BY sent_at DESC
+            LIMIT %s
+        """, tuple(params)).fetchall()
+
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.error(f"Error fetching email logs: {e}")
+        return []
+
+
+def get_batch_summary(conn, batch_id: str) -> Dict[str, Any]:
+    """סיכום batch שליחה לפי batch_id."""
+    try:
+        rows = conn.execute("""
+            SELECT status, COUNT(*) as count
+            FROM email_logs
+            WHERE batch_id = %s
+            GROUP BY status
+        """, (batch_id,)).fetchall()
+
+        summary = {"sent": 0, "failed": 0, "skipped": 0, "total": 0}
+        for row in rows:
+            summary[row["status"]] = row["count"]
+            summary["total"] += row["count"]
+        return summary
+    except Exception as e:
+        logger.error(f"Error fetching batch summary: {e}")
+        return {"sent": 0, "failed": 0, "skipped": 0, "total": 0}
+
+
+def generate_batch_id() -> str:
+    """יצירת מזהה ייחודי ל-batch שליחה."""
+    return f"bulk-{int(time.time())}-{uuid.uuid4().hex[:6]}"
+
+
+def _is_valid_email(email: Optional[str]) -> bool:
+    """בדיקת תקינות בסיסית של כתובת מייל."""
+    if not email:
+        return False
+    return bool(re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email))
+
+
+def process_guide_for_bulk(
+    guide: Dict[str, Any],
+    year: int,
+    month: int,
+    batch_id: str,
+    settings: Dict[str, Any],
+    sent_by: Optional[int] = None,
+) -> Dict[str, Any]:
+    """עיבוד מדריך בודד בשליחה מרוכזת - שליחה + לוג."""
+    guide_id = guide["id"]
+    guide_name = guide["name"]
+    guide_email = guide.get("email", "")
+
+    subject = f"דוח פירוט שעות עבודה כנספח לתלוש השכר חודש {month:02d}/{year}"
+
+    if not _is_valid_email(guide_email):
+        with get_conn() as conn:
+            insert_email_log(
+                conn,
+                recipient_id=guide_id,
+                recipient_email=guide_email,
+                recipient_name=guide_name,
+                status="skipped",
+                error_message="אין מייל תקין",
+                month=month, year=year,
+                sent_by=sent_by,
+                batch_id=batch_id,
+                subject=subject,
+            )
+        return {
+            "success": False,
+            "id": guide_id,
+            "name": guide_name,
+            "status": "skipped",
+            "reason": "אין מייל תקין",
+        }
+
+    try:
+        result = send_guide_email(guide_id, year, month, guide_email, settings)
+
+        status = "sent" if result.get("success") else "failed"
+        error_msg = None if result.get("success") else result.get("error", "שגיאה לא ידועה")
+
+        with get_conn() as conn:
+            insert_email_log(
+                conn,
+                recipient_id=guide_id,
+                recipient_email=guide_email,
+                recipient_name=guide_name,
+                status=status,
+                error_message=error_msg,
+                month=month, year=year,
+                sent_by=sent_by,
+                batch_id=batch_id,
+                subject=subject,
+            )
+
+        return {
+            "success": result.get("success", False),
+            "id": guide_id,
+            "name": guide_name,
+            "email": guide_email,
+            "status": status,
+            "reason": error_msg,
+        }
+
+    except Exception as e:
+        logger.error(f"Error processing guide {guide_name}: {e}", exc_info=True)
+        error_msg = f"שגיאה בשליחה: {str(e)}"
+        with get_conn() as conn:
+            insert_email_log(
+                conn,
+                recipient_id=guide_id,
+                recipient_email=guide_email,
+                recipient_name=guide_name,
+                status="failed",
+                error_message=error_msg,
+                month=month, year=year,
+                sent_by=sent_by,
+                batch_id=batch_id,
+                subject=subject,
+            )
+        return {
+            "success": False,
+            "id": guide_id,
+            "name": guide_name,
+            "status": "failed",
+            "reason": "שגיאה בשליחה",
+        }

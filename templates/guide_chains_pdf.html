@@ -244,6 +244,9 @@
         {% if chain.break_reason and chain.break_reason != 'כוננות' and chain.break_reason != 'חופשה' %}
         {% set _ = existing.update({'break_reason': chain.break_reason}) %}
         {% endif %}
+        {% if chain.asd_night_label and not existing.asd_night_label %}
+        {% set _ = existing.update({'asd_night_label': chain.asd_night_label}) %}
+        {% endif %}
         {% else %}
         {% set new_group = {
         'group_key': group_key,
@@ -256,6 +259,9 @@
         'apartment_type_change_date': chain.apartment_type_change_date,
         'housing_array_name': chain.housing_array_name,
         'effective_rate': chain.effective_rate,
+        'display_base_rate': chain.display_base_rate if chain.display_base_rate is defined else chain.effective_rate,
+        'apartment_hourly_supplement_nis': chain.apartment_hourly_supplement_nis if chain.apartment_hourly_supplement_nis is defined else 0,
+        'asd_night_label': chain.asd_night_label if chain.asd_night_label is defined else '',
         'shift_type': chain.shift_type,
         'shift_name': chain.shift_name,
         'type': chain.type,
@@ -282,7 +288,7 @@
           <td>{{ chain.apartment_name or '-' }}</td>
           <td>{{ chain.housing_array_name or '-' }}</td>
           <td>{{ (chain.apartment_type_name or '-')|replace('דירה ', '') }}</td>
-          <td>{% if chain.type == 'standby' %}-{% else %}{{ "%.2f"|format(chain.effective_rate or 0) }}{% endif %}</td>
+          <td>{% if chain.type == 'standby' %}-{% elif chain.apartment_hourly_supplement_nis is defined and chain.apartment_hourly_supplement_nis > 0 %}{{ "%.2f"|format(chain.effective_rate or 0) }} <span style="color:#888;">+ {{ "%.2f"|format(chain.apartment_hourly_supplement_nis) }}</span>{% elif chain.display_base_rate is defined %}{{ "%.2f"|format(chain.display_base_rate or 0) }}{% else %}{{ "%.2f"|format(chain.effective_rate or 0) }}{% endif %}</td>
           <td>
             {% if chain.shift_type %}{{ chain.shift_type }}{% elif chain.type == 'standby' %}כוננות{% elif chain.type == 'vacation' %}חופשה{% else %}עבודה{% endif %}
           </td>
@@ -303,7 +309,7 @@
           <td>{% if chain.rate_key == '175' %}{{ (chain.calc175 | float / 60) | round(2) }}{% else %}0.0{% endif %}</td>
           <td>{% if chain.rate_key == '200' %}{{ (chain.calc200 | float / 60) | round(2) }}{% else %}0.0{% endif %}</td>
           {% endif %}
-          <td>{{ chain.break_reason or '' }}</td>
+          <td>{% if chain.asd_night_label is defined and chain.asd_night_label %}<span style="color:#374151;font-weight:600;">{{ chain.asd_night_label }}</span>{% if chain.break_reason %} · {% endif %}{% endif %}{{ chain.break_reason or '' }}</td>
         </tr>
         {% endfor %}
 

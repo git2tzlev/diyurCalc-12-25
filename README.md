@@ -1,229 +1,170 @@
-# מערכת ניהול משמרות דיור
+# DiyurCalc - מערכת חישוב שכר ומשמרות
 
-מערכת ווב מתקדמת לניהול משמרות, חישוב שכר וייצור דוחות עבור מדריכים בעמותת צהר. המערכת פותחה ב-FastAPI ותומכת בעבודה עם בסיס נתונים בענן (PostgreSQL) או מקומי (SQLite).
+מערכת web פנימית לניהול משמרות, חישוב שכר, הפקת דוחות, ייצוא שכר ושליחת מיילים למדריכים בדיור. האפליקציה בנויה ב-FastAPI, משתמשת ב-PostgreSQL, ומציגה ממשק Jinja2 עם מסכי מדריך, דשבורד סטטיסטיקות וייצוא גשר.
 
-## תכונות עיקריות
+## מה המערכת כוללת
 
-- 📊 **ניהול משמרות**: תזמון וניהול משמרות מדריכים
-- 💰 **חישוב שכר**: חישוב אוטומטי של שכר כולל תוספות, הפחתות ובונוסים
-- 📈 **דוחות מקיפים**: יצירת דוחות שכר חודשיים ושנתיים
-- 📧 **שליחת מיילים**: שליחת דוחות אוטומטית למדריכים
-- 📱 **ממשק רספונסיבי**: עיצוב מודרני התומך במובייל
-- ☁️ **עבודה בענן**: תמיכה מלאה בעבודה עם בסיס נתונים מרוחק
-- 🔄 **ייצוא נתונים**: ייצוא ל-Excel ופורמטים נוספים
-- 🎯 **התאמה אישית**: ניהול סמלי שכר והגדרות גמישות
+- חישוב שכר חודשי לפי דיווחי עבודה, כוננויות, חופשה, מחלה ורכיבי תשלום נוספים
+- דפי מדריך עם פירוט רצפים, סיכום חודשי, PDF ותצוגה מקדימה
+- סיכום חודשי רוחבי לכלל המדריכים
+- ייצוא גשר ו-Excel
+- דשבורד סטטיסטיקות לפי מערכי דיור, דירות ומדריכים
+- ניהול קודי תשלום, נעילת חודשים והגדרות מייל
+- מצב דמו עם בסיס נתונים נפרד
 
-## דרישות מערכת
+## טכנולוגיות
 
-- Python 3.8 ומעלה
-- PostgreSQL (לעבודה בענן) או SQLite (לעבודה מקומית)
-- 2GB RAM לפחות
-- 500MB שטח דיסק פנוי
-
-## התקנה והרצה מקומית
-
-### 1. הורדת הפרויקט
-
-```bash
-git clone <repository-url>
-cd diyur003
-```
-
-### 2. הגדרת סביבה וירטואלית
-
-```bash
-# יצירת סביבה וירטואלית
-python -m venv venv
-
-# הפעלת הסביה (Windows)
-venv\Scripts\activate
-
-# הפעלת הסביה (Linux/Mac)
-source venv/bin/activate
-```
-
-### 3. התקנת תלות
-
-```bash
-pip install -r requirements.txt
-```
-
-### 4. הגדרת משתני סביבה
-
-צור קובץ `.env` בתיקיית הפרויקט עם התוכן הבא:
-
-```env
-# הגדרות בסיס נתונים
-DATABASE_URL=postgresql://username:password@localhost:5432/dbname
-# או לבסיס נתונים מקומי:
-# DATABASE_URL=sqlite:///./database.db
-
-# הגדרות שרת
-HOST=0.0.0.0
-PORT=8000
-DEBUG=False
-
-# מפתח אבטחה (חובה לייצור)
-SECRET_KEY=your-secret-key-here
-
-# הגדרות נוספות
-ENABLE_CACHING=True
-CACHE_TIMEOUT=300
-DEFAULT_MINIMUM_WAGE=34.40
-```
-
-### 5. הרצת האפליקציה
-
-```bash
-# אפשרות 1: עם Uvicorn (מומלץ לפיתוח)
-uvicorn app:app --reload --host 0.0.0.0 --port 8000
-
-# אפשרות 2: הרצה ישירה
-python app.py
-```
-
-לאחר ההרצה, האפליקציה תהיה זמינה בכתובת: `http://localhost:8000`
-
-## העלאה לאינטרנט
-
-### אפשרות 1: Railway (מומלץ)
-
-1. הירשם ל-[Railway](https://railway.app)
-2. לחץ על "New Project" → "Deploy from GitHub repo"
-3. העלה את הקוד ל-GitHub וחבר את החשבון
-4. הגדר משתני סביבה בממשק Railway:
-   - `DATABASE_URL`: כתובת בסיס הנתונים
-   - `SECRET_KEY`: מפתח אבטחה ייחודי
-5. Railway יזהה אוטומטית את ה-Procfile ויריץ את האפליקציה
-
-### אפשרות 2: Render
-
-1. הירשם ל-[Render](https://render.com)
-2. צור Web Service חדש מ-repository של GitHub
-3. הגדר את הפרמטרים הבאים:
-   - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `python -m uvicorn app:app --host 0.0.0.0 --port $PORT`
-4. הגדר משתני סביבה בלוח הבקרה
-
-### אפשרות 3: Fly.io
-
-1. התקן את [flyctl](https://fly.io/docs/getting-started/installing-flyctl/)
-2. הרץ: `fly launch`
-3. עקוב אחר ההוראות
+- Python 3.9+
+- FastAPI
+- PostgreSQL עם `psycopg2`
+- Jinja2 templates
+- Pandas ו-OpenPyXL לייצוא Excel
+- `xhtml2pdf` ו-Edge/Chrome headless ליצירת PDF
 
 ## מבנה הפרויקט
 
-```
+```text
 diyur003/
-├── app.py              # קובץ האפליקציה הראשי
-├── config.py           # הגדרות ומשתני סביבה
-├── logic.py            # לוגיקה עסקית וחישובים
-├── database.py         # התחברות לבסיס נתונים
-├── routes/             # קבצי ניתוב
-│   ├── home.py         # עמוד הבית
-│   ├── guide.py        # ניהול מדריכים
-│   ├── admin.py        # הגדרות מנהל
-│   ├── summary.py      # סיכומי שכר
-│   ├── export.py       # ייצוא נתונים
-│   └── email.py        # שליחת מיילים
-├── templates/          # תבניות HTML
-├── static/             # קבצים סטטיים (CSS, JS, תמונות)
-├── CSV/               # קבצי CSV לייבוא/ייצוא
-├── tests/             # בדיקות יחידה
-├── requirements.txt   # רשימת תלות
-├── Procfile          # הגדרות הרצה לענן
-└── .env              # משתני סביבה (לא נכלל בגיט)
+├── app.py                      # נקודת הכניסה ורישום כל ה-routes
+├── app_utils.py                # מקור האמת לחישוב יומי וחודשי
+├── core/
+│   ├── auth.py                 # sessions, login והרשאות
+│   ├── config.py               # טעינת תצורה מ-.env
+│   ├── constants.py            # קבועים עסקיים משותפים
+│   ├── database.py             # pools, demo mode, housing filter
+│   ├── history.py              # שליפות היסטוריות ונעילת חודשים
+│   ├── holiday_payment.py      # חישוב תשלום חג
+│   ├── logic.py                # facade לחישובים ו-summary רוחבי
+│   ├── sick_days.py            # חוקי דמי מחלה
+│   └── time_utils.py           # זמן, שבת, חג ופורים
+├── routes/                     # שכבת HTTP והעמודים
+├── services/                   # Gesher, email, PDF
+├── templates/                  # תבניות Jinja2
+├── static/                     # קבצים סטטיים
+├── tests/                      # בדיקות יחידה ואינטגרציה לוגית
+├── docs/                       # תיעוד טכני והיסטורי
+├── scripts/                    # סקריפטי תחזוקה וחקירה
+├── requirements.txt
+├── start.bat
+└── Procfile
 ```
 
-## שימוש במערכת
+## דרישות מערכת
 
-### 1. הוספת מדריכים
+- Python 3.9 ומעלה
+- PostgreSQL נגיש דרך `DATABASE_URL`
+- אופציונלי: `DEMO_DATABASE_URL` עבור מצב דמו
+- מומלץ: Edge או Chrome מותקן לצורך יצירת PDF headless
 
-- גישה לעמוד "ניהול מדריכים"
-- הזנת פרטי המדריך (שם, מספר זהות, פרטי התקשרות)
-- הגדרת תנאים ספציפיים למדריך
+## התקנה והרצה מקומית
 
-### 2. ניהול משמרות
+### 1. יצירת סביבה וירטואלית
 
-- בחירת חודש ושנה
-- הזנת משמרות לכל מדריך
-- הגדרת סוגי משמרות (רגילה, שבת, חג)
-- הוספת הערות והפחתות
-
-### 3. חישוב שכר
-
-- המערכת מחשבת אוטומטית:
-  - שכר בסיס
-  - תוספות שבת וחג
-  - נסיעות
-  - בונוסים והטבות
-  - הפחתות (מס, ביטוח וכו')
-
-### 4. ייצוא דוחות
-
-- ייצוא ל-Excel
-- ייצוא לפורמט גשר (להעברה למערכת שכר)
-- שליחת דוחות במייל
-
-## הגדרות מתקדמות
-
-### הגדרת שרת SMTP למייל
-
-```env
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USERNAME=your-email@gmail.com
-SMTP_PASSWORD=your-app-password
-SMTP_USE_TLS=True
-EMAIL_FROM=your-email@gmail.com
+```powershell
+py -m venv .venv
+.venv\Scripts\Activate.ps1
 ```
 
-### הגדרות מטמון
+### 2. התקנת תלויות
+
+```powershell
+py -m pip install -r requirements.txt
+```
+
+### 3. הגדרת `.env`
+
+צור קובץ `.env` בשורש הפרויקט. המשתנים החשובים בפועל:
 
 ```env
+DATABASE_URL=postgresql://username:password@host:5432/dbname
+
+# אופציונלי - נדרש רק אם משתמשים במצב דמו
+DEMO_DATABASE_URL=postgresql://username:password@host:5432/demo_db
+DEMO_MODE_PASSWORD=change-me
+
+HOST=0.0.0.0
+PORT=8000
+DEBUG=True
+SECRET_KEY=change-me
+
 ENABLE_CACHING=True
-CACHE_TIMEOUT=300  # שניות
+CACHE_TIMEOUT=300
+DEFAULT_EXPORT_ENCODING=utf-8
 ```
 
-### הגדרות שכר
+הערות:
 
-```env
-DEFAULT_MINIMUM_WAGE=34.40
-STANDARD_WORK_DAYS_PER_MONTH=21.66
-MAX_SICK_DAYS_PER_MONTH=1.5
+- המערכת לא תומכת כיום ב-SQLite.
+- שכר מינימום, תעריפי משמרות, קודי תשלום והגדרות מייל נשמרים במסד הנתונים, לא ב-`.env`.
+- ללא `DATABASE_URL` האפליקציה לא תעלה.
+
+### 4. הרצה
+
+ב-Windows:
+
+```powershell
+py -m uvicorn app:app --reload --port 8000
 ```
 
-## פתרון בעיות נפוצות
+או דרך:
 
-### שגיאת חיבור לבסיס נתונים
+```powershell
+.\start.bat
+```
 
-1. בדוק את כתובת ה-DATABASE_URL בקובץ .env
-2. ודא ששרת בסיס הנתונים פועל
-3. בדוק את חומת האש והגדרות הרשת
-4. לעבודה מקומית, ודא ש-PostgreSQL מותקן
+אם `python` קיים ב-`PATH`, אפשר גם:
 
-### בעיות בהרצה
+```powershell
+python app.py
+```
 
-1. ודא שכל התלות מותקנת: `pip install -r requirements.txt`
-2. בדוק גרסת Python: חייב להיות 3.8 ומעלה
-3. ודא שהסביה הוירטואלית מופעלת
+האפליקציה תהיה זמינה ב-`http://localhost:8000`.
 
-### בעיות בשליחת מייל
+## אימות והרשאות
 
-1. בדוק את הגדרות ה-SMTP
-2. ודא שמשתמשים בסיסמת אפליקציה (ל-Gmail)
-3. בדוק את תיקיית המיילים היוצאים (Spam)
+- כניסה מתבצעת דרך `/login`
+- רק תפקידים `super_admin` ו-`framework_manager` יכולים להתחבר
+- מנהל מסגרת מוגבל אוטומטית למערך הדיור שלו
+- מצב דמו, פילטר מערך דיור ותקופה נבחרת נשמרים בעוגיות
 
-## תמיכה ועדכונים
+## הערות תפעוליות חשובות
 
-- גרסה נוכחית: 2.08
-- עדכונים מתפרסמים דרך ה-repository
-- לתמיכה: צור קשר דרך המייל המוסדי
+- יום עבודה מחושב מ-`08:00` עד `08:00` למחרת, לא מחצות עד חצות
+- מקור האמת לחישוב השכר הוא `app_utils.py`
+- נתונים היסטוריים מוחלים לפני חישוב השכר דרך `core/history.py`
+- זמני שבת וחג נלקחים מטבלת `shabbat_times`
+- תשלום חג מחושב בנפרד ב-`core/holiday_payment.py`
+- הגדרות מייל מנוהלות דרך מסך admin ונשמרות בטבלת `email_settings`
+
+## בדיקות
+
+הרצת כל הבדיקות:
+
+```powershell
+py -m pytest tests -q
+```
+
+בדיקות ממוקדות:
+
+```powershell
+py -m pytest tests\test_logic.py -q
+py -m pytest tests\test_salary_calculation.py -q
+py -m pytest tests\test_holiday_payment.py -q
+```
+
+## פריסה
+
+- `Procfile` מריץ את האפליקציה עם `uvicorn app:app`
+- לפריסה יש להגדיר לפחות `DATABASE_URL` ו-`SECRET_KEY`
+- אם משתמשים במצב דמו בפרודקשן, צריך להגדיר גם `DEMO_DATABASE_URL` ו-`DEMO_MODE_PASSWORD`
+
+## מסמכים נוספים
+
+- `PROJECT_DOCUMENTATION.md` - תמונת ארכיטקטורה ותפקידי המודולים
+- `docs/LOGIC.md` - חוקי החישוב בפועל
+- `CHANGELOG.md` - יומן השינויים הפעיל
+- `docs/CHANGES_LOG.md` - ארכיון היסטורי ישן
 
 ## רישיון
 
-פרויקט זה הוא קניין של עמותת צהר. כל הזכויות שמורות.
-
----
-
-**הערה חשובה**: ודא שמגבות את בסיס הנתונים באופן קבוע, במיוחד בעבודה עם בסיס נתונים בענן.
+הפרויקט הוא קניין פנימי של עמותת צהר.

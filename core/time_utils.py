@@ -391,9 +391,7 @@ def _get_purim_boundaries(
     """
     גבולות פורים ליום נתון.
 
-    פורים: תעריף 150% מ-08:00 ביום הפורים עד 08:00 למחרת בבוקר.
-    - ביום הפורים עצמו: (480, 1440) = מ-08:00 עד חצות
-    - ביום שלמחרת: (0, 480) = מחצות עד 08:00
+    פורים: תעריף 150% מ-08:00 עד 22:00 באותו יום בלבד.
 
     Returns:
         (enter, exit) בדקות מחצות, או (-1, -1) אם היום לא פורים
@@ -405,12 +403,7 @@ def _get_purim_boundaries(
         return (-1, -1)
 
     if day_date == purim_date:
-        # יום הפורים: 08:00 עד חצות
-        return (PURIM_ENTER_MINUTES, MINUTES_PER_DAY)
-
-    if day_date == purim_date + timedelta(days=1):
-        # בוקר למחרת: חצות עד 08:00
-        return (0, PURIM_EXIT_MINUTES)
+        return (PURIM_ENTER_MINUTES, PURIM_EXIT_MINUTES)
 
     return (-1, -1)
 

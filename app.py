@@ -32,7 +32,7 @@ from utils.utils import human_date, format_currency, format_currency_total
 from routes.home import home
 from routes.reports import reports_management
 from routes.guide import (
-    simple_summary_view, guide_view, shifts_report_view,
+    simple_summary_view, guide_view,
     shifts_report_pdf, shifts_report_preview, shifts_report_email, chains_report_email
 )
 from routes.admin import (
@@ -58,6 +58,10 @@ from routes.email import (
     send_all_to_single_email_route,
     send_selected_guides_emails_route,
     send_selected_guides_to_single_email_route,
+    send_bulk_stream,
+    email_logs_route,
+    email_batch_summary_route,
+    retry_failed_route,
 )
 from routes.stats import (
     stats_page,
@@ -347,12 +351,6 @@ def shifts_report_pdf_route(request: Request, person_id: int, month: int | None 
     return shifts_report_pdf(request, person_id, month, year)
 
 
-@app.get("/guide/{person_id}/shifts", response_class=HTMLResponse)
-def shifts_report_route(request: Request, person_id: int, month: int | None = None, year: int | None = None):
-    """Shifts report view for a guide."""
-    return shifts_report_view(request, person_id, month, year)
-
-
 @app.post("/api/send-shifts-email/{person_id}")
 async def shifts_report_email_route(request: Request, person_id: int, year: int, month: int):
     """Send shifts report via email."""
@@ -633,6 +631,30 @@ async def send_selected_guides_emails_api(request: Request, year: int, month: in
 async def send_selected_guides_to_single_email_api(request: Request, year: int, month: int):
     """שליחת דוחות מדריכים נבחרים למייל אחד."""
     return await send_selected_guides_to_single_email_route(request, year, month)
+
+
+@app.get("/api/send-bulk-stream")
+async def send_bulk_stream_api(request: Request, year: int, month: int):
+    """שליחה מרוכזת עם SSE לעדכון התקדמות בזמן אמת."""
+    return await send_bulk_stream(request, year, month)
+
+
+@app.get("/api/email-logs")
+async def email_logs_api(request: Request, year: int, month: int):
+    """שליפת לוגי שליחת מייל."""
+    return await email_logs_route(request, year, month)
+
+
+@app.get("/api/email-batch-summary/{batch_id}")
+async def email_batch_summary_api(request: Request, batch_id: str):
+    """סיכום batch שליחה."""
+    return await email_batch_summary_route(request, batch_id)
+
+
+@app.post("/api/retry-failed-emails")
+async def retry_failed_emails_api(request: Request):
+    """שליחה מחדש של מיילים שנכשלו."""
+    return await retry_failed_route(request)
 
 
 @app.post("/api/toggle-demo-mode")

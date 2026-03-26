@@ -33,7 +33,7 @@
   </form>
 
   <div style="display: flex; gap: 8px; margin-bottom: 15px; flex-wrap: wrap; align-items: center; padding: 12px; background: #f8f9fa; border-radius: 8px;">
-    <button id="sendAllEmailBtn" onclick="sendAllEmails()" style="padding: 8px 16px; background: #6f42c1; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500;">
+    <button id="sendAllEmailBtn" onclick="openBulkDialog()" style="padding: 8px 16px; background: #6f42c1; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500;">
       📧 שלח דוחות לכל המדריכים
     </button>
     <span style="color: #999; margin: 0 4px;">|</span>
@@ -41,18 +41,6 @@
     <button id="sendToSingleBtn" onclick="sendAllToSingleEmail()" style="padding: 8px 16px; background: #0d6efd; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500;">
       📨 שלח PDF משולב למייל זה
     </button>
-  </div>
-
-  <!-- אזור התקדמות שליחה -->
-  <div id="progressArea" style="display: none; margin-bottom: 15px; padding: 15px; background: #e8f4fc; border-radius: 8px; border: 1px solid #b8daff;">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-      <strong id="progressTitle">שולח מיילים...</strong>
-      <span id="progressCount" style="font-size: 14px; color: #666;"></span>
-    </div>
-    <div style="background: #ddd; border-radius: 4px; height: 8px; margin-bottom: 10px;">
-      <div id="progressBar" style="background: #28a745; height: 100%; border-radius: 4px; width: 0%; transition: width 0.3s;"></div>
-    </div>
-    <div id="progressLog" style="max-height: 150px; overflow-y: auto; font-size: 12px; font-family: monospace; background: white; padding: 8px; border-radius: 4px; border: 1px solid #ddd;"></div>
   </div>
 
   <table id="reportsTable">
@@ -95,31 +83,176 @@
   </table>
 </div>
 
+<!-- דיאלוג שליחה מרוכזת -->
+<div id="bulkDialog" class="bulk-overlay" style="display: none;">
+  <div class="bulk-dialog">
+    <div class="bulk-header">
+      <h3>שליחת דוחות מרוכזת - <span id="bulkPeriod"></span></h3>
+      <p class="muted">כל מדריך יקבל את הדוח האישי שלו במייל כקובץ PDF</p>
+    </div>
+
+    <!-- סיכום לפני שליחה -->
+    <div id="bulkPreSend" class="bulk-summary-bar">
+      <span id="bulkWithEmail" class="bulk-stat sent">✅ <strong></strong> יקבלו מייל</span>
+      <span id="bulkWithoutEmail" class="bulk-stat skipped">⏭️ <strong></strong> ללא מייל</span>
+      <span class="bulk-stat total">סה"כ: <strong id="bulkTotalCount"></strong></span>
+    </div>
+
+    <!-- פס התקדמות -->
+    <div id="bulkProgressSection" style="display: none;">
+      <div class="progress-bar-container">
+        <div id="bulkProgressBar" class="progress-bar-fill"></div>
+      </div>
+      <div style="display: flex; justify-content: space-between; margin-top: 6px; font-size: 13px; color: #666;">
+        <span id="bulkProgressText">0%</span>
+        <span id="bulkTimeEstimate"></span>
+      </div>
+    </div>
+
+    <!-- רשימת מדריכים -->
+    <div id="bulkGuideList" class="bulk-guide-list"></div>
+
+    <!-- סיכום סופי -->
+    <div id="bulkFinalSummary" style="display: none;" class="bulk-final-summary">
+      <div id="bulkFinalSent" class="bulk-stat sent"></div>
+      <div id="bulkFinalSkipped" class="bulk-stat skipped"></div>
+    </div>
+
+    <!-- כפתורים -->
+    <div class="bulk-footer">
+      <button id="bulkCancelBtn" onclick="closeBulkDialog()" class="btn-cancel">ביטול</button>
+      <button id="bulkRetryBtn" onclick="retryFailed()" style="display: none;" class="btn-retry">🔄 שלח מחדש נכשלים</button>
+      <button id="bulkSendBtn" onclick="startBulkSend()" class="btn-send">
+        <span id="bulkSendBtnText">שלח ל-<span id="bulkSendCount"></span></span>
+      </button>
+    </div>
+  </div>
+</div>
+
 <style>
   .guide-email-input:focus {
     border-color: #1f6feb;
     outline: none;
   }
-  .send-btn:hover {
-    background: #1a5cd0;
-  }
-  .send-btn:disabled {
-    background: #ccc;
-    cursor: not-allowed;
-  }
+  .send-btn:hover { background: #1a5cd0; }
+  .send-btn:disabled { background: #ccc; cursor: not-allowed; }
   .status-indicator.sending { color: #f59e0b; }
   .status-indicator.success { color: #22c55e; }
   .status-indicator.error { color: #ef4444; }
-  tbody tr:hover {
-    background-color: #f6f8fa;
+  tbody tr:hover { background-color: #f6f8fa; }
+
+  /* Bulk Dialog */
+  .bulk-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 1000;
+    display: flex; align-items: center; justify-content: center;
   }
+  .bulk-dialog {
+    background: #fff;
+    border-radius: 12px;
+    width: 560px;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    animation: dialogIn 0.25s ease-out;
+  }
+  @keyframes dialogIn {
+    from { opacity: 0; transform: scale(0.95) translateY(10px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+  }
+  .bulk-header {
+    padding: 20px 24px 12px;
+    border-bottom: 1px solid #e2e8f0;
+  }
+  .bulk-header h3 { margin: 0; font-size: 18px; color: #1a202c; }
+  .bulk-header p { margin: 6px 0 0; }
+  .bulk-summary-bar {
+    display: flex; gap: 16px; padding: 12px 24px;
+    background: #f8fafc; border-bottom: 1px solid #e2e8f0;
+    font-size: 14px;
+  }
+  .bulk-stat.sent { color: #16a34a; }
+  .bulk-stat.skipped { color: #d97706; }
+  .bulk-stat.failed { color: #dc2626; }
+  .bulk-stat.total { color: #475569; margin-right: auto; }
+
+  .progress-bar-container {
+    height: 8px; background: #e2e8f0; border-radius: 4px;
+    margin: 16px 24px 0; overflow: hidden;
+  }
+  .progress-bar-fill {
+    height: 100%; width: 0%; border-radius: 4px;
+    background: linear-gradient(90deg, #3b82f6, #6366f1);
+    transition: width 0.3s ease;
+  }
+
+  .bulk-guide-list {
+    flex: 1; overflow-y: auto; max-height: 350px;
+    padding: 8px 24px;
+  }
+  .bulk-guide-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 0; border-bottom: 1px solid #f1f5f9;
+    font-size: 14px;
+  }
+  .bulk-guide-item:last-child { border-bottom: none; }
+  .bulk-guide-icon {
+    width: 22px; height: 22px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 50%; font-size: 12px; flex-shrink: 0;
+  }
+  .bulk-guide-icon.pending { background: #f1f5f9; color: #94a3b8; }
+  .bulk-guide-icon.sending { background: #dbeafe; color: #3b82f6; animation: pulse 1s infinite; }
+  .bulk-guide-icon.sent { background: #dcfce7; color: #16a34a; }
+  .bulk-guide-icon.skipped { background: #fef3c7; color: #d97706; }
+  .bulk-guide-icon.failed { background: #fee2e2; color: #dc2626; }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+  .bulk-guide-name { flex: 1; }
+  .bulk-guide-reason { font-size: 12px; color: #94a3b8; }
+
+  .bulk-final-summary {
+    padding: 12px 24px;
+    background: #f0fdf4;
+    border-top: 1px solid #bbf7d0;
+    display: flex; gap: 16px; font-size: 14px;
+  }
+
+  .bulk-footer {
+    display: flex; gap: 10px; justify-content: flex-end;
+    padding: 16px 24px; border-top: 1px solid #e2e8f0;
+  }
+  .btn-cancel {
+    padding: 8px 20px; border-radius: 6px; border: 1px solid #d1d5db;
+    background: #fff; color: #374151; cursor: pointer; font-size: 14px;
+  }
+  .btn-cancel:hover { background: #f3f4f6; }
+  .btn-send {
+    padding: 8px 24px; border-radius: 6px; border: none;
+    background: #6f42c1; color: #fff; cursor: pointer;
+    font-size: 14px; font-weight: 600;
+  }
+  .btn-send:hover { background: #5a32a3; }
+  .btn-send:disabled { background: #c4b5fd; cursor: not-allowed; }
+  .btn-retry {
+    padding: 8px 20px; border-radius: 6px; border: none;
+    background: #f59e0b; color: #fff; cursor: pointer;
+    font-size: 14px; font-weight: 500;
+  }
+  .btn-retry:hover { background: #d97706; }
 </style>
 
 <script>
   const selectedYear = {{ selected_year or 'null' }};
   const selectedMonth = {{ selected_month or 'null' }};
+  let bulkEventSource = null;
+  let currentBatchId = null;
+  let bulkStartTime = null;
 
-  // קבלת רשימת מזהי המדריכים המוצגים בטבלה
   function getDisplayedGuideIds() {
     const rows = document.querySelectorAll('#reportsTable tbody tr[data-guide-id]');
     return Array.from(rows).map(row => parseInt(row.dataset.guideId));
@@ -131,9 +264,7 @@
     const housingArraySelect = document.getElementById('housing_array_id');
     const form = document.querySelector('form.controls');
 
-    // פונקציה לשליחת טופס עם הסרת פרמטרים ריקים
     function submitFormClean() {
-      // השבת שדות ריקים כדי שלא יישלחו בכתובת
       if (housingArraySelect && housingArraySelect.value === '') {
         housingArraySelect.disabled = true;
       }
@@ -144,25 +275,15 @@
       monthSelect.addEventListener('change', function() {
         const selectedOption = monthSelect.options[monthSelect.selectedIndex];
         const yearFromMonth = selectedOption.getAttribute('data-year');
-        if (yearFromMonth && yearSelect) {
-          yearSelect.value = yearFromMonth;
-        }
+        if (yearFromMonth && yearSelect) yearSelect.value = yearFromMonth;
         submitFormClean();
       });
     }
-
-    if (yearSelect && form) {
-      yearSelect.addEventListener('change', function() {
-        submitFormClean();
-      });
-    }
-
-    if (housingArraySelect && form) {
-      housingArraySelect.addEventListener('change', function() {
-        submitFormClean();
-      });
-    }
+    if (yearSelect && form) yearSelect.addEventListener('change', submitFormClean);
+    if (housingArraySelect && form) housingArraySelect.addEventListener('change', submitFormClean);
   });
+
+  // ─── שליחה בודדת ─────────────────────────────────
 
   async function sendGuideEmail(personId, btn) {
     const row = btn.closest('tr');
@@ -170,16 +291,8 @@
     const statusSpan = row.querySelector('.status-indicator');
     const email = emailInput.value.trim();
 
-    if (!email) {
-      alert('יש להזין כתובת מייל');
-      emailInput.focus();
-      return;
-    }
-
-    if (!selectedYear || !selectedMonth) {
-      alert('יש לבחור חודש ושנה');
-      return;
-    }
+    if (!email) { alert('יש להזין כתובת מייל'); emailInput.focus(); return; }
+    if (!selectedYear || !selectedMonth) { alert('יש לבחור חודש ושנה'); return; }
 
     btn.disabled = true;
     statusSpan.className = 'status-indicator sending';
@@ -188,15 +301,9 @@
     try {
       const response = await fetch(
         `/api/send-guide-email/${personId}?year=${selectedYear}&month=${selectedMonth}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: email })
-        }
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) }
       );
-
       const result = await response.json();
-
       if (result.success) {
         statusSpan.className = 'status-indicator success';
         statusSpan.textContent = '✓ נשלח';
@@ -212,185 +319,220 @@
     }
   }
 
-  async function sendAllEmails() {
-    const btn = document.getElementById('sendAllEmailBtn');
-    const originalText = btn.innerText;
-    const progressArea = document.getElementById('progressArea');
-    const progressBar = document.getElementById('progressBar');
-    const progressCount = document.getElementById('progressCount');
-    const progressLog = document.getElementById('progressLog');
-    const progressTitle = document.getElementById('progressTitle');
+  // ─── שליחה מרוכזת עם SSE ─────────────────────────
 
-    // איסוף מידע על המדריכים מהטבלה
+  function openBulkDialog() {
+    if (!selectedYear || !selectedMonth) { alert('יש לבחור חודש ושנה'); return; }
+
     const rows = document.querySelectorAll('#reportsTable tbody tr[data-guide-id]');
+    if (rows.length === 0) { alert('אין מדריכים לשליחה'); return; }
+
+    // איסוף מדריכים מהטבלה
     const guides = [];
     rows.forEach(row => {
-      const id = row.dataset.guideId;
-      const name = row.querySelector('a')?.textContent?.trim() || 'לא ידוע';
-      const emailInput = row.querySelector('.guide-email-input');
-      const email = emailInput?.value?.trim() || '';
-      if (id && email) {
-        guides.push({ id, name, email, row });
+      const id = parseInt(row.dataset.guideId);
+      const name = row.querySelector('a')?.textContent?.trim() || '';
+      const email = row.querySelector('.guide-email-input')?.value?.trim() || '';
+      guides.push({ id, name, email, hasEmail: !!email });
+    });
+
+    const withEmail = guides.filter(g => g.hasEmail).length;
+    const withoutEmail = guides.length - withEmail;
+
+    // עדכון הדיאלוג
+    document.getElementById('bulkPeriod').textContent = `${String(selectedMonth).padStart(2, '0')}/${selectedYear}`;
+    document.querySelector('#bulkWithEmail strong').textContent = withEmail;
+    document.querySelector('#bulkWithoutEmail strong').textContent = withoutEmail;
+    document.getElementById('bulkTotalCount').textContent = guides.length;
+    document.getElementById('bulkSendCount').textContent = withEmail;
+
+    // בניית רשימת מדריכים
+    const listEl = document.getElementById('bulkGuideList');
+    listEl.innerHTML = '';
+    guides.forEach(g => {
+      const status = g.hasEmail ? 'pending' : 'skipped';
+      const icon = g.hasEmail ? '⏳' : '⏭️';
+      const reason = g.hasEmail ? '' : 'חסר מייל';
+      listEl.innerHTML += `
+        <div class="bulk-guide-item" data-guide-id="${g.id}">
+          <div class="bulk-guide-icon ${status}">${icon}</div>
+          <span class="bulk-guide-name">${g.name}</span>
+          <span class="bulk-guide-reason">${reason}</span>
+        </div>`;
+    });
+
+    // איפוס מצב
+    document.getElementById('bulkProgressSection').style.display = 'none';
+    document.getElementById('bulkProgressBar').style.width = '0%';
+    document.getElementById('bulkFinalSummary').style.display = 'none';
+    document.getElementById('bulkSendBtn').style.display = '';
+    document.getElementById('bulkSendBtn').disabled = false;
+    document.getElementById('bulkRetryBtn').style.display = 'none';
+    document.getElementById('bulkCancelBtn').textContent = 'ביטול';
+    document.getElementById('bulkPreSend').style.display = 'flex';
+
+    document.getElementById('bulkDialog').style.display = 'flex';
+  }
+
+  function closeBulkDialog() {
+    if (bulkEventSource) {
+      bulkEventSource.close();
+      bulkEventSource = null;
+    }
+    document.getElementById('bulkDialog').style.display = 'none';
+  }
+
+  function startBulkSend() {
+    const sendBtn = document.getElementById('bulkSendBtn');
+    sendBtn.disabled = true;
+    sendBtn.querySelector('#bulkSendBtnText').textContent = 'שולח...';
+
+    document.getElementById('bulkProgressSection').style.display = 'block';
+    document.getElementById('bulkPreSend').style.display = 'none';
+    bulkStartTime = Date.now();
+
+    // SSE connection
+    const url = `/api/send-bulk-stream?year=${selectedYear}&month=${selectedMonth}`;
+    bulkEventSource = new EventSource(url);
+
+    bulkEventSource.addEventListener('start', function(e) {
+      const data = JSON.parse(e.data);
+      currentBatchId = data.batchId;
+    });
+
+    bulkEventSource.addEventListener('sending', function(e) {
+      const data = JSON.parse(e.data);
+      const item = document.querySelector(`.bulk-guide-item[data-guide-id="${data.id}"]`);
+      if (item) {
+        const icon = item.querySelector('.bulk-guide-icon');
+        icon.className = 'bulk-guide-icon sending';
+        icon.textContent = '⏳';
+        item.querySelector('.bulk-guide-reason').textContent = 'שולח...';
+        item.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       }
     });
 
-    if (!selectedYear || !selectedMonth) {
-      alert('יש לבחור חודש ושנה');
-      return;
-    }
+    bulkEventSource.addEventListener('progress', function(e) {
+      const data = JSON.parse(e.data);
+      const pct = Math.round((data.processed / data.total) * 100);
 
-    if (guides.length === 0) {
-      alert('אין מדריכים עם מייל לשליחה');
-      return;
-    }
+      // עדכון פס התקדמות
+      document.getElementById('bulkProgressBar').style.width = pct + '%';
+      document.getElementById('bulkProgressText').textContent = `${pct}% (${data.processed}/${data.total})`;
 
-    const BATCH_SIZE = 5; // שליחה של 5 במקביל
-    const estimatedTime = Math.ceil(guides.length / BATCH_SIZE) * 5; // ~5 שניות לכל batch
-
-    if (!confirm(`לשלוח את הדוחות במייל ל-${guides.length} מדריכים?\n\nשליחה במקביל (${BATCH_SIZE} בכל פעם) - כ-${estimatedTime} שניות`)) {
-      return;
-    }
-
-    // הצגת אזור התקדמות
-    btn.disabled = true;
-    btn.innerText = 'שולח...';
-    progressArea.style.display = 'block';
-    progressBar.style.width = '0%';
-    progressLog.innerHTML = '';
-    progressTitle.textContent = 'שולח מיילים...';
-
-    let successCount = 0;
-    let failedCount = 0;
-    let processedCount = 0;
-    const total = guides.length;
-
-    function addLog(text, isError = false) {
-      const time = new Date().toLocaleTimeString('he-IL');
-      const color = isError ? '#dc3545' : '#28a745';
-      const icon = isError ? '✗' : '✓';
-      progressLog.innerHTML += `<div style="color: ${color};">[${time}] ${icon} ${text}</div>`;
-      progressLog.scrollTop = progressLog.scrollHeight;
-    }
-
-    function updateProgress() {
-      progressCount.textContent = `${processedCount}/${total} (${successCount} הצליחו, ${failedCount} נכשלו)`;
-      progressBar.style.width = `${(processedCount / total) * 100}%`;
-    }
-
-    // פונקציה לשליחת מייל בודד
-    async function sendOne(guide) {
-      const statusSpan = guide.row.querySelector('.status-indicator');
-      if (statusSpan) {
-        statusSpan.className = 'status-indicator sending';
-        statusSpan.textContent = 'שולח...';
-        statusSpan.style.color = '#0d6efd';
+      // הערכת זמן
+      const elapsed = (Date.now() - bulkStartTime) / 1000;
+      const avgPerItem = elapsed / data.processed;
+      const remaining = Math.ceil(avgPerItem * (data.total - data.processed));
+      if (remaining > 60) {
+        document.getElementById('bulkTimeEstimate').textContent = `~${Math.ceil(remaining / 60)} דקות`;
+      } else if (remaining > 0) {
+        document.getElementById('bulkTimeEstimate').textContent = `~${remaining} שניות`;
+      } else {
+        document.getElementById('bulkTimeEstimate').textContent = '';
       }
 
-      try {
-        const response = await fetch(
-          `/api/send-guide-email/${guide.id}?year=${selectedYear}&month=${selectedMonth}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: guide.email })
-          }
-        );
+      // עדכון פריט ברשימה
+      const item = document.querySelector(`.bulk-guide-item[data-guide-id="${data.currentId}"]`);
+      if (item) {
+        const icon = item.querySelector('.bulk-guide-icon');
+        const reason = item.querySelector('.bulk-guide-reason');
+        if (data.status === 'sent') {
+          icon.className = 'bulk-guide-icon sent';
+          icon.textContent = '✓';
+          reason.textContent = '';
+        } else if (data.status === 'skipped') {
+          icon.className = 'bulk-guide-icon skipped';
+          icon.textContent = '⏭️';
+          reason.textContent = data.reason || 'דולג';
+        } else {
+          icon.className = 'bulk-guide-icon failed';
+          icon.textContent = '✗';
+          reason.textContent = data.reason || 'נכשל';
+        }
+      }
 
-        const result = await response.json();
-
-        if (result.success) {
-          successCount++;
-          addLog(`${guide.name} (${guide.email})`, false);
-          if (statusSpan) {
+      // עדכון טבלה בזמן אמת
+      const tableRow = document.querySelector(`#reportsTable tr[data-guide-id="${data.currentId}"]`);
+      if (tableRow) {
+        const statusSpan = tableRow.querySelector('.status-indicator');
+        if (statusSpan) {
+          if (data.status === 'sent') {
             statusSpan.className = 'status-indicator success';
             statusSpan.textContent = '✓ נשלח';
-            statusSpan.style.color = '#28a745';
-          }
-        } else {
-          failedCount++;
-          addLog(`${guide.name} - ${result.error || 'שגיאה'}`, true);
-          if (statusSpan) {
+          } else {
             statusSpan.className = 'status-indicator error';
-            statusSpan.textContent = '✗ נכשל';
-            statusSpan.style.color = '#dc3545';
+            statusSpan.textContent = '✗ ' + (data.reason || 'נכשל');
           }
-        }
-      } catch (error) {
-        failedCount++;
-        addLog(`${guide.name} - שגיאת רשת`, true);
-        if (statusSpan) {
-          statusSpan.className = 'status-indicator error';
-          statusSpan.textContent = '✗ שגיאה';
-          statusSpan.style.color = '#dc3545';
         }
       }
+    });
 
-      processedCount++;
-      updateProgress();
-    }
+    bulkEventSource.addEventListener('complete', function(e) {
+      const data = JSON.parse(e.data);
+      bulkEventSource.close();
+      bulkEventSource = null;
 
-    addLog(`התחלת שליחה ל-${total} מדריכים (${BATCH_SIZE} במקביל)`, false);
+      // הצגת סיכום
+      document.getElementById('bulkProgressBar').style.width = '100%';
+      document.getElementById('bulkProgressText').textContent = '100%';
+      document.getElementById('bulkTimeEstimate').textContent = 'הושלם';
 
-    // שליחה ב-batches במקביל
-    for (let i = 0; i < guides.length; i += BATCH_SIZE) {
-      const batch = guides.slice(i, i + BATCH_SIZE);
-      const batchNum = Math.floor(i / BATCH_SIZE) + 1;
-      const totalBatches = Math.ceil(guides.length / BATCH_SIZE);
+      const sentCount = data.sent.length;
+      const skippedCount = data.skipped.length;
 
-      progressTitle.textContent = `שולח batch ${batchNum}/${totalBatches} (${batch.map(g => g.name).join(', ')})`;
+      document.getElementById('bulkFinalSent').innerHTML = `✅ נשלחו בהצלחה: <strong>${sentCount}</strong>`;
+      document.getElementById('bulkFinalSkipped').innerHTML = `⏭️ דולגו/נכשלו: <strong>${skippedCount}</strong>`;
+      document.getElementById('bulkFinalSummary').style.display = 'flex';
 
-      // שליחה במקביל של כל ה-batch
-      await Promise.all(batch.map(guide => sendOne(guide)));
-    }
+      sendBtn.style.display = 'none';
+      document.getElementById('bulkCancelBtn').textContent = 'סגור';
 
-    // סיום
-    progressTitle.textContent = `סיום: ${successCount} נשלחו, ${failedCount} נכשלו`;
-    progressBar.style.background = failedCount > 0 ? '#ffc107' : '#28a745';
-    addLog(`סה"כ: ${successCount} הצליחו, ${failedCount} נכשלו`, failedCount > 0);
+      // כפתור retry אם יש נכשלים
+      const failedItems = data.skipped.filter(s => s.status === 'failed');
+      if (failedItems.length > 0) {
+        document.getElementById('bulkRetryBtn').style.display = '';
+      }
+    });
 
-    btn.disabled = false;
-    btn.innerText = originalText;
+    bulkEventSource.addEventListener('error', function(e) {
+      const data = e.data ? JSON.parse(e.data) : {};
+      if (bulkEventSource) {
+        bulkEventSource.close();
+        bulkEventSource = null;
+      }
+      alert('שגיאה בשליחה: ' + (data.message || 'חיבור נותק'));
+      sendBtn.disabled = false;
+      sendBtn.querySelector('#bulkSendBtnText').textContent = 'שלח שוב';
+    });
+
+    // טיפול בניתוק EventSource (network error)
+    bulkEventSource.onerror = function() {
+      if (bulkEventSource && bulkEventSource.readyState === EventSource.CLOSED) {
+        // השרת סגר - זה תקין (complete כבר טופל)
+      } else if (bulkEventSource) {
+        bulkEventSource.close();
+        bulkEventSource = null;
+        sendBtn.disabled = false;
+        sendBtn.querySelector('#bulkSendBtnText').textContent = 'שלח שוב';
+      }
+    };
   }
 
-  async function sendAllToSingleEmail() {
-    const btn = document.getElementById('sendToSingleBtn');
-    const emailInput = document.getElementById('singleEmailInput');
-    const email = emailInput.value.trim();
-    const originalText = btn.innerText;
-    const guideIds = getDisplayedGuideIds();
+  async function retryFailed() {
+    if (!currentBatchId) return;
 
-    if (!email) {
-      alert('יש להזין כתובת מייל');
-      emailInput.focus();
-      return;
-    }
-
-    if (!selectedYear || !selectedMonth) {
-      alert('יש לבחור חודש ושנה');
-      return;
-    }
-
-    if (guideIds.length === 0) {
-      alert('אין מדריכים לשליחה');
-      return;
-    }
-
-    if (!confirm(`לשלוח את דוחות ${guideIds.length} המדריכים לכתובת ${email}?`)) {
-      return;
-    }
-
-    btn.disabled = true;
-    btn.innerText = 'שולח...';
+    const retryBtn = document.getElementById('bulkRetryBtn');
+    retryBtn.disabled = true;
+    retryBtn.textContent = '🔄 שולח מחדש...';
 
     try {
-      const response = await fetch(`/api/send-guides-to-single-email?year=${selectedYear}&month=${selectedMonth}`, {
+      const response = await fetch('/api/retry-failed-emails', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email, guide_ids: guideIds })
+        body: JSON.stringify({ batch_id: currentBatchId, year: selectedYear, month: selectedMonth })
       });
-
       const result = await response.json();
-
       if (result.success) {
         alert(result.message);
       } else {
@@ -399,9 +541,57 @@
     } catch (error) {
       alert('שגיאת רשת: ' + error.message);
     } finally {
+      retryBtn.disabled = false;
+      retryBtn.textContent = '🔄 שלח מחדש נכשלים';
+    }
+  }
+
+  // ─── שליחה למייל אחד ──────────────────────────────
+
+  async function sendAllToSingleEmail() {
+    const btn = document.getElementById('sendToSingleBtn');
+    const emailInput = document.getElementById('singleEmailInput');
+    const email = emailInput.value.trim();
+    const originalText = btn.innerText;
+    const guideIds = getDisplayedGuideIds();
+
+    if (!email) { alert('יש להזין כתובת מייל'); emailInput.focus(); return; }
+    if (!selectedYear || !selectedMonth) { alert('יש לבחור חודש ושנה'); return; }
+    if (guideIds.length === 0) { alert('אין מדריכים לשליחה'); return; }
+    if (!confirm(`לשלוח את דוחות ${guideIds.length} המדריכים לכתובת ${email}?`)) return;
+
+    btn.disabled = true;
+    btn.innerText = 'שולח...';
+
+    try {
+      const response = await fetch(`/api/send-guides-to-single-email?year=${selectedYear}&month=${selectedMonth}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, guide_ids: guideIds })
+      });
+      const result = await response.json();
+      alert(result.success ? result.message : 'שגיאה: ' + (result.error || 'שגיאה לא ידועה'));
+    } catch (error) {
+      alert('שגיאת רשת: ' + error.message);
+    } finally {
       btn.disabled = false;
       btn.innerText = originalText;
     }
   }
+
+  // סגירה בלחיצה על הרקע
+  document.addEventListener('click', function(e) {
+    const dialog = document.getElementById('bulkDialog');
+    if (e.target === dialog && !bulkEventSource) {
+      closeBulkDialog();
+    }
+  });
+
+  // מניעת סגירה ב-Escape בזמן שליחה
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && !bulkEventSource) {
+      closeBulkDialog();
+    }
+  });
 </script>
 {% endblock %}

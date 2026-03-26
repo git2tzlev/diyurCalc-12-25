@@ -316,6 +316,104 @@
       border-radius: 8px;
     }
   }
+
+  .monthly-guide-report {
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+    padding: 24px 20px;
+  }
+
+  .monthly-guide-report-header {
+    text-align: center;
+    margin-bottom: 24px;
+  }
+
+  .monthly-guide-report-header h1 {
+    margin: 0 0 10px;
+    color: #1e3a5f;
+    font-size: 28px;
+    font-weight: 700;
+  }
+
+  .monthly-guide-report-meta {
+    font-size: 14px;
+    color: #334155;
+    margin-bottom: 6px;
+  }
+
+  .monthly-guide-report-period {
+    font-size: 13px;
+    color: #64748b;
+  }
+
+  .monthly-guide-report table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 20px;
+  }
+
+  .monthly-guide-report th {
+    background: #f5f5f5;
+    font-weight: 700;
+    padding: 8px 6px;
+    border: 1px solid #ddd;
+    text-align: center;
+    font-size: 11px;
+  }
+
+  .monthly-guide-report td {
+    padding: 6px;
+    border: 1px solid #ddd;
+    text-align: center;
+    font-size: 11px;
+  }
+
+  .monthly-guide-report tbody tr:nth-child(even) {
+    background: #fafafa;
+  }
+
+  .monthly-guide-report .travel-row {
+    background: #e8f5e9 !important;
+  }
+
+  .monthly-guide-report .travel-row td {
+    font-weight: 500;
+  }
+
+  .monthly-guide-report .tagbor-group:not(.tagbor-last) td {
+    border-bottom: none;
+  }
+
+  .monthly-guide-report .summary-table {
+    margin-top: 15px;
+    border: none;
+  }
+
+  .monthly-guide-report .summary-table td {
+    border: none;
+    padding: 8px 15px;
+    font-size: 13px;
+  }
+
+  .monthly-guide-report .summary-label {
+    font-weight: 700;
+    color: #334155;
+  }
+
+  .monthly-guide-report .summary-value {
+    font-weight: 700;
+    color: #1e3a8a;
+  }
+
+  .monthly-guide-report-footer {
+    text-align: center;
+    margin-top: 30px;
+    padding-top: 15px;
+    border-top: 1px solid #e2e8f0;
+    font-size: 11px;
+    color: #64748b;
+  }
 </style>
 <div class="card">
   <div class="header-line">
@@ -348,10 +446,6 @@
       {% endfor %}
     </select>
     <button type="submit">עדכן</button>
-    <a href="/guide/{{ person['id'] }}/shifts?month={{ selected_month }}&year={{ selected_year }}"
-       style="padding: 6px 12px; background: #10b981; color: #fff; border-radius: 6px; text-decoration: none; font-size: 14px;">
-      דוח משמרות
-    </a>
     {% if selected_month and selected_year %}
     <span class="muted">חודש מוצג: {{ "%02d"|format(selected_month) }}/{{ selected_year }}</span>
     {% endif %}
@@ -399,7 +493,7 @@
         </div>
         {% endif %}
         {% endfor %}
-        {% for rate, data in monthly_totals.variable_rates.items() %}
+        {% for rate, data in monthly_totals.get('variable_rates', {}).items() %}
         {% set var_total = (data.calc100 or 0) + (data.calc125 or 0) + (data.calc150 or 0) + (data.calc175 or 0) +
         (data.calc200 or 0) %}
         {% if var_total > 0 %}
@@ -412,210 +506,14 @@
       </div>
     </div>
 
-    <input type="radio" id="tab-shifts" name="tabset" checked>
-    <label for="tab-shifts">משמרות</label>
+    <input type="radio" id="tab-monthly" name="tabset" checked>
+    <label for="tab-monthly">דוח חודשי</label>
     <input type="radio" id="tab-chains" name="tabset">
     <label for="tab-chains">פירוט רצפים</label>
-    <input type="radio" id="tab-monthly" name="tabset">
-    <label for="tab-monthly">סיכום חודשי</label>
     <input type="radio" id="tab-merav" name="tabset">
     <label for="tab-merav">ייצוא שכר</label>
-    <input type="radio" id="tab-simple" name="tabset">
-    <label for="tab-simple">סיכום פשוט</label>
 
     <div class="tab-panels">
-      <section class="panel panel-simple">
-        <h2 style="margin: 0 0 20px; font-size: 20px;">פירוט רכיבי שכר לתשלום</h2>
-        {% set total_standby_payment = simple_summary.standby.payment_total or 0 %}
-
-        <table style="width: 100%; max-width: 700px; font-size: 1.1em;">
-          <thead>
-            <tr>
-              <th>תיאור רכיב</th>
-              <th>כמות</th>
-              <th>תעריף</th>
-              <th>שכר ש"נ</th>
-              <th>סה"כ לתשלום</th>
-            </tr>
-          </thead>
-          <tbody>
-            {# שעות רגילות (100%) #}
-            {% if simple_summary.calc100.hours > 0 %}
-            <tr style="background-color: #f8f9fa;">
-              <td>שעות רגילות (100%)</td>
-              <td>{{ simple_summary.calc100.hours }}</td>
-              <td>{{ simple_summary.calc100.rate }} ₪</td>
-              <td>-</td>
-              <td>{{ simple_summary.calc100.payment }}</td>
-            </tr>
-            {% endif %}
-
-            {# שעות בתעריף משתנה - מפוצל לפי סוג משמרת #}
-            {% for var_shift in simple_summary.variable_shifts %}
-            <tr style="background-color: #e0e7ff;">
-              <td>{{ var_shift.shift_name }} (תעריף משתנה)</td>
-              <td>{{ var_shift.hours }}</td>
-              <td>{{ var_shift.rate }} ₪</td>
-              <td>{{ var_shift.overtime_payment }}</td>
-              <td>{{ var_shift.payment }}</td>
-            </tr>
-            {% endfor %}
-
-            {# שעות נוספות (125%) #}
-            {% if simple_summary.calc125.hours > 0 %}
-            <tr style="background-color: #fff3e0;">
-              <td>שעות נוספות (125%)</td>
-              <td>{{ simple_summary.calc125.hours }}</td>
-              <td>{{ simple_summary.calc125.rate }} ₪</td>
-              <td>-</td>
-              <td>{{ simple_summary.calc125.payment }}</td>
-            </tr>
-            {% endif %}
-
-            {# שעות נוספות (150%) #}
-            {% if simple_summary.calc150_overtime.hours > 0 %}
-            <tr style="background-color: #ffecb3;">
-              <td>שעות נוספות (150%)</td>
-              <td>{{ simple_summary.calc150_overtime.hours }}</td>
-              <td>{{ simple_summary.calc150_overtime.rate }} ₪</td>
-              <td>-</td>
-              <td>{{ simple_summary.calc150_overtime.payment }}</td>
-            </tr>
-            {% endif %}
-
-            {# שעות שבת - בסיס (100%) #}
-            {% if simple_summary.calc150_shabbat_100.hours > 0 %}
-            <tr style="background-color: #e8f5e9;">
-              <td>שעות שבת - בסיס (100%)</td>
-              <td>{{ simple_summary.calc150_shabbat_100.hours }}</td>
-              <td>{{ simple_summary.calc150_shabbat_100.rate }} ₪</td>
-              <td>-</td>
-              <td>{{ simple_summary.calc150_shabbat_100.payment }}</td>
-            </tr>
-            {% endif %}
-
-            {# שעות שבת - תוספת (50%) #}
-            {% if simple_summary.calc150_shabbat_50.hours > 0 %}
-            <tr style="background-color: #c8e6c9;">
-              <td>שעות שבת - תוספת (50%)</td>
-              <td>{{ simple_summary.calc150_shabbat_50.hours }}</td>
-              <td>{{ simple_summary.calc150_shabbat_50.rate }} ₪</td>
-              <td>-</td>
-              <td>{{ simple_summary.calc150_shabbat_50.payment }}</td>
-            </tr>
-            {% endif %}
-
-            {# שעות שבת (175%) #}
-            {% if simple_summary.calc175.hours > 0 %}
-            <tr style="background-color: #a5d6a7;">
-              <td>שעות שבת (175%)</td>
-              <td>{{ simple_summary.calc175.hours }}</td>
-              <td>{{ simple_summary.calc175.rate }} ₪</td>
-              <td>-</td>
-              <td>{{ simple_summary.calc175.payment }}</td>
-            </tr>
-            {% endif %}
-
-            {# שעות שבת (200%) #}
-            {% if simple_summary.calc200.hours > 0 %}
-            <tr style="background-color: #81c784;">
-              <td>שעות שבת (200%)</td>
-              <td>{{ simple_summary.calc200.hours }}</td>
-              <td>{{ simple_summary.calc200.rate }} ₪</td>
-              <td>-</td>
-              <td>{{ simple_summary.calc200.payment }}</td>
-            </tr>
-            {% endif %}
-
-            {# כוננויות #}
-            {% if total_standby_payment > 0 %}
-            <tr style="background-color: #f3e8ff;">
-              <td>כוננויות</td>
-              <td>{{ simple_summary.standby.count }}</td>
-              <td>{{ simple_summary.standby.payment_per }} ₪</td>
-              <td>-</td>
-              <td style="color: #7c3aed;">{{ total_standby_payment }}</td>
-            </tr>
-            {% endif %}
-
-            {# נסיעות #}
-            {% if simple_summary.travel > 0 %}
-            <tr style="background-color: #fef3c7;">
-              <td>נסיעות</td>
-              <td>-</td>
-              <td>-</td>
-              <td>-</td>
-              <td>{{ simple_summary.travel }}</td>
-            </tr>
-            {% endif %}
-
-            {# תומך מקצועי #}
-            {% if simple_summary.professional_support > 0 %}
-            <tr style="background-color: #d1fae5;">
-              <td>תומך מקצועי</td>
-              <td>-</td>
-              <td>-</td>
-              <td>-</td>
-              <td>{{ simple_summary.professional_support }}</td>
-            </tr>
-            {% endif %}
-
-            {# תוספות #}
-            {% if simple_summary.extras > 0 %}
-            <tr style="background-color: #fce7f3;">
-              <td>תוספות</td>
-              <td>-</td>
-              <td>-</td>
-              <td>-</td>
-              <td>{{ simple_summary.extras }}</td>
-            </tr>
-            {% endif %}
-
-            <tr style="font-weight: bold; border-top: 2px solid #333; font-size: 1.2em; background: #dbeafe;">
-              <td>סה"כ לתשלום</td>
-              <td>-</td>
-              <td>-</td>
-              <td>-</td>
-              <td>{{ simple_summary.rounded_total }}</td>
-            </tr>
-          </tbody>
-        </table>
-
-        <div style="margin-top: 20px; font-size: 0.9em; color: #666;">
-          * זהה לייצוא שכר - מה שמופיע בתלוש.
-        </div>
-      </section>
-      <section class="panel panel-shifts">
-        {% if reports %}
-        <table>
-          <thead>
-            <tr>
-              <th>תאריך</th>
-              <th>תחלה</th>
-              <th>סיום</th>
-              <th>סוג משמרת</th>
-              <th>דירה</th>
-              <th>אישור</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for shift in shift_segments %}
-            <tr>
-              <td>{{ shift['report']['date']|human_date }}</td>
-              <td>{{ shift['report']['start_time'] or '-' }}</td>
-              <td>{{ shift['report']['end_time'] or '-' }}</td>
-              <td>{{ shift['display_shift_name'] or shift['report']['shift_name'] or '-' }}</td>
-              <td>{{ shift['report']['apartment_name'] or shift['report']['apartment_id'] or '-' }}</td>
-              <td>{{ 'מאושר' if shift['report']['is_approved'] else 'ממתין' }}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        {% else %}
-        <div class="muted">אין משמרות לחודש זה.</div>
-        {% endif %}
-      </section>
-
       <section class="panel panel-chains">
         <div class="print-header">
           <!-- Single row: Logo on right, Title in center, Meirav code on left -->
@@ -758,6 +656,9 @@
                 {% if chain.break_reason and chain.break_reason != 'כוננות' and chain.break_reason != 'חופשה' %}
                 {% set _ = existing.update({'break_reason': chain.break_reason}) %}
                 {% endif %}
+                {% if chain.asd_night_label and not existing.asd_night_label %}
+                {% set _ = existing.update({'asd_night_label': chain.asd_night_label}) %}
+                {% endif %}
                 {% else %}
                 {# יצירת קבוצה חדשה #}
                 {% set new_group = {
@@ -772,6 +673,9 @@
                 'apartment_type_change_date': chain.apartment_type_change_date,
                 'housing_array_name': chain.housing_array_name,
                 'effective_rate': chain.effective_rate,
+                'display_base_rate': chain.display_base_rate if chain.display_base_rate is defined else chain.effective_rate,
+                'apartment_hourly_supplement_nis': chain.apartment_hourly_supplement_nis if chain.apartment_hourly_supplement_nis is defined else 0,
+                'asd_night_label': chain.asd_night_label if chain.asd_night_label is defined else '',
                 'shift_type': chain.shift_type,
                 'shift_name': chain.shift_name,
                 'type': chain.type,
@@ -807,7 +711,7 @@
                       style="color: #e91e63; font-size: 0.65em; margin-right: 2px;">&#x2764;</span>{% endif %}</td>
                   <td style="font-size: 0.85em; color: #666; white-space: nowrap;">{{ chain.housing_array_name or '-' }}</td>
                   <td style="font-size: 0.85em; color: #666; white-space: nowrap;">{{ (chain.apartment_type_name or '-')|replace('דירה ', '') }}{% if chain.apartment_type_change_date %} <span style="font-size: 0.85em; color: #999;">(מ-{{ chain.apartment_type_change_date }})</span>{% endif %}{% if chain.rate_apartment_type_name and chain.rate_apartment_type_name != chain.apartment_type_name %} <span style="font-size: 0.85em; color: #888;">(משולם: {{ chain.rate_apartment_type_name|replace('דירה ', '') }})</span>{% endif %}</td>
-                  <td style="font-size: 0.85em; color: #666; white-space: nowrap;">{% if chain.type == 'standby' %}-{% else %}{{ "%.2f"|format(chain.effective_rate or 0) }}{% endif %}</td>
+                  <td style="font-size: 0.85em; color: #666; white-space: nowrap;">{% if chain.type == 'standby' %}-{% elif chain.apartment_hourly_supplement_nis is defined and chain.apartment_hourly_supplement_nis > 0 %}<span>{{ "%.2f"|format(chain.effective_rate or 0) }}</span> <span style="color:#888;">+ {{ "%.2f"|format(chain.apartment_hourly_supplement_nis) }}</span>{% elif chain.display_base_rate is defined %}{{ "%.2f"|format(chain.display_base_rate or 0) }}{% else %}{{ "%.2f"|format(chain.effective_rate or 0) }}{% endif %}</td>
                   <td>
                     {% if chain.shift_type %}
                     <strong>{{ chain.shift_type }}</strong>
@@ -865,7 +769,7 @@
                     %}</td>
                   {% endif %}
 
-                  <td>{{ chain.break_reason or '' }}</td>
+                  <td>{% if chain.asd_night_label is defined and chain.asd_night_label %}<span style="color:#374151;font-weight:600;">{{ chain.asd_night_label }}</span>{% if chain.break_reason %} · {% endif %}{% endif %}{{ chain.break_reason or '' }}</td>
                 </tr>
                 {% endfor %}
                 <!-- שורת סיכום יומי -->
@@ -1175,7 +1079,7 @@
         </div>
 
         {# טבלת סיכום שעות בתעריף משתנה #}
-        {% if simple_summary.variable_shifts and simple_summary.variable_shifts|length > 0 %}
+        {% if monthly_report and monthly_report.variable_shifts and monthly_report.variable_shifts|length > 0 %}
         <div style="margin-top: 16px;">
           <div class="day-header"
             style="margin-bottom: 4px; font-size: 12pt; color: #7c3aed; font-weight: bold; border-bottom: 2px solid #7c3aed;">
@@ -1193,7 +1097,7 @@
                 </tr>
               </thead>
               <tbody>
-                {% for var_shift in simple_summary.variable_shifts %}
+                {% for var_shift in monthly_report.variable_shifts %}
                 <tr style="background-color: #faf5ff;">
                   <td style="text-align: right; padding: 6px 8px;">{{ var_shift.shift_name }}</td>
                   <td style="text-align: center; padding: 6px 8px;">{{ var_shift.hours }}</td>
@@ -1203,8 +1107,8 @@
                 </tr>
                 {% endfor %}
                 {# שורת סיכום #}
-                {% set total_var_hours = simple_summary.variable_shifts | sum(attribute='hours') %}
-                {% set total_var_payment = simple_summary.variable_shifts | sum(attribute='payment') %}
+                {% set total_var_hours = monthly_report.variable_shifts | sum(attribute='hours') %}
+                {% set total_var_payment = monthly_report.variable_shifts | sum(attribute='payment') %}
                 <tr style="background-color: #e9d5ff; font-weight: bold; border-top: 2px solid #7c3aed;">
                   <td style="text-align: right; padding: 6px 8px;">סה"כ תעריף משתנה:</td>
                   <td style="text-align: center; padding: 6px 8px;">{{ total_var_hours | round(2) }}</td>
@@ -1225,80 +1129,165 @@
       </section>
 
       <section class="panel panel-monthly">
-        <h2 style="margin: 0 0 20px; font-size: 20px;">סיכום חודשי מרוכז</h2>
-        <div
-          style="margin-bottom: 20px; padding: 15px; background-color: #f8f9fa; border-radius: 8px; border: 1px solid #dee2e6;">
-          <div style="font-size: 16px; font-weight: bold; margin-bottom: 10px;">סה"כ כוננויות חודשי: {{
-            total_standby_count }}</div>
-          {% set total_cancelled = daily_segments | selectattr('cancelled_standbys') |
-          map(attribute='cancelled_standbys') | map('length') | sum %}
-          {% if total_cancelled > 0 %}
-          <div style="font-size: 14px; margin-bottom: 10px; color: #dc2626;">
-            ❌ כוננויות שבוטלו (חפיפה מעל 70%): <strong>{{ total_cancelled }}</strong>
+        <div class="no-print"
+          style="display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; margin-bottom: 20px;">
+          <div>
+            <h2 style="margin: 0 0 6px; font-size: 22px;">דוח חודשי</h2>
+            <div style="font-size: 13px; color: #64748b;">זהה לדוח ה־PDF שנשלח למדריך</div>
+          </div>
+          <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;">
+            <a href="/guide/{{ person['id'] }}/shifts/pdf?month={{ selected_month }}&year={{ selected_year }}"
+              style="padding: 10px 16px; background: #1d4ed8; color: #fff; border-radius: 8px; text-decoration: none; font-weight: 600;">
+              הורד PDF
+            </a>
+            <div style="display: flex; flex-direction: column; gap: 4px;">
+              <label for="monthlyReportEmailInput" style="font-size: 13px; font-weight: 600;">שליחה במייל</label>
+              <input type="email" id="monthlyReportEmailInput" value="{{ person['email'] or '' }}"
+                placeholder="example@mail.com"
+                style="width: 260px; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 14px; direction: ltr; text-align: left;">
+            </div>
+            <button type="button" id="monthlyReportEmailSendBtn" onclick="sendMonthlyReportEmail()"
+              style="padding: 10px 16px; background: #059669; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600;">
+              שלח במייל PDF
+            </button>
+          </div>
+        </div>
+
+        <div id="monthlyReportEmailStatus" class="no-print"
+          style="display:none; padding:10px 12px; border-radius:8px; margin-bottom:16px; font-size:13px;"></div>
+
+        {% if monthly_report %}
+        <div class="monthly-guide-report">
+          <div class="monthly-guide-report-header">
+            <h1>דוח משמרות</h1>
+            <div class="monthly-guide-report-meta">עובד: {{ monthly_report.person['name'] }}</div>
+            <div class="monthly-guide-report-period">תקופה: {{ monthly_report.period_start }} - {{
+              monthly_report.period_end }}</div>
+          </div>
+
+          <table>
+            <thead>
+              <tr>
+                <th>תאריך</th>
+                <th>יום</th>
+                <th>דירה</th>
+                <th>סוג משמרת</th>
+                <th>התחלה</th>
+                <th>סיום</th>
+                <th>עבודה</th>
+                <th>כוננות</th>
+                <th>הערה</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% if not monthly_report.shifts_data and not monthly_report.payments_data %}
+              <tr>
+                <td colspan="9" style="padding: 18px; color: #64748b; font-size: 13px;">
+                  אין משמרות או תשלומים נוספים לחודש זה.
+                </td>
+              </tr>
+              {% endif %}
+
+              {% for shift in monthly_report.shifts_data %}
+              <tr class="{% if shift.tagbor_group %}tagbor-group{% endif %}{% if shift.tagbor_first %} tagbor-first{% endif %}{% if shift.tagbor_last %} tagbor-last{% endif %}">
+                <td>{{ shift.date }}</td>
+                <td>{{ shift.day }}</td>
+                <td>{{ shift.apartment }}</td>
+                <td>{{ shift.shift_type }}</td>
+                <td>{{ shift.start_time }}</td>
+                <td>{{ shift.end_time }}</td>
+                <td>{{ "%.2f"|format(shift.work_hours) }}</td>
+                <td>{{ "%.2f"|format(shift.standby_hours) }}</td>
+                <td>{% if shift.note is defined and shift.note %}<span style="font-weight:600;">{{ shift.note }}</span>{% endif %}</td>
+              </tr>
+              {% endfor %}
+
+              {% for payment in monthly_report.payments_data %}
+              <tr class="travel-row">
+                <td>-</td>
+                <td>-</td>
+                <td>{{ payment.description }}</td>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
+                <td>{{ "%.2f"|format(payment.amount) }} &#8362;</td>
+                <td>-</td>
+                <td></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+
+          <table class="summary-table">
+            <tr>
+              <td>
+                <span class="summary-label">סה"כ שעות עבודה</span><br>
+                <span class="summary-value">{{ "%.2f"|format(monthly_report.total_work_hours) }}</span>
+              </td>
+              <td>
+                <span class="summary-label">סה"כ משמרות כוננות</span><br>
+                <span class="summary-value">{{ monthly_report.standby_count }}</span>
+              </td>
+              {% if monthly_report.total_additions_no_travel and monthly_report.total_additions_no_travel > 0 %}
+              <td>
+                <span class="summary-label">סה"כ תוספות (&#8362;)</span><br>
+                <span class="summary-value">{{ "%.2f"|format(monthly_report.total_additions_no_travel) }}</span>
+              </td>
+              {% endif %}
+              {% if monthly_report.total_salary %}
+              <td>
+                <span class="summary-label">סה"כ לתשלום (&#8362;)</span><br>
+                <span class="summary-value">{{ "%.2f"|format(monthly_report.total_salary) }}</span>
+              </td>
+              {% endif %}
+            </tr>
+          </table>
+
+          {% if monthly_report.variable_shifts and monthly_report.variable_shifts|length > 0 %}
+          <div style="margin-top: 20px; text-align: center;">
+            <h3
+              style="margin: 0 0 10px; font-size: 14px; color: #475569; border-bottom: 2px solid #94a3b8; padding-bottom: 5px; display: inline-block;">
+              פירוט שעות בתעריף משתנה
+            </h3>
+            <table style="max-width: 500px; margin: 0 auto;">
+              <thead>
+                <tr style="background-color: #f1f5f9;">
+                  <th>סוג משמרת</th>
+                  <th>שעות</th>
+                  <th>תעריף</th>
+                  <th>שכר ש"נ</th>
+                  <th>סה"כ</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for var_shift in monthly_report.variable_shifts %}
+                <tr style="background-color: #f8fafc;">
+                  <td style="text-align: right;">{{ var_shift.shift_name }}</td>
+                  <td>{{ var_shift.hours }}</td>
+                  <td>{{ var_shift.rate }} ₪</td>
+                  <td>{{ var_shift.overtime_payment }}</td>
+                  <td style="font-weight: bold;">{{ var_shift.payment }}</td>
+                </tr>
+                {% endfor %}
+                <tr style="background-color: #e2e8f0; font-weight: bold; border-top: 2px solid #94a3b8;">
+                  <td style="text-align: right;">סה"כ תעריף משתנה:</td>
+                  <td>{{ monthly_report.variable_shifts | sum(attribute='hours') | round(2) }}</td>
+                  <td>-</td>
+                  <td>-</td>
+                  <td>{{ monthly_report.variable_rate_total }}</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
           {% endif %}
-          <div style="font-size: 16px; font-weight: bold; margin-bottom: 10px; color: #6c757d;">תשלום כוננויות: {{
-            (monthly_totals.standby_payment or 0) | format_currency }} ₪</div>
-          <div style="font-size: 16px; font-weight: bold; color: #1f6feb;">סה"כ לתשלום (עבודה בלבד): {{
-            (monthly_totals.payment or 0) | format_currency }} ₪</div>
+
+          <div class="monthly-guide-report-footer">
+            הופק ע"י מערכת DiyurClock<br>
+            {{ monthly_report.generation_time }}
+          </div>
         </div>
-        {% if daily_segments or (monthly_totals.total_payment or 0) > 0 %}
-        <table>
-          <thead>
-            <tr>
-              <th>תאריך</th>
-              <th>יום</th>
-              <th>סה"כ שעות</th>
-              <th>כוננות</th>
-              <th>סה"כ לתשלום</th>
-              <th>100%</th>
-              <th>125%</th>
-              <th>150%</th>
-              <th>175%</th>
-              <th>200%</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for day in daily_segments %}
-            <tr>
-              <td>{{ day.day }}</td>
-              <td>{{ day.day_name }}</td>
-              <td>{{ (day.total_minutes_no_standby | float / 60) | round(2) }}</td>
-              <td
-                class="{% if day.standby_payment and day.standby_payment > 0 %}cell-standby-active{% elif day.cancelled_standbys and day.cancelled_standbys|length > 0 %}cell-standby-cancelled{% endif %}">
-                {% if day.standby_payment and day.standby_payment > 0 %}
-                {{ "%.2f"|format(day.standby_payment) }}
-                {% elif day.cancelled_standbys and day.cancelled_standbys|length > 0 %}
-                <span title="כוננות בוטלה עקב חפיפה מעל 70% עם עבודה" style="cursor: help;">
-                  ❌ בוטל ({{ day.cancelled_standbys|length }})
-                </span>
-                {% else %}
-                -
-                {% endif %}
-              </td>
-              <td>{{ "%.2f"|format(day.payment or 0) }}</td>
-              <td>{{ (day.calc100 | float / 60) | round(2) }}</td>
-              <td>{{ (day.calc125 | float / 60) | round(2) }}</td>
-              <td>{{ (day.calc150 | float / 60) | round(2) }}</td>
-              <td>{{ (day.calc175 | float / 60) | round(2) }}</td>
-              <td>{{ (day.calc200 | float / 60) | round(2) }}</td>
-            </tr>
-            {% endfor %}
-            <tr style="background-color: #e7f5ff; font-weight: bold; border-top: 2px solid #bce3ff;">
-              <td colspan="2">סה"כ כללי</td>
-              <td>{{ (monthly_totals.total_hours | float / 60) | round(2) }}</td>
-              <td style="background-color: #dbeafe;">{{ (monthly_totals.standby_payment or 0) | format_currency }}</td>
-              <td>{{ "%.2f"|format(monthly_totals.payment or 0) }}</td>
-              <td>{{ (monthly_totals.calc100 | float / 60) | round(2) }}</td>
-              <td>{{ (monthly_totals.calc125 | float / 60) | round(2) }}</td>
-              <td>{{ (monthly_totals.calc150 | float / 60) | round(2) }}</td>
-              <td>{{ (monthly_totals.calc175 | float / 60) | round(2) }}</td>
-              <td>{{ (monthly_totals.calc200 | float / 60) | round(2) }}</td>
-            </tr>
-          </tbody>
-        </table>
         {% else %}
-        <div class="muted">אין נתונים לחודש הנבחר.</div>
+        <div class="muted">לא ניתן לטעון את הדוח החודשי.</div>
         {% endif %}
       </section>
 
@@ -1781,6 +1770,57 @@
       try {
         newWin.opener = null;
       } catch (e) { }
+    }
+  }
+
+  async function sendMonthlyReportEmail() {
+    const emailInput = document.getElementById('monthlyReportEmailInput');
+    const statusDiv = document.getElementById('monthlyReportEmailStatus');
+    const sendBtn = document.getElementById('monthlyReportEmailSendBtn');
+    const email = emailInput.value.trim();
+
+    if (!email) {
+      statusDiv.style.display = 'block';
+      statusDiv.style.background = '#fef2f2';
+      statusDiv.style.color = '#991b1b';
+      statusDiv.textContent = 'יש להזין כתובת מייל';
+      return;
+    }
+
+    sendBtn.disabled = true;
+    sendBtn.textContent = 'שולח...';
+    statusDiv.style.display = 'block';
+    statusDiv.style.background = '#eff6ff';
+    statusDiv.style.color = '#1e40af';
+    statusDiv.textContent = 'יוצר PDF ושולח מייל...';
+
+    try {
+      const personId = {{ person['id'] }};
+      const month = {{ selected_month }};
+      const year = {{ selected_year }};
+      const response = await fetch(`/api/send-shifts-email/${personId}?year=${year}&month=${month}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email })
+      });
+      const data = await response.json();
+
+      if (data.success) {
+        statusDiv.style.background = '#f0fdf4';
+        statusDiv.style.color = '#166534';
+        statusDiv.textContent = data.message || 'המייל נשלח בהצלחה!';
+      } else {
+        statusDiv.style.background = '#fef2f2';
+        statusDiv.style.color = '#991b1b';
+        statusDiv.textContent = data.error || 'שגיאה בשליחת המייל';
+      }
+    } catch (err) {
+      statusDiv.style.background = '#fef2f2';
+      statusDiv.style.color = '#991b1b';
+      statusDiv.textContent = 'שגיאת תקשורת: ' + err.message;
+    } finally {
+      sendBtn.disabled = false;
+      sendBtn.textContent = 'שלח במייל PDF';
     }
   }
 

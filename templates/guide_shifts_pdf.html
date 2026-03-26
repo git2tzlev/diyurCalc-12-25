@@ -123,6 +123,7 @@
         <th>סיום</th>
         <th>עבודה</th>
         <th>כוננות</th>
+        <th>הערה</th>
       </tr>
     </thead>
     <tbody>
@@ -136,6 +137,7 @@
         <td>{{ shift.end_time }}</td>
         <td>{{ "%.2f"|format(shift.work_hours) }}</td>
         <td>{{ "%.2f"|format(shift.standby_hours) }}</td>
+        <td>{% if shift.note is defined and shift.note %}<span style="font-weight:600;">{{ shift.note }}</span>{% endif %}</td>
       </tr>
       {% endfor %}
 
@@ -149,6 +151,7 @@
         <td>-</td>
         <td>{{ "%.2f"|format(payment.amount) }} &#8362;</td>
         <td>-</td>
+        <td></td>
       </tr>
       {% endfor %}
     </tbody>
