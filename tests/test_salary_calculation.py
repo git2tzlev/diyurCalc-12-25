@@ -2663,6 +2663,67 @@ class TestSickVacationEdgeCases2(unittest.TestCase):
         self.assertEqual(get_sick_payment_rate(1), 0.0)
         self.assertEqual(get_sick_payment_rate(2), 0.5)
 
+    def test_edge7b_sick_day_sequence_crosses_month(self):
+        """מקרה קצה 7b: רצף מחלה חוצה חודשים - הספירה ממשיכה."""
+        from core.sick_days import _identify_sick_day_sequences, get_sick_payment_rate
+        from datetime import date
+        # דיווחי החודש הנוכחי (פברואר)
+        reports = [
+            {"date": date(2026, 2, 1), "shift_name": "יום מחלה"},
+            {"date": date(2026, 2, 2), "shift_name": "יום מחלה"},
+        ]
+        # ימי מחלה מסוף ינואר (חודש קודם)
+        prev_month_sick_dates = [date(2026, 1, 30), date(2026, 1, 31)]
+        seq = _identify_sick_day_sequences(reports, prev_month_sick_dates)
+        # ינואר 30=יום 1, ינואר 31=יום 2, פברואר 1=יום 3, פברואר 2=יום 4
+        self.assertEqual(seq[date(2026, 2, 1)], 3)  # 50%
+        self.assertEqual(seq[date(2026, 2, 2)], 4)  # 100%
+        self.assertEqual(get_sick_payment_rate(3), 0.5)
+        self.assertEqual(get_sick_payment_rate(4), 1.0)
+
+    def test_edge7c_sick_day_sequence_crosses_year(self):
+        """מקרה קצה 7c: רצף מחלה חוצה שנה - הספירה ממשיכה."""
+        from core.sick_days import _identify_sick_day_sequences, get_sick_payment_rate
+        from datetime import date
+        # דיווחי ינואר 2027
+        reports = [
+            {"date": date(2027, 1, 1), "shift_name": "יום מחלה"},
+            {"date": date(2027, 1, 2), "shift_name": "יום מחלה"},
+        ]
+        # ימי מחלה מסוף דצמבר 2026
+        prev_month_sick_dates = [date(2026, 12, 30), date(2026, 12, 31)]
+        seq = _identify_sick_day_sequences(reports, prev_month_sick_dates)
+        # דצמבר 30=יום 1, דצמבר 31=יום 2, ינואר 1=יום 3, ינואר 2=יום 4
+        self.assertEqual(seq[date(2027, 1, 1)], 3)
+        self.assertEqual(seq[date(2027, 1, 2)], 4)
+
+    def test_edge7d_sick_day_no_continuity_with_gap(self):
+        """מקרה קצה 7d: הפסקה בין חודש קודם לנוכחי - רצף חדש."""
+        from core.sick_days import _identify_sick_day_sequences
+        from datetime import date
+        reports = [
+            {"date": date(2026, 2, 2), "shift_name": "יום מחלה"},
+            {"date": date(2026, 2, 3), "shift_name": "יום מחלה"},
+        ]
+        # מחלה ב-29 בינואר (הפסקה של 3 ימים עד 2 בפברואר)
+        prev_month_sick_dates = [date(2026, 1, 29)]
+        seq = _identify_sick_day_sequences(reports, prev_month_sick_dates)
+        # הפסקה, רצף חדש
+        self.assertEqual(seq[date(2026, 2, 2)], 1)
+        self.assertEqual(seq[date(2026, 2, 3)], 2)
+
+    def test_edge7e_sick_day_no_prev_month(self):
+        """מקרה קצה 7e: אין מחלה בחודש קודם - התנהגות רגילה."""
+        from core.sick_days import _identify_sick_day_sequences
+        from datetime import date
+        reports = [
+            {"date": date(2026, 2, 1), "shift_name": "יום מחלה"},
+            {"date": date(2026, 2, 2), "shift_name": "יום מחלה"},
+        ]
+        seq = _identify_sick_day_sequences(reports, [])
+        self.assertEqual(seq[date(2026, 2, 1)], 1)
+        self.assertEqual(seq[date(2026, 2, 2)], 2)
+
     def test_edge8_vacation_always_100_percent(self):
         """מקרה קצה 8: חופשה תמיד 100% תשלום (לא מדורגת כמו מחלה)."""
         from app_utils import _build_sick_vacation_segments

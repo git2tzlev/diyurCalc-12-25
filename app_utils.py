@@ -841,6 +841,35 @@ def get_effective_hourly_rate(
     return minimum_wage + supplement
 
 
+def _fetch_prev_month_sick_dates(conn, person_id: int, year: int, month: int) -> list[date]:
+    """
+    שליפת תאריכי מחלה מהחודש הקודם לצורך המשכיות רצף חוצה חודשים.
+
+    Args:
+        conn: חיבור DB
+        person_id: מזהה עובד
+        year: שנה של החודש הנוכחי
+        month: חודש נוכחי
+
+    Returns:
+        רשימת תאריכים עם דיווחי מחלה מהחודש הקודם
+    """
+    if month == 1:
+        prev_year, prev_month = year - 1, 12
+    else:
+        prev_year, prev_month = year, month - 1
+    prev_start, prev_end = month_range_ts(prev_year, prev_month)
+    rows = conn.execute("""
+        SELECT DISTINCT tr.date
+        FROM time_reports tr
+        JOIN shift_types st ON st.id = tr.shift_type_id
+        WHERE tr.person_id = %s AND tr.date >= %s AND tr.date < %s
+          AND st.name LIKE %s
+        ORDER BY tr.date
+    """, (person_id, prev_start.date(), prev_end.date(), "%מחלה%")).fetchall()
+    return [r["date"] if isinstance(r["date"], date) else r["date"].date() for r in rows]
+
+
 def _calculate_previous_month_carryover(conn, person_id: int, year: int, month: int, minimum_wage: float = 0) -> tuple[int, int, int | None, int, int | None]:
     """
     חישוב carryover מהחודש הקודם - חיפוש איטרטיבי אחורה עד שבירת רצף.
@@ -1416,8 +1445,9 @@ def get_daily_segments_data(
 
     reports = processed_reports
 
-    # זיהוי רצפי ימי מחלה לחישוב אחוזי תשלום מדורגים
-    sick_day_sequence = _identify_sick_day_sequences(reports)
+    # זיהוי רצפי ימי מחלה לחישוב אחוזי תשלום מדורגים (כולל המשכיות מחודש קודם)
+    prev_month_sick_dates = _fetch_prev_month_sick_dates(conn, person_id, year, month)
+    sick_day_sequence = _identify_sick_day_sequences(reports, prev_month_sick_dates)
 
     # Build a map of (shift_type_id, housing_array_id) -> {"weekday": rate, "shabbat": rate}
     # This allows using custom rates for different housing arrays
