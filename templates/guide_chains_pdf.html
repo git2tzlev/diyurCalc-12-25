@@ -173,7 +173,7 @@
   {% for day in daily_segments %}
   {% if day.chains and day.chains|length > 0 %}
   <div class="day-section">
-    <div class="day-header">{{ day.day }} ({{ day.day_name }}, {{ day.hebrew_date }})</div>
+    <div class="day-header">{% if day.is_completion_section %}{{ day.section_title }}{% else %}{{ day.day }} ({{ day.day_name }}, {{ day.hebrew_date }}){% endif %}</div>
     <table>
       <thead>
         <tr>
@@ -218,7 +218,7 @@
         {% else %}
         {% set rate_key = '100' %}
         {% endif %}
-        {% set group_key = (chain.apartment_name or '-') ~ '|' ~ rate_key ~ '|' ~ (chain.shift_name or '-') %}
+        {% set group_key = (chain.apartment_name or '-') ~ '|' ~ rate_key ~ '|' ~ (chain.shift_name or '-') ~ '|' ~ (chain.display_group_token or '') %}
 
         {% set can_merge = false %}
         {% if ns.merged_chains|length > 0 %}

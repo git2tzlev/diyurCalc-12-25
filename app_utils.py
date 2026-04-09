@@ -870,6 +870,51 @@ def _fetch_prev_month_sick_dates(conn, person_id: int, year: int, month: int) ->
     return [r["date"] if isinstance(r["date"], date) else r["date"].date() for r in rows]
 
 
+def _filter_previous_month_carryover_reports(all_reports: list[dict[str, Any]], person_id: int) -> list[dict[str, Any]]:
+    """
+    מסנן דיווחים לחישוב carryover מחודש קודם.
+
+    דיווחי מחלה/חופשה ללא שעות אינם חלק מרצף עבודה, אבל כן שוברים אותו.
+    לכן שומרים רק דיווחים מתוזמנים שמופיעים אחרי יום השבירה האחרון.
+    """
+    filtered_reports: list[dict[str, Any]] = []
+    latest_break_date: date | None = None
+
+    for report in all_reports:
+        report_start = report.get("start_time")
+        report_end = report.get("end_time")
+        report_date = report["date"]
+        if isinstance(report_date, datetime):
+            report_date = report_date.date()
+
+        if report_start and report_end:
+            filtered_reports.append(report)
+            continue
+
+        shift_name = (report.get("shift_name") or "").strip()
+        if "מחלה" in shift_name or "חופשה" in shift_name:
+            if latest_break_date is None or report_date > latest_break_date:
+                latest_break_date = report_date
+            continue
+
+        logger.warning(
+            "Skipping previous-month carryover report with missing times for person_id=%s on %s (shift_id=%s, shift_name=%s)",
+            person_id,
+            report_date,
+            report.get("shift_type_id"),
+            shift_name or "?",
+        )
+
+    if latest_break_date is None:
+        return filtered_reports
+
+    return [
+        report
+        for report in filtered_reports
+        if (report["date"].date() if isinstance(report["date"], datetime) else report["date"]) > latest_break_date
+    ]
+
+
 def _calculate_previous_month_carryover(conn, person_id: int, year: int, month: int, minimum_wage: float = 0) -> tuple[int, int, int | None, int, int | None]:
     """
     חישוב carryover מהחודש הקודם - חיפוש איטרטיבי אחורה עד שבירת רצף.
@@ -957,6 +1002,7 @@ def _calculate_previous_month_carryover(conn, person_id: int, year: int, month: 
     if housing_filter is not None:
         cursor.execute("""
             SELECT tr.date, tr.start_time, tr.end_time, tr.shift_type_id, tr.apartment_id,
+                   st.name AS shift_name,
                    ap.housing_array_id, at.hourly_wage_supplement, p.is_married
             FROM time_reports tr
             LEFT JOIN shift_types st ON st.id = tr.shift_type_id
@@ -970,6 +1016,7 @@ def _calculate_previous_month_carryover(conn, person_id: int, year: int, month: 
     else:
         cursor.execute("""
             SELECT tr.date, tr.start_time, tr.end_time, tr.shift_type_id, tr.apartment_id,
+                   st.name AS shift_name,
                    ap.housing_array_id, at.hourly_wage_supplement, p.is_married
             FROM time_reports tr
             LEFT JOIN shift_types st ON st.id = tr.shift_type_id
@@ -980,6 +1027,7 @@ def _calculate_previous_month_carryover(conn, person_id: int, year: int, month: 
             ORDER BY tr.date, tr.start_time
         """, (person_id, earliest_date, last_day_date))
     all_reports = cursor.fetchall()
+    all_reports = _filter_previous_month_carryover_reports(all_reports, person_id)
 
     if not all_reports:
         cursor.close()
@@ -2244,9 +2292,9 @@ def get_daily_segments_data(
                 # Include apt_city for Purim standby rate calculation
                 standby_segments.append((s_start, s_end, seg_id, apt_type, married, actual_date, sid, actual_apt_type, standby_defined_end, apt_city))
             elif s_type == "vacation":
-                vacation_segments.append((s_start, s_end, actual_date))
+                vacation_segments.append((s_start, s_end, actual_date, apt_name, apt_type_name, ha_name, rate_apt_type_name))
             elif s_type == "sick":
-                sick_segments.append((s_start, s_end, actual_date))
+                sick_segments.append((s_start, s_end, actual_date, apt_name, apt_type_name, ha_name, rate_apt_type_name))
             else:
                 work_segments.append((s_start, s_end, label, sid, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date, apt_city))
                 
@@ -2431,7 +2479,7 @@ def get_daily_segments_data(
         # עיבוד חופשה/מחלה/כוננויות רק אם זה יום קבוע לגמרי (אין משמרות עבודה)
         if is_fully_fixed:
             # עיבוד סגמנטי חופשה
-            for s, e, actual_date in vacation_segments:
+            for s, e, actual_date, v_apt_name, v_apt_type_name, v_ha_name, v_rate_apt_type_name in vacation_segments:
                 duration = e - s
                 pay = _mul_pay(round(duration / 60, 2), round(minimum_wage, 2))  # חופשה = שעות ותעריף מעוגלים (שיטת מירב)
                 d_calc100 += duration
@@ -2448,10 +2496,10 @@ def get_daily_segments_data(
                     "calc100": duration,
                     "calc125": 0, "calc150": 0, "calc175": 0, "calc200": 0,
                     "type": "vacation",
-                    "apartment_name": "",
-                    "apartment_type_name": "",
-                    "rate_apartment_type_name": "",
-                    "housing_array_name": "",
+                    "apartment_name": v_apt_name or "",
+                    "apartment_type_name": v_apt_type_name or "",
+                    "rate_apartment_type_name": v_rate_apt_type_name or "",
+                    "housing_array_name": v_ha_name or "",
                     "shift_name": "חופשה",
                     "shift_type": "חופשה",
                     "segments": [(start_str, end_str, "חופשה")],
@@ -2461,7 +2509,7 @@ def get_daily_segments_data(
                 })
 
             # עיבוד סגמנטי מחלה - עם אחוזי תשלום מדורגים לפי חוק דמי מחלה
-            for s, e, actual_date in sick_segments:
+            for s, e, actual_date, sk_apt_name, sk_apt_type_name, sk_ha_name, sk_rate_apt_type_name in sick_segments:
                 duration = e - s
 
                 # קביעת מספר יום המחלה ברצף ואחוז התשלום
@@ -2485,10 +2533,10 @@ def get_daily_segments_data(
                     "calc100": duration,
                     "calc125": 0, "calc150": 0, "calc175": 0, "calc200": 0,
                     "type": "sick",
-                    "apartment_name": "",
-                    "apartment_type_name": "",
-                    "rate_apartment_type_name": "",
-                    "housing_array_name": "",
+                    "apartment_name": sk_apt_name or "",
+                    "apartment_type_name": sk_apt_type_name or "",
+                    "rate_apartment_type_name": sk_rate_apt_type_name or "",
+                    "housing_array_name": sk_ha_name or "",
                     "shift_name": "מחלה",
                     "shift_type": "מחלה",
                     "segments": [(start_str, end_str, "מחלה")],
@@ -2634,10 +2682,10 @@ def get_daily_segments_data(
             all_events.append({"start": s, "end": e, "type": "work", "label": l, "shift_id": sid, "apartment_name": apt_name or "", "apartment_type_id": actual_apt_type, "rate_apt_type": rate_apt_type, "actual_date": actual_date or day_date, "housing_array_id": housing_array_id, "apartment_type_name": apt_type_name or "", "housing_array_name": ha_name or "", "rate_apt_type_name": rate_apt_type_name or "", "apt_type_change_date": apt_type_change_date or ""})
         for s, e, seg_id, apt, married, actual_date, _shift_type_id, actual_apt_type, _standby_defined_end, sb_apt_city in standby_segments:
             all_events.append({"start": s, "end": e, "type": "standby", "label": "כוננות", "seg_id": seg_id, "apt": apt, "actual_apt_type": actual_apt_type, "married": married, "actual_date": actual_date or day_date, "apt_city": sb_apt_city or ""})
-        for s, e, actual_date in vacation_segments:
-            all_events.append({"start": s, "end": e, "type": "vacation", "label": "חופשה", "actual_date": actual_date or day_date})
-        for s, e, actual_date in sick_segments:
-            all_events.append({"start": s, "end": e, "type": "sick", "label": "מחלה", "actual_date": actual_date or day_date})
+        for s, e, actual_date, v_apt_name, v_apt_type_name, v_ha_name, v_rate_apt_type_name in vacation_segments:
+            all_events.append({"start": s, "end": e, "type": "vacation", "label": "חופשה", "actual_date": actual_date or day_date, "apartment_name": v_apt_name or "", "apartment_type_name": v_apt_type_name or "", "housing_array_name": v_ha_name or "", "rate_apt_type_name": v_rate_apt_type_name or ""})
+        for s, e, actual_date, sk_apt_name, sk_apt_type_name, sk_ha_name, sk_rate_apt_type_name in sick_segments:
+            all_events.append({"start": s, "end": e, "type": "sick", "label": "מחלה", "actual_date": actual_date or day_date, "apartment_name": sk_apt_name or "", "apartment_type_name": sk_apt_type_name or "", "housing_array_name": sk_ha_name or "", "rate_apt_type_name": sk_rate_apt_type_name or ""})
 
         all_events.sort(key=lambda x: x["start"])
 
@@ -3288,11 +3336,11 @@ def get_daily_segments_data(
                         "payment": pay,
                         "calc100": duration, "calc125": 0, "calc150": 0, "calc175": 0, "calc200": 0,
                         "type": etype,  # "vacation" או "sick"
-                        "apartment_name": "",
+                        "apartment_name": event.get("apartment_name", ""),
                         "apartment_type_id": None,
-                        "apartment_type_name": "",
-                        "rate_apartment_type_name": "",
-                        "housing_array_name": "",
+                        "apartment_type_name": event.get("apartment_type_name", ""),
+                        "rate_apartment_type_name": event.get("rate_apt_type_name", ""),
+                        "housing_array_name": event.get("housing_array_name", ""),
                         "shift_name": label,
                         "shift_type": label,
                         "segments": [(f"{start // 60 % 24:02d}:{start % 60:02d}", f"{end // 60 % 24:02d}:{end % 60:02d}", label)],

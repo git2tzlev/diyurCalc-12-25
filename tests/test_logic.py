@@ -3,7 +3,7 @@ Unit tests for logic module - testing critical calculation functions.
 """
 
 import unittest
-from datetime import datetime
+from datetime import datetime, date
 from unittest.mock import Mock, patch, MagicMock
 import sys
 import os
@@ -11,7 +11,11 @@ import os
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from app_utils import calculate_wage_rate, get_effective_hourly_rate
+from app_utils import (
+    calculate_wage_rate,
+    get_effective_hourly_rate,
+    _filter_previous_month_carryover_reports,
+)
 from core.sick_days import get_sick_payment_rate
 from core.time_utils import (
     minutes_to_time_str,
@@ -279,6 +283,64 @@ class TestEffectiveHourlyRate(unittest.TestCase):
         self.assertEqual(get_effective_hourly_rate(report, minimum_wage, False, housing_rates_cache), 32.30)
 
 
+class TestPreviousMonthCarryoverFiltering(unittest.TestCase):
+    """בדיקות סינון דיווחים לחישוב carryover מחודש קודם."""
+
+    def test_sick_day_without_times_breaks_previous_chain(self):
+        """יום מחלה בלי שעות חותך את ה-carryover הישן."""
+        reports = [
+            {
+                "date": date(2026, 2, 21),
+                "start_time": "22:00",
+                "end_time": "08:00",
+                "shift_type_id": 101,
+                "shift_name": "לילה",
+            },
+            {
+                "date": date(2026, 2, 22),
+                "start_time": None,
+                "end_time": None,
+                "shift_type_id": 143,
+                "shift_name": "יום מחלה",
+            },
+        ]
+
+        filtered = _filter_previous_month_carryover_reports(reports, person_id=200)
+
+        self.assertEqual(filtered, [])
+
+    def test_reports_after_sick_break_are_kept(self):
+        """אחרי יום מחלה, הרצף החדש עדיין יכול להיספר."""
+        reports = [
+            {
+                "date": date(2026, 2, 25),
+                "start_time": "22:00",
+                "end_time": "08:00",
+                "shift_type_id": 101,
+                "shift_name": "לילה",
+            },
+            {
+                "date": date(2026, 2, 26),
+                "start_time": None,
+                "end_time": None,
+                "shift_type_id": 143,
+                "shift_name": "יום מחלה",
+            },
+            {
+                "date": date(2026, 2, 28),
+                "start_time": "22:00",
+                "end_time": "08:00",
+                "shift_type_id": 101,
+                "shift_name": "לילה",
+            },
+        ]
+
+        filtered = _filter_previous_month_carryover_reports(reports, person_id=200)
+
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0]["date"], date(2026, 2, 28))
+
+
     # def test_overlap_percentage(self):
     #     """Test calculating overlap percentage."""
     #     # Full overlap
@@ -342,6 +404,7 @@ def run_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestOverlapCalculations))
     suite.addTests(loader.loadTestsFromTestCase(TestSickPaymentRate))
     suite.addTests(loader.loadTestsFromTestCase(TestEffectiveHourlyRate))
+    suite.addTests(loader.loadTestsFromTestCase(TestPreviousMonthCarryoverFiltering))
     # suite.addTests(loader.loadTestsFromTestCase(TestValidation))
 
     # Run tests

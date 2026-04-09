@@ -4,7 +4,7 @@
 מדריך קבוע שעבד בחודש של החג ולא עבד בחג עצמו זכאי לתשלום חג.
 - מדריך קבוע אחד בדירה → משמרת חול שלמה
 - 2+ מדריכים קבועים בדירה → כל אחד חוץ מזה שעבד בחג → חצי משמרת חול
-- שעות משמרת חול = סכום דקות work מסגמנטים של shift_type_id=103
+- שעות משמרת חול = לפי shift_time_overrides של הדירה (מ-02/2026), fallback לסגמנטים של 103
 """
 
 import logging
@@ -22,7 +22,7 @@ from core.time_utils import span_minutes
 
 logger = logging.getLogger(__name__)
 
-# Cache for weekday shift work minutes (loaded once per process)
+# Cache for global weekday shift work minutes (fallback when no override)
 _weekday_shift_work_minutes_cache: int | None = None
 
 
@@ -54,6 +54,50 @@ def _get_weekday_shift_work_minutes(conn) -> int:
 
     _weekday_shift_work_minutes_cache = total if total > 0 else 480
     return _weekday_shift_work_minutes_cache
+
+
+def _get_apartment_work_minutes(
+    conn, year: int, month: int, apartment_ids: Set[int],
+    apartment_housing_map: Dict[int, int | None],
+) -> Dict[int, int]:
+    """
+    חישוב דקות עבודה לכל דירה — לפי override ספציפי או fallback גלובלי.
+
+    מ-02/2026: שימוש ב-shift_time_overrides (דירה > מערך דיור > גלובלי).
+    לפני כן: ערך גלובלי לכולם.
+
+    Returns:
+        {apartment_id: work_minutes}
+    """
+    global_minutes = _get_weekday_shift_work_minutes(conn)
+
+    if (year, month) < (2026, 2):
+        return {apt_id: global_minutes for apt_id in apartment_ids}
+
+    from app_utils import _fetch_weekday_overrides, _build_sick_vacation_segments
+
+    apt_overrides, ha_defaults = _fetch_weekday_overrides(conn)
+
+    result: Dict[int, int] = {}
+    for apt_id in apartment_ids:
+        # עדיפות: דירה ספציפית > מערך דיור > גלובלי
+        override = apt_overrides.get(apt_id)
+        if override is None:
+            ha_id = apartment_housing_map.get(apt_id)
+            if ha_id:
+                override = ha_defaults.get(ha_id)
+
+        if override:
+            segs = _build_sick_vacation_segments(override[0], override[1])
+            total = 0
+            for s in segs:
+                s_min, e_min = span_minutes(s["start_time"], s["end_time"])
+                total += e_min - s_min
+            result[apt_id] = total if total > 0 else global_minutes
+        else:
+            result[apt_id] = global_minutes
+
+    return result
 
 
 def get_holiday_dates_in_month(
@@ -108,10 +152,6 @@ def calculate_holiday_payments(
     if not holiday_dates:
         return {}
 
-    shift_work_minutes = _get_weekday_shift_work_minutes(conn)
-    full_shift_pay = round(shift_work_minutes / 60, 2) * round(minimum_wage, 2)
-    half_shift_pay = round(shift_work_minutes / 2 / 60, 2) * round(minimum_wage, 2)
-
     # שליפת דיווחים ונתוני מדריכים אם לא סופקו
     if all_reports is None or person_types is None:
         all_reports, person_types = _load_reports_and_types(
@@ -123,6 +163,8 @@ def calculate_holiday_payments(
     apt_permanent_guides: Dict[int, Set[int]] = {}
     # {(apartment_id, holiday_date): set of person_ids who worked that day}
     apt_holiday_workers: Dict[Tuple[int, date], Set[int]] = {}
+    # מיפוי דירה -> מערך דיור (לצורך overrides)
+    apartment_housing_map: Dict[int, int | None] = {}
 
     holiday_dates_set = set(holiday_dates)
 
@@ -138,6 +180,11 @@ def calculate_holiday_payments(
         if hasattr(report_date, "date"):
             report_date = report_date.date()
 
+        # מיפוי דירה -> מערך דיור
+        ha_id = r.get("housing_array_id")
+        if apartment_id not in apartment_housing_map and ha_id:
+            apartment_housing_map[apartment_id] = ha_id
+
         # רק מדריכים קבועים
         if person_types.get(person_id) != PERMANENT_EMPLOYEE_TYPE:
             continue
@@ -150,6 +197,15 @@ def calculate_holiday_payments(
             key = (apartment_id, report_date)
             apt_holiday_workers.setdefault(key, set()).add(person_id)
 
+    if not apt_permanent_guides:
+        return {}
+
+    # חישוב דקות עבודה לכל דירה (לפי override / fallback גלובלי)
+    all_apt_ids = set(apt_permanent_guides.keys())
+    apt_work_minutes = _get_apartment_work_minutes(
+        conn, year, month, all_apt_ids, apartment_housing_map
+    )
+
     # חישוב תשלום חג
     result: Dict[int, dict] = {}
 
@@ -157,6 +213,10 @@ def calculate_holiday_payments(
         num_permanent = len(permanent_guides)
         if num_permanent == 0:
             continue
+
+        work_minutes = apt_work_minutes.get(apartment_id, 480)
+        full_shift_pay = round(work_minutes / 60, 2) * round(minimum_wage, 2)
+        half_shift_pay = round(work_minutes / 2 / 60, 2) * round(minimum_wage, 2)
 
         for holiday_date in holiday_dates:
             workers_on_holiday = apt_holiday_workers.get(
@@ -190,7 +250,7 @@ def _load_reports_and_types(
 
     if housing_filter is not None:
         cursor.execute("""
-            SELECT tr.person_id, tr.apartment_id, tr.date
+            SELECT tr.person_id, tr.apartment_id, tr.date, ap.housing_array_id
             FROM time_reports tr
             JOIN apartments ap ON ap.id = tr.apartment_id
             WHERE tr.date >= %s AND tr.date < %s
@@ -198,9 +258,10 @@ def _load_reports_and_types(
         """, (start_date, end_date, housing_filter))
     else:
         cursor.execute("""
-            SELECT person_id, apartment_id, date
-            FROM time_reports
-            WHERE date >= %s AND date < %s
+            SELECT tr.person_id, tr.apartment_id, tr.date, ap.housing_array_id
+            FROM time_reports tr
+            LEFT JOIN apartments ap ON ap.id = tr.apartment_id
+            WHERE tr.date >= %s AND tr.date < %s
         """, (start_date, end_date))
     reports = cursor.fetchall()
 

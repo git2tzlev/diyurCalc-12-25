@@ -580,7 +580,11 @@
           {% if day.chains and day.chains|length > 0 %}
           <div class="day-section" style="margin-bottom: 35px;">
             <div class="day-header" style="margin-bottom: 4px; font-size: 12pt; color: #333; font-weight: bold;">
+              {% if day.is_completion_section %}
+              {{ day.section_title }}
+              {% else %}
               {{ day.day }} ({{ day.day_name }}, {{ day.hebrew_date }})
+              {% endif %}
             </div>
             <table>
               <thead>
@@ -627,7 +631,7 @@
                 {% else %}
                 {% set rate_key = '100' %}
                 {% endif %}
-                {% set group_key = (chain.apartment_name or '-') ~ '|' ~ rate_key ~ '|' ~ (chain.shift_name or '-') %}
+                {% set group_key = (chain.apartment_name or '-') ~ '|' ~ rate_key ~ '|' ~ (chain.shift_name or '-') ~ '|' ~ (chain.display_group_token or '') %}
 
                 {# בדיקה אם השורה האחרונה רציפה ועם אותו מפתח #}
                 {% set can_merge = false %}

@@ -132,7 +132,7 @@ def get_payment_codes(conn):
     """Fetch payment codes sorted by display_order."""
     try:
         cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-        cursor.execute("""
+        cursor.execute(r"""
             SELECT * FROM payment_codes
             ORDER BY
               CASE WHEN merav_code ~ '^\d+$' THEN CAST(merav_code AS INTEGER) ELSE 999999 END ASC,

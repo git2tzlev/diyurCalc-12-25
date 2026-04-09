@@ -372,14 +372,15 @@ def _get_purim_date(day_date: date, is_jerusalem: bool) -> date:
     חישוב תאריך פורים מלוח עברי.
 
     פורים = י"ד אדר (או אדר ב' בשנה מעוברת).
-    שושן פורים (ירושלים) = ט"ו אדר.
+    שושן פורים (ירושלים) = ט"ו אדר, למעט תשפ"ו (2026) שם ירושלים כשאר הארץ.
     """
     from convertdate import hebrew
 
     hebrew_year, _, _ = hebrew.from_gregorian(day_date.year, day_date.month, day_date.day)
     # בשנה מעוברת פורים באדר ב' (חודש 13), בשנה רגילה באדר (חודש 12)
     adar = 13 if hebrew.leap(hebrew_year) else 12
-    purim_day = 15 if is_jerusalem else 14
+    # תשפ"ו (5786): ירושלים מקבלת כמו שאר הארץ
+    purim_day = 15 if is_jerusalem and hebrew_year != 5786 else 14
     g_year, g_month, g_day = hebrew.to_gregorian(hebrew_year, adar, purim_day)
     return date(g_year, g_month, g_day)
 

@@ -37,12 +37,13 @@ def _make_shabbat_cache_with_holiday(holiday_dates, enter_dates=None):
     return cache
 
 
-def _make_report(person_id, apartment_id, report_date):
+def _make_report(person_id, apartment_id, report_date, housing_array_id=None):
     """יצירת דיווח מינימלי."""
     return {
         "person_id": person_id,
         "apartment_id": apartment_id,
         "date": report_date,
+        "housing_array_id": housing_array_id,
     }
 
 
@@ -243,6 +244,122 @@ class TestCalculateHolidayPayments(unittest.TestCase):
         self.assertAlmostEqual(_get_amount(result, 1), self.full_shift_pay + self.half_shift_pay)
         # person 2: 1 מתוך 2 בדירה 100 (half)
         self.assertAlmostEqual(_get_amount(result, 2), self.half_shift_pay)
+
+
+class TestHolidayPayPerApartmentOverride(unittest.TestCase):
+    """בדיקות לתשלום חג לפי override של דירה (מ-02/2026)."""
+
+    def setUp(self):
+        self.conn = MagicMock()
+        mock_cursor = MagicMock()
+        # Global fallback: 480 minutes
+        mock_cursor.fetchall.return_value = [
+            {"start_time": "08:00", "end_time": "16:00"}
+        ]
+        self.conn.cursor.return_value = mock_cursor
+
+        import core.holiday_payment as hp_mod
+        hp_mod._weekday_shift_work_minutes_cache = None
+
+        self.minimum_wage = 33.49
+
+    @patch("app_utils._fetch_weekday_overrides")
+    @patch("app_utils._build_sick_vacation_segments")
+    def test_apartment_with_override_gets_more_hours(
+        self, mock_build_segs, mock_fetch_overrides
+    ):
+        """דירה עם override 15:00-08:00 מקבלת 8.5 שעות חג (במקום 8)."""
+        # Override: apartment 10 has 15:00-08:00
+        mock_fetch_overrides.return_value = (
+            {10: ("15:00", "08:00")},  # apt_overrides
+            {},  # ha_defaults
+        )
+        # _build_sick_vacation_segments returns work segments totaling 510 min
+        mock_build_segs.return_value = [
+            {"start_time": "15:00", "end_time": "22:00", "segment_type": "work"},
+            {"start_time": "06:30", "end_time": "08:00", "segment_type": "work"},
+        ]
+
+        holiday = date(2026, 4, 2)
+        cache = _make_shabbat_cache_with_holiday([holiday])
+
+        reports = [
+            _make_report(1, 10, date(2026, 4, 5), housing_array_id=1),
+        ]
+        person_types = {1: PERMANENT_EMPLOYEE_TYPE}
+
+        result = calculate_holiday_payments(
+            self.conn, 2026, 4, cache, self.minimum_wage,
+            all_reports=reports, person_types=person_types,
+        )
+
+        # 510 min = 8.5 hours → 8.5 × 33.49
+        expected = round(510 / 60, 2) * round(self.minimum_wage, 2)
+        self.assertAlmostEqual(_get_amount(result, 1), expected)
+
+    def test_before_feb_2026_uses_global(self):
+        """לפני 02/2026 — תמיד ערך גלובלי (480 דק')."""
+        holiday = date(2025, 10, 2)
+        cache = _make_shabbat_cache_with_holiday([holiday])
+
+        reports = [
+            _make_report(1, 10, date(2025, 10, 5), housing_array_id=1),
+        ]
+        person_types = {1: PERMANENT_EMPLOYEE_TYPE}
+
+        result = calculate_holiday_payments(
+            self.conn, 2025, 10, cache, self.minimum_wage,
+            all_reports=reports, person_types=person_types,
+        )
+
+        expected = round(480 / 60, 2) * round(self.minimum_wage, 2)
+        self.assertAlmostEqual(_get_amount(result, 1), expected)
+
+    @patch("app_utils._fetch_weekday_overrides")
+    @patch("app_utils._build_sick_vacation_segments")
+    def test_two_apartments_different_overrides(
+        self, mock_build_segs, mock_fetch_overrides
+    ):
+        """שתי דירות עם overrides שונים — כל אחת מקבלת תשלום לפי שעותיה."""
+        mock_fetch_overrides.return_value = (
+            {10: ("15:00", "08:00"), 20: ("17:00", "08:00")},
+            {},
+        )
+
+        def side_effect(start, end):
+            if start == "15:00":
+                return [
+                    {"start_time": "15:00", "end_time": "22:00", "segment_type": "work"},
+                    {"start_time": "06:30", "end_time": "08:00", "segment_type": "work"},
+                ]  # 510 min
+            else:
+                return [
+                    {"start_time": "17:00", "end_time": "22:00", "segment_type": "work"},
+                    {"start_time": "06:30", "end_time": "08:00", "segment_type": "work"},
+                ]  # 390 min
+
+        mock_build_segs.side_effect = side_effect
+
+        holiday = date(2026, 4, 2)
+        cache = _make_shabbat_cache_with_holiday([holiday])
+
+        reports = [
+            _make_report(1, 10, date(2026, 4, 5), housing_array_id=1),
+            _make_report(1, 20, date(2026, 4, 6), housing_array_id=1),
+        ]
+        person_types = {1: PERMANENT_EMPLOYEE_TYPE}
+
+        result = calculate_holiday_payments(
+            self.conn, 2026, 4, cache, self.minimum_wage,
+            all_reports=reports, person_types=person_types,
+        )
+
+        # apt 10: 510 min (single guide = full)
+        pay_apt10 = round(510 / 60, 2) * round(self.minimum_wage, 2)
+        # apt 20: 390 min (single guide = full)
+        pay_apt20 = round(390 / 60, 2) * round(self.minimum_wage, 2)
+
+        self.assertAlmostEqual(_get_amount(result, 1), pay_apt10 + pay_apt20)
 
 
 if __name__ == "__main__":
