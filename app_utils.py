@@ -915,7 +915,16 @@ def _filter_previous_month_carryover_reports(all_reports: list[dict[str, Any]], 
     ]
 
 
-def _calculate_previous_month_carryover(conn, person_id: int, year: int, month: int, minimum_wage: float = 0) -> tuple[int, int, int | None, int, int | None]:
+def _calculate_previous_month_carryover(
+    conn,
+    person_id: int,
+    year: int,
+    month: int,
+    minimum_wage: float = 0,
+    preloaded_reports: list[dict[str, Any]] | None = None,
+    preloaded_segments: dict[int, list[dict]] | None = None,
+    preloaded_housing_rates_cache: dict | None = None,
+) -> tuple[int, int, int | None, int, int | None]:
     """
     חישוב carryover מהחודש הקודם - חיפוש איטרטיבי אחורה עד שבירת רצף.
 
@@ -965,104 +974,149 @@ def _calculate_previous_month_carryover(conn, person_id: int, year: int, month: 
 
     last_day_date = date(prev_year, prev_month, last_day)
 
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cursor = None
 
     # חיפוש איטרטיבי אחורה - מוצאים את היום הראשון עם דיווחים
     # והולכים אחורה עד שמוצאים יום ללא דיווחים (שבירת רצף)
     # מגבלת בטיחות: מקסימום 31 ימים (חודש שלם)
     MAX_LOOKBACK_DAYS = 31
-    earliest_date = last_day_date
 
-    # Get housing array filter
-    housing_filter = get_housing_array_filter()
+    if preloaded_reports is None:
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        earliest_date = last_day_date
 
-    for days_back in range(MAX_LOOKBACK_DAYS):
-        check_date = last_day_date - timedelta(days=days_back)
+        # Get housing array filter
+        housing_filter = get_housing_array_filter()
 
-        # בדיקה אם יש דיווחים ביום הזה (עם סינון לפי מערך דיור אם נדרש)
+        for days_back in range(MAX_LOOKBACK_DAYS):
+            check_date = last_day_date - timedelta(days=days_back)
+
+            # בדיקה אם יש דיווחים ביום הזה (עם סינון לפי מערך דיור אם נדרש)
+            if housing_filter is not None:
+                cursor.execute("""
+                    SELECT COUNT(*) as cnt FROM time_reports tr
+                    JOIN apartments ap ON ap.id = tr.apartment_id
+                    WHERE tr.person_id = %s AND tr.date = %s AND ap.housing_array_id = %s
+                """, (person_id, check_date, housing_filter))
+            else:
+                cursor.execute("""
+                    SELECT COUNT(*) as cnt FROM time_reports
+                    WHERE person_id = %s AND date = %s
+                """, (person_id, check_date))
+            row = cursor.fetchone()
+
+            if row["cnt"] == 0:
+                # אין דיווחים ביום הזה - זה גבול הרצף (יום ללא עבודה)
+                break
+            earliest_date = check_date
+
+        # שליפת כל הדיווחים מהטווח שמצאנו (עם סינון לפי מערך דיור אם נדרש)
         if housing_filter is not None:
             cursor.execute("""
-                SELECT COUNT(*) as cnt FROM time_reports tr
+                SELECT tr.date, tr.start_time, tr.end_time, tr.shift_type_id, tr.apartment_id,
+                       st.name AS shift_name,
+                       ap.housing_array_id, at.hourly_wage_supplement, p.is_married
+                FROM time_reports tr
+                LEFT JOIN shift_types st ON st.id = tr.shift_type_id
                 JOIN apartments ap ON ap.id = tr.apartment_id
-                WHERE tr.person_id = %s AND tr.date = %s AND ap.housing_array_id = %s
-            """, (person_id, check_date, housing_filter))
+                LEFT JOIN apartment_types at ON at.id = ap.apartment_type_id
+                LEFT JOIN people p ON p.id = tr.person_id
+                WHERE tr.person_id = %s AND tr.date >= %s AND tr.date <= %s
+                  AND ap.housing_array_id = %s
+                ORDER BY tr.date, tr.start_time
+            """, (person_id, earliest_date, last_day_date, housing_filter))
         else:
             cursor.execute("""
-                SELECT COUNT(*) as cnt FROM time_reports
-                WHERE person_id = %s AND date = %s
-            """, (person_id, check_date))
-        row = cursor.fetchone()
-
-        if row["cnt"] == 0:
-            # אין דיווחים ביום הזה - זה גבול הרצף (יום ללא עבודה)
-            break
-        earliest_date = check_date
-
-    # שליפת כל הדיווחים מהטווח שמצאנו (עם סינון לפי מערך דיור אם נדרש)
-    if housing_filter is not None:
-        cursor.execute("""
-            SELECT tr.date, tr.start_time, tr.end_time, tr.shift_type_id, tr.apartment_id,
-                   st.name AS shift_name,
-                   ap.housing_array_id, at.hourly_wage_supplement, p.is_married
-            FROM time_reports tr
-            LEFT JOIN shift_types st ON st.id = tr.shift_type_id
-            JOIN apartments ap ON ap.id = tr.apartment_id
-            LEFT JOIN apartment_types at ON at.id = ap.apartment_type_id
-            LEFT JOIN people p ON p.id = tr.person_id
-            WHERE tr.person_id = %s AND tr.date >= %s AND tr.date <= %s
-              AND ap.housing_array_id = %s
-            ORDER BY tr.date, tr.start_time
-        """, (person_id, earliest_date, last_day_date, housing_filter))
+                SELECT tr.date, tr.start_time, tr.end_time, tr.shift_type_id, tr.apartment_id,
+                       st.name AS shift_name,
+                       ap.housing_array_id, at.hourly_wage_supplement, p.is_married
+                FROM time_reports tr
+                LEFT JOIN shift_types st ON st.id = tr.shift_type_id
+                LEFT JOIN apartments ap ON ap.id = tr.apartment_id
+                LEFT JOIN apartment_types at ON at.id = ap.apartment_type_id
+                LEFT JOIN people p ON p.id = tr.person_id
+                WHERE tr.person_id = %s AND tr.date >= %s AND tr.date <= %s
+                ORDER BY tr.date, tr.start_time
+            """, (person_id, earliest_date, last_day_date))
+        all_reports = cursor.fetchall()
     else:
-        cursor.execute("""
-            SELECT tr.date, tr.start_time, tr.end_time, tr.shift_type_id, tr.apartment_id,
-                   st.name AS shift_name,
-                   ap.housing_array_id, at.hourly_wage_supplement, p.is_married
-            FROM time_reports tr
-            LEFT JOIN shift_types st ON st.id = tr.shift_type_id
-            LEFT JOIN apartments ap ON ap.id = tr.apartment_id
-            LEFT JOIN apartment_types at ON at.id = ap.apartment_type_id
-            LEFT JOIN people p ON p.id = tr.person_id
-            WHERE tr.person_id = %s AND tr.date >= %s AND tr.date <= %s
-            ORDER BY tr.date, tr.start_time
-        """, (person_id, earliest_date, last_day_date))
-    all_reports = cursor.fetchall()
+        report_dates = set()
+        for report in preloaded_reports:
+            report_date = report["date"]
+            if isinstance(report_date, datetime):
+                report_date = report_date.date()
+            if report_date <= last_day_date:
+                report_dates.add(report_date)
+
+        if last_day_date not in report_dates:
+            return (0, 0, None, 0, None)
+
+        earliest_date = last_day_date
+        for days_back in range(MAX_LOOKBACK_DAYS):
+            check_date = last_day_date - timedelta(days=days_back)
+            if check_date not in report_dates:
+                break
+            earliest_date = check_date
+
+        all_reports = []
+        for report in preloaded_reports:
+            report_date = report["date"]
+            if isinstance(report_date, datetime):
+                report_date = report_date.date()
+            if earliest_date <= report_date <= last_day_date:
+                all_reports.append(report)
+
     all_reports = _filter_previous_month_carryover_reports(all_reports, person_id)
 
     if not all_reports:
-        cursor.close()
+        if cursor is not None:
+            cursor.close()
         return (0, 0, None, 0, None)
 
     # שליפת סגמנטים של כל סוגי המשמרות הרלוונטיים
     shift_ids = list({r["shift_type_id"] for r in all_reports if r["shift_type_id"]})
     if not shift_ids:
-        cursor.close()
+        if cursor is not None:
+            cursor.close()
         return (0, 0, None, 0, None)
-
-    placeholders = ",".join(["%s"] * len(shift_ids))
-    cursor.execute(f"""
-        SELECT shift_type_id, segment_type, start_time, end_time
-        FROM shift_time_segments
-        WHERE shift_type_id IN ({placeholders})
-        ORDER BY shift_type_id, order_index
-    """, tuple(shift_ids))
-    shift_segments = cursor.fetchall()
-    cursor.close()
 
     # בניית מפה של סגמנטים לפי סוג משמרת
     segments_by_shift = {}
-    for seg in shift_segments:
-        shift_id = seg["shift_type_id"]
-        if shift_id not in segments_by_shift:
-            segments_by_shift[shift_id] = []
-        segments_by_shift[shift_id].append({
-            "type": seg["segment_type"],
-            "start": seg["start_time"],
-            "end": seg["end_time"]
-        })
+    if preloaded_segments is not None:
+        for shift_id in shift_ids:
+            for seg in preloaded_segments.get(shift_id, []):
+                segments_by_shift.setdefault(shift_id, []).append({
+                    "type": seg.get("segment_type") or seg.get("type"),
+                    "start": seg.get("start_time") or seg.get("start"),
+                    "end": seg.get("end_time") or seg.get("end")
+                })
+        if cursor is not None:
+            cursor.close()
+    else:
+        placeholders = ",".join(["%s"] * len(shift_ids))
+        cursor.execute(f"""
+            SELECT shift_type_id, segment_type, start_time, end_time
+            FROM shift_time_segments
+            WHERE shift_type_id IN ({placeholders})
+            ORDER BY shift_type_id, order_index
+        """, tuple(shift_ids))
+        shift_segments = cursor.fetchall()
+        cursor.close()
+
+        for seg in shift_segments:
+            shift_id = seg["shift_type_id"]
+            if shift_id not in segments_by_shift:
+                segments_by_shift[shift_id] = []
+            segments_by_shift[shift_id].append({
+                "type": seg["segment_type"],
+                "start": seg["start_time"],
+                "end": seg["end_time"]
+            })
 
     # טעינת תעריפי מערכי דיור (לחודש הקודם)
-    housing_rates_cache = get_all_housing_rates_for_month(conn, prev_year, prev_month)
+    housing_rates_cache = preloaded_housing_rates_cache
+    if housing_rates_cache is None:
+        housing_rates_cache = get_all_housing_rates_for_month(conn, prev_year, prev_month)
 
     # בניית מפת תעריפים לפי (shift_id, housing_array_id) עם תעריפי חול ושבת
     shift_rates = {}
@@ -1299,7 +1353,11 @@ def get_daily_segments_data(
     apartment_type_cache: Optional[Dict[int, int]] = None,
     housing_rates_cache: Optional[Dict] = None,
     preloaded_reports: Optional[List] = None,
-    preloaded_segments: Optional[Dict[int, List]] = None
+    preloaded_segments: Optional[Dict[int, List]] = None,
+    preloaded_weekday_overrides: Optional[tuple[dict[int, tuple[str, str]], dict[int, tuple[str, str]]]] = None,
+    preloaded_prev_month_sick_dates: Optional[list[date]] = None,
+    preloaded_prev_month_reports: Optional[list[dict[str, Any]]] = None,
+    preloaded_prev_month_housing_rates_cache: Optional[Dict] = None,
 ):
     """
     Calculates detailed daily segments for a given employee and month.
@@ -1311,6 +1369,10 @@ def get_daily_segments_data(
     - housing_rates_cache: dict mapping (shift_type_id, housing_array_id) to rate info
     - preloaded_reports: pre-fetched reports for this person (skips DB query)
     - preloaded_segments: dict mapping shift_type_id to segments list (skips DB query)
+    - preloaded_weekday_overrides: tuple of apartment / housing-array weekday overrides
+    - preloaded_prev_month_sick_dates: previous month sick dates for continuity
+    - preloaded_prev_month_reports: previous month reports for carryover calculation
+    - preloaded_prev_month_housing_rates_cache: previous month housing rates cache
     """
     # Use preloaded reports if provided (bulk optimization)
     if preloaded_reports is not None:
@@ -1446,7 +1508,10 @@ def get_daily_segments_data(
             ha_id = r.get("housing_array_id")
             if apt_id and ha_id:
                 apartment_housing_map[apt_id] = ha_id
-        apt_overrides, ha_defaults = _fetch_weekday_overrides(conn)
+        if preloaded_weekday_overrides is not None:
+            apt_overrides, ha_defaults = preloaded_weekday_overrides
+        else:
+            apt_overrides, ha_defaults = _fetch_weekday_overrides(conn)
         weekday_work_overrides = _build_weekday_work_overrides(
             apartment_ids, apartment_housing_map, apt_overrides, ha_defaults
         )
@@ -1494,7 +1559,11 @@ def get_daily_segments_data(
     reports = processed_reports
 
     # זיהוי רצפי ימי מחלה לחישוב אחוזי תשלום מדורגים (כולל המשכיות מחודש קודם)
-    prev_month_sick_dates = _fetch_prev_month_sick_dates(conn, person_id, year, month)
+    prev_month_sick_dates = (
+        preloaded_prev_month_sick_dates
+        if preloaded_prev_month_sick_dates is not None
+        else _fetch_prev_month_sick_dates(conn, person_id, year, month)
+    )
     sick_day_sequence = _identify_sick_day_sequences(reports, prev_month_sick_dates)
 
     # Build a map of (shift_type_id, housing_array_id) -> {"weekday": rate, "shabbat": rate}
@@ -2199,7 +2268,16 @@ def get_daily_segments_data(
     # Track carryover minutes from previous day's chain ending
     # This is used when a work chain continues from 06:30-08:00 to 08:00-...
     # חישוב carryover מהחודש הקודם
-    prev_month_carryover_minutes, prev_month_chain_end, prev_month_chain_shift_id, prev_month_night_minutes, prev_month_chain_housing_array_id = _calculate_previous_month_carryover(conn, person_id, year, month, minimum_wage)
+    prev_month_carryover_minutes, prev_month_chain_end, prev_month_chain_shift_id, prev_month_night_minutes, prev_month_chain_housing_array_id = _calculate_previous_month_carryover(
+        conn,
+        person_id,
+        year,
+        month,
+        minimum_wage,
+        preloaded_reports=preloaded_prev_month_reports,
+        preloaded_segments=preloaded_segments,
+        preloaded_housing_rates_cache=preloaded_prev_month_housing_rates_cache,
+    )
     prev_day_carryover_minutes = prev_month_carryover_minutes
     prev_day_chain_end_time = prev_month_chain_end  # זמן סיום הרצף מהחודש הקודם
     prev_day_chain_shift_id = prev_month_chain_shift_id  # shift_id של הרצף האחרון - לבדיקת שינוי תעריף

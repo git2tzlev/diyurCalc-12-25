@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
 from core.config import config
 from core.database import get_conn, get_housing_array_filter, get_default_period
+from core.logic import calculate_monthly_summary
 from services import gesher_exporter
 
 
@@ -168,10 +169,16 @@ def export_gesher_preview(
 
     show_zero_flag = show_zero == "1"
 
-    from core.logic import calculate_monthly_summary
-
     with get_conn() as conn:
-        preview = gesher_exporter.get_export_preview(conn, year, month, limit=100)
+        raw_conn = conn.conn if hasattr(conn, 'conn') else conn
+        summary_data, _ = calculate_monthly_summary(raw_conn, year, month)
+        preview = gesher_exporter.get_export_preview(
+            conn,
+            year,
+            month,
+            limit=100,
+            summary_data=summary_data
+        )
         export_codes = gesher_exporter.load_export_config_from_db(conn)
         if not export_codes:
             export_codes = gesher_exporter.load_export_config()
@@ -189,10 +196,6 @@ def export_gesher_preview(
             employers = conn.execute(
                 "SELECT code, name FROM employers WHERE is_active::integer = 1 ORDER BY code"
             ).fetchall()
-
-        # מציאת מדריכים ללא קוד מירב - רק אלו שיש להם נתונים בחודש הנבחר
-        raw_conn = conn.conn if hasattr(conn, 'conn') else conn
-        summary_data, _ = calculate_monthly_summary(raw_conn, year, month)
 
     missing_merav_list = []
     for person_data in summary_data:

@@ -323,7 +323,11 @@ def calculate_person_monthly_totals(
     """
     from core.history import get_minimum_wage_for_month
     from core.database import PostgresConnection
-    from app_utils import get_daily_segments_data, aggregate_daily_segments_to_monthly
+    from app_utils import (
+        _fetch_weekday_overrides,
+        aggregate_daily_segments_to_monthly,
+        get_daily_segments_data,
+    )
 
     # Get minimum wage for the specific month (historical)
     if minimum_wage is None:
@@ -365,7 +369,11 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
         get_all_housing_rates_for_month,
     )
     from core.database import PostgresConnection
-    from app_utils import get_daily_segments_data, aggregate_daily_segments_to_monthly
+    from app_utils import (
+        _fetch_weekday_overrides,
+        aggregate_daily_segments_to_monthly,
+        get_daily_segments_data,
+    )
     from utils.utils import month_range_ts
 
     payment_codes = get_payment_codes(conn)
@@ -401,6 +409,13 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
     start_dt, end_dt = month_range_ts(year, month)
     start_date = start_dt.date()
     end_date = end_dt.date()
+    if month == 1:
+        prev_year, prev_month = year - 1, 12
+    else:
+        prev_year, prev_month = year, month - 1
+    prev_start_dt, prev_end_dt = month_range_ts(prev_year, prev_month)
+    prev_start_date = prev_start_dt.date()
+    prev_end_date = prev_end_dt.date()
 
     person_status_cache = get_all_person_statuses_for_month(conn, person_ids, year, month)
 
@@ -470,6 +485,45 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
         if r["apartment_id"]:
             all_apartment_ids.add(r["apartment_id"])
 
+    # 1b. Load previous-month reports once for carryover + sick continuity
+    prev_reports_by_person = {}
+    prev_month_sick_dates_by_person = {}
+    if person_ids:
+        if housing_filter is not None:
+            cursor.execute("""
+                SELECT tr.person_id, tr.date, tr.start_time, tr.end_time, tr.shift_type_id, tr.apartment_id,
+                       st.name AS shift_name,
+                       ap.housing_array_id, at.hourly_wage_supplement, p.is_married
+                FROM time_reports tr
+                LEFT JOIN shift_types st ON st.id = tr.shift_type_id
+                JOIN apartments ap ON ap.id = tr.apartment_id
+                LEFT JOIN apartment_types at ON at.id = ap.apartment_type_id
+                LEFT JOIN people p ON p.id = tr.person_id
+                WHERE tr.person_id = ANY(%s) AND tr.date >= %s AND tr.date < %s
+                  AND ap.housing_array_id = %s
+                ORDER BY tr.person_id, tr.date, tr.start_time
+            """, (person_ids, prev_start_date, prev_end_date, housing_filter))
+        else:
+            cursor.execute("""
+                SELECT tr.person_id, tr.date, tr.start_time, tr.end_time, tr.shift_type_id, tr.apartment_id,
+                       st.name AS shift_name,
+                       ap.housing_array_id, at.hourly_wage_supplement, p.is_married
+                FROM time_reports tr
+                LEFT JOIN shift_types st ON st.id = tr.shift_type_id
+                LEFT JOIN apartments ap ON ap.id = tr.apartment_id
+                LEFT JOIN apartment_types at ON at.id = ap.apartment_type_id
+                LEFT JOIN people p ON p.id = tr.person_id
+                WHERE tr.person_id = ANY(%s) AND tr.date >= %s AND tr.date < %s
+                ORDER BY tr.person_id, tr.date, tr.start_time
+            """, (person_ids, prev_start_date, prev_end_date))
+
+        for r in cursor.fetchall():
+            prev_reports_by_person.setdefault(r["person_id"], []).append(r)
+            if r["shift_type_id"]:
+                all_shift_ids.add(r["shift_type_id"])
+            if "מחלה" in (r["shift_name"] or ""):
+                prev_month_sick_dates_by_person.setdefault(r["person_id"], []).append(r["date"])
+
     # 2. Load ALL shift_time_segments for all used shifts
     segments_by_shift = {}
     if all_shift_ids:
@@ -513,6 +567,8 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
     # 4. Load apartment type cache and housing rates cache
     apartment_type_cache = get_all_apartment_types_for_month(conn, list(all_apartment_ids), year, month)
     housing_rates_cache = get_all_housing_rates_for_month(conn, year, month)
+    prev_month_housing_rates_cache = get_all_housing_rates_for_month(conn, prev_year, prev_month)
+    weekday_overrides = _fetch_weekday_overrides(conn) if (year, month) >= (2026, 2) else None
 
     # Build person start_date map (already have this data from people query)
     person_start_dates = {p["id"]: p["start_date"] for p in people}
@@ -541,7 +597,11 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
             apartment_type_cache=apartment_type_cache,
             housing_rates_cache=housing_rates_cache,
             preloaded_reports=reports_by_person.get(pid, []),
-            preloaded_segments=segments_by_shift
+            preloaded_segments=segments_by_shift,
+            preloaded_weekday_overrides=weekday_overrides,
+            preloaded_prev_month_sick_dates=prev_month_sick_dates_by_person.get(pid, []),
+            preloaded_prev_month_reports=prev_reports_by_person.get(pid, []),
+            preloaded_prev_month_housing_rates_cache=prev_month_housing_rates_cache,
         )
 
         monthly_totals = aggregate_daily_segments_to_monthly(

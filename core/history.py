@@ -10,6 +10,7 @@ from typing import Optional, Any, List, Dict
 from datetime import datetime
 
 import psycopg2.extras
+from utils.cache_manager import cached
 
 logger = logging.getLogger(__name__)
 
@@ -212,7 +213,7 @@ def get_all_apartment_types_for_month(
         cursor.close()
 
 
-def get_standby_rate_for_month(
+def _query_standby_rate_for_month(
     conn,
     segment_id: int,
     apartment_type_id: int,
@@ -220,7 +221,6 @@ def get_standby_rate_for_month(
     year: int,
     month: int
 ) -> Optional[int]:
-   
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     try:
         # 1. Try historical record for specific apartment type
@@ -289,6 +289,36 @@ def get_standby_rate_for_month(
         return None
     finally:
         cursor.close()
+
+
+@cached(ttl=300, key_prefix="core.history.standby_rate_for_month")
+def _get_standby_rate_for_month_cached(
+    segment_id: int,
+    apartment_type_id: int,
+    marital_status: str,
+    year: int,
+    month: int
+) -> Optional[int]:
+    from core.database import get_conn
+
+    with get_conn() as conn_wrapper:
+        raw_conn = conn_wrapper.conn if hasattr(conn_wrapper, "conn") else conn_wrapper
+        return _query_standby_rate_for_month(
+            raw_conn, segment_id, apartment_type_id, marital_status, year, month
+        )
+
+
+def get_standby_rate_for_month(
+    conn,
+    segment_id: int,
+    apartment_type_id: int,
+    marital_status: str,
+    year: int,
+    month: int
+) -> Optional[int]:
+    return _get_standby_rate_for_month_cached(
+        segment_id, apartment_type_id, marital_status, year, month
+    )
 
 
 def is_month_locked(conn, year: int, month: int) -> bool:

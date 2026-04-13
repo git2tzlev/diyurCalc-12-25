@@ -656,7 +656,13 @@ def generate_gesher_file_for_multiple(conn, person_ids: List[int], year: int, mo
     return (result, first_company)
 
 
-def get_export_preview(conn, year: int, month: int, limit: int = 50) -> List[Dict]:
+def get_export_preview(
+    conn,
+    year: int,
+    month: int,
+    limit: int = 50,
+    summary_data: List[Dict] | None = None
+) -> List[Dict]:
     """
     מחזיר תצוגה מקדימה של הייצוא
     משתמש ב-calculate_monthly_summary לחישוב יעיל של כל העובדים בבת אחת
@@ -674,7 +680,10 @@ def get_export_preview(conn, year: int, month: int, limit: int = 50) -> List[Dic
     minimum_wage = get_minimum_wage(conn)
 
     # חישוב יעיל - כל העובדים בבת אחת
-    summary_data, _ = calculate_monthly_summary(conn.conn if hasattr(conn, 'conn') else conn, year, month)
+    if summary_data is None:
+        summary_data, _ = calculate_monthly_summary(
+            conn.conn if hasattr(conn, 'conn') else conn, year, month
+        )
 
     preview = []
 
