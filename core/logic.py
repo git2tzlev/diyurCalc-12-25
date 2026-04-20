@@ -633,6 +633,7 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
         conn, year, month, shabbat_cache, minimum_wage,
         all_reports=all_reports,
         person_types=person_types,
+        person_start_dates=person_start_dates,
         housing_filter=housing_filter,
     )
 

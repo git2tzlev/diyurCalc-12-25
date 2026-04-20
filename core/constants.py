@@ -59,6 +59,22 @@ REGULAR_APT_TYPE = 1        # דירה רגילה
 THERAPEUTIC_APT_TYPE = 2    # דירה טיפולית
 HIGH_FUNCTIONING_APT_TYPE = 6   # תפקוד גבוה
 LOW_FUNCTIONING_APT_TYPE = 7    # תפקוד נמוך
+ASD_APT_TYPES = {HIGH_FUNCTIONING_APT_TYPE, LOW_FUNCTIONING_APT_TYPE}
+
+# מערך דיור ASD - כל הדירות במערך זה מקבלות תעריפי ASD
+ASD_HOUSING_ARRAY_ID = 2
+
+
+def is_asd_housing_array(housing_array_id: int | None) -> bool:
+    """בדיקה אם מערך דיור הוא ASD (תפקוד גבוה/נמוך)."""
+    return housing_array_id == ASD_HOUSING_ARRAY_ID
+
+# תוספת ותק ASD - למדריך קבוע עם שנה+ ותק
+ASD_SENIORITY_SUPPLEMENT = 300      # באגורות (3₪)
+ASD_SENIORITY_YEARS_THRESHOLD = 1   # סף ותק בשנים
+
+# סף ותק מינימלי לתשלום חג (בחודשים)
+HOLIDAY_PAY_MIN_SENIORITY_MONTHS = 3
 
 # מיפוי סוג דירה לשם
 APT_TYPE_NAMES = {

@@ -8,13 +8,13 @@ from __future__ import annotations
 from typing import Dict, List, Tuple
 
 from core.constants import (
-    HIGH_FUNCTIONING_APT_TYPE,
     LOW_FUNCTIONING_APT_TYPE,
     NIGHT_SHIFT_ID,
     NIGHT_SHIFT_WORK_FIRST_MINUTES,
     NIGHT_SHIFT_STANDBY_END,
     TAGBUR_FRIDAY_SHIFT_ID,
     TAGBUR_SHABBAT_SHIFT_ID,
+    is_asd_housing_array,
 )
 from core.time_utils import span_minutes
 
@@ -104,23 +104,24 @@ def calculate_shift_hours(
     shift_type_id: int,
     segments_by_shift: Dict[int, List[dict]],
     apartment_type_id: int | None = None,
+    housing_array_id: int | None = None,
 ) -> Tuple[float, float]:
     """
     חישוב שעות עבודה/כוננות למשמרת - פונקציה מרכזית.
 
     מרכזת את כל הלוגיקה:
-    - משמרת לילה (107) לא-ASD → אלגוריתם דינמי
-    - משמרת לילה ASD → לפי סגמנטים מהטבלה
+    - משמרת לילה (107) מחוץ למערך ASD → אלגוריתם דינמי
+    - משמרת לילה במערך ASD → לפי סגמנטים מהטבלה
     - ערות בלילה (LOW_FUNCTIONING) → כוננות נספרת כעבודה
     - שאר המשמרות → לפי סגמנטים
 
     Returns:
         (work_hours, standby_hours)
     """
-    is_asd = apartment_type_id in (HIGH_FUNCTIONING_APT_TYPE, LOW_FUNCTIONING_APT_TYPE)
+    is_asd = is_asd_housing_array(housing_array_id)
     is_night = shift_type_id == NIGHT_SHIFT_ID
 
-    # משמרת לילה לא-ASD → אלגוריתם דינמי
+    # משמרת לילה מחוץ למערך ASD → אלגוריתם דינמי
     if is_night and not is_asd:
         work_hours, standby_hours = calculate_night_shift_hours(start_time, end_time)
     else:

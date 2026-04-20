@@ -4,6 +4,7 @@
 מדריך קבוע שעבד בחודש של החג ולא עבד בחג עצמו זכאי לתשלום חג.
 - מדריך קבוע אחד בדירה → משמרת חול שלמה
 - 2+ מדריכים קבועים בדירה → כל אחד חוץ מזה שעבד בחג → חצי משמרת חול
+- דירות ASD (תפקוד גבוה/נמוך) → תמיד משמרת שלמה, גם עם 2+ מדריכים
 - שעות משמרת חול = לפי shift_time_overrides של הדירה (מ-02/2026), fallback לסגמנטים של 103
 """
 
@@ -15,8 +16,10 @@ from typing import Dict, List, Set, Tuple
 import psycopg2.extras
 
 from core.constants import (
+    HOLIDAY_PAY_MIN_SENIORITY_MONTHS,
     PERMANENT_EMPLOYEE_TYPE,
     WEEKDAY_SHIFT_TYPE_ID,
+    is_asd_housing_array,
 )
 from core.time_utils import span_minutes
 
@@ -123,6 +126,23 @@ def get_holiday_dates_in_month(
     return holidays
 
 
+def _has_sufficient_seniority(
+    start_date: date | None, year: int, month: int,
+) -> bool:
+    """בדיקה שלמדריך יש ותק של 3+ חודשים נכון לתחילת חודש הדיווח."""
+    if start_date is None:
+        return False
+    if hasattr(start_date, "date"):
+        start_date = start_date.date()
+    ref_month = month - HOLIDAY_PAY_MIN_SENIORITY_MONTHS
+    ref_year = year
+    if ref_month <= 0:
+        ref_month += 12
+        ref_year -= 1
+    cutoff = date(ref_year, ref_month, 1)
+    return start_date <= cutoff
+
+
 def calculate_holiday_payments(
     conn,
     year: int,
@@ -131,6 +151,7 @@ def calculate_holiday_payments(
     minimum_wage: float,
     all_reports: list | None = None,
     person_types: Dict[int, str] | None = None,
+    person_start_dates: Dict[int, date] | None = None,
     housing_filter: int | None = None,
 ) -> Dict[int, float]:
     """
@@ -143,6 +164,7 @@ def calculate_holiday_payments(
         minimum_wage: שכר מינימום לשעה
         all_reports: רשימת דיווחים (מ-batch path), או None לשליפה מ-DB
         person_types: {person_id: "permanent"/"substitute"}, או None לשליפה מ-DB
+        person_start_dates: {person_id: start_date}, או None לשליפה מ-DB
         housing_filter: סינון לפי מערך דיור
 
     Returns:
@@ -153,8 +175,8 @@ def calculate_holiday_payments(
         return {}
 
     # שליפת דיווחים ונתוני מדריכים אם לא סופקו
-    if all_reports is None or person_types is None:
-        all_reports, person_types = _load_reports_and_types(
+    if all_reports is None or person_types is None or person_start_dates is None:
+        all_reports, person_types, person_start_dates = _load_reports_and_types(
             conn, year, month, housing_filter
         )
 
@@ -163,7 +185,7 @@ def calculate_holiday_payments(
     apt_permanent_guides: Dict[int, Set[int]] = {}
     # {(apartment_id, holiday_date): set of person_ids who worked that day}
     apt_holiday_workers: Dict[Tuple[int, date], Set[int]] = {}
-    # מיפוי דירה -> מערך דיור (לצורך overrides)
+    # מיפוי דירה -> מערך דיור (לצורך overrides + זיהוי ASD)
     apartment_housing_map: Dict[int, int | None] = {}
 
     holiday_dates_set = set(holiday_dates)
@@ -227,9 +249,15 @@ def calculate_holiday_payments(
             if not eligible:
                 continue
 
-            pay = full_shift_pay if num_permanent == 1 else half_shift_pay
+            # מערך דיור ASD → תמיד משמרת שלמה
+            is_asd = is_asd_housing_array(apartment_housing_map.get(apartment_id))
+            pay = full_shift_pay if num_permanent == 1 or is_asd else half_shift_pay
 
             for person_id in eligible:
+                if not _has_sufficient_seniority(
+                    person_start_dates.get(person_id), year, month,
+                ):
+                    continue
                 if person_id not in result:
                     result[person_id] = {"amount": 0.0, "count": 0, "rate": pay}
                 result[person_id]["amount"] += pay
@@ -240,8 +268,8 @@ def calculate_holiday_payments(
 
 def _load_reports_and_types(
     conn, year: int, month: int, housing_filter: int | None
-) -> Tuple[list, Dict[int, str]]:
-    """שליפת דיווחים וסוגי מדריכים מה-DB (ל-single-guide path)."""
+) -> Tuple[list, Dict[int, str], Dict[int, date]]:
+    """שליפת דיווחים, סוגי מדריכים ותאריכי התחלה מה-DB (ל-single-guide path)."""
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
     start_date = date(year, month, 1)
@@ -250,7 +278,8 @@ def _load_reports_and_types(
 
     if housing_filter is not None:
         cursor.execute("""
-            SELECT tr.person_id, tr.apartment_id, tr.date, ap.housing_array_id
+            SELECT tr.person_id, tr.apartment_id, tr.date,
+                   ap.housing_array_id, ap.apartment_type_id
             FROM time_reports tr
             JOIN apartments ap ON ap.id = tr.apartment_id
             WHERE tr.date >= %s AND tr.date < %s
@@ -258,22 +287,26 @@ def _load_reports_and_types(
         """, (start_date, end_date, housing_filter))
     else:
         cursor.execute("""
-            SELECT tr.person_id, tr.apartment_id, tr.date, ap.housing_array_id
+            SELECT tr.person_id, tr.apartment_id, tr.date,
+                   ap.housing_array_id, ap.apartment_type_id
             FROM time_reports tr
             LEFT JOIN apartments ap ON ap.id = tr.apartment_id
             WHERE tr.date >= %s AND tr.date < %s
         """, (start_date, end_date))
     reports = cursor.fetchall()
 
-    # שליפת סוגי מדריכים
+    # שליפת סוגי מדריכים ותאריכי התחלה
     person_ids = list({r["person_id"] for r in reports})
     person_types: Dict[int, str] = {}
+    person_start_dates: Dict[int, date] = {}
     if person_ids:
         cursor.execute("""
-            SELECT id, type FROM people WHERE id = ANY(%s)
+            SELECT id, type, start_date FROM people WHERE id = ANY(%s)
         """, (person_ids,))
         for row in cursor.fetchall():
             person_types[row["id"]] = row["type"]
+            if row["start_date"]:
+                person_start_dates[row["id"]] = row["start_date"]
 
     cursor.close()
-    return reports, person_types
+    return reports, person_types, person_start_dates

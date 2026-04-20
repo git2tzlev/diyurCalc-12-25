@@ -26,6 +26,7 @@ from app_utils import get_daily_segments_data, aggregate_daily_segments_to_month
 from core.constants import (
     PERMANENT_EMPLOYEE_TYPE,
     HIGH_FUNCTIONING_APT_TYPE, LOW_FUNCTIONING_APT_TYPE,
+    is_asd_housing_array,
 )
 from core.holiday_payment import calculate_holiday_payments
 from utils.utils import month_range_ts, format_currency, format_currency_total, human_date
@@ -703,7 +704,7 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
 
     def _is_asd_apartment_pdf(r: dict) -> bool:
         """האם הדירה שייכת למערך ASD."""
-        return r.get("apartment_type_id") in (HIGH_FUNCTIONING_APT_TYPE, LOW_FUNCTIONING_APT_TYPE)
+        return is_asd_housing_array(r.get("housing_array_id"))
 
     for r in reports:
         r_date = r["date"]
@@ -756,6 +757,7 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
                     r["start_time"], r["end_time"],
                     r["shift_type_id"], segments_by_shift,
                     apartment_type_id=r.get("apartment_type_id"),
+                    housing_array_id=r.get("housing_array_id"),
                 )
 
             total_work_hours += work_hours

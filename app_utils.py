@@ -43,6 +43,9 @@ from core.constants import (
     HIGH_FUNCTIONING_APT_TYPE,
     LOW_FUNCTIONING_APT_TYPE,
     APT_TYPE_NAMES,
+    ASD_SENIORITY_SUPPLEMENT,
+    ASD_SENIORITY_YEARS_THRESHOLD,
+    is_asd_housing_array,
     # Standby constants
     MAX_CANCELLED_STANDBY_DEDUCTION,
     STANDBY_CANCEL_OVERLAP_THRESHOLD,
@@ -297,6 +300,31 @@ def _asd_night_label_for_row(
     if label_by_type and apt_type_id is not None:
         return label_by_type.get(apt_type_id, "")
     return ""
+
+
+def _get_asd_seniority_supplement(
+    employee_type: Optional[str],
+    start_date_val: Optional[Any],
+    year: int,
+    month: int,
+) -> int:
+    """תוספת ותק ASD באגורות - למדריך קבוע עם שנה+ ותק במערך ASD."""
+    if employee_type != "permanent" or not start_date_val:
+        return 0
+    if isinstance(start_date_val, datetime):
+        start_dt = start_date_val.date()
+    elif isinstance(start_date_val, date):
+        start_dt = start_date_val
+    else:
+        try:
+            start_dt = datetime.fromtimestamp(start_date_val, LOCAL_TZ).date()
+        except (ValueError, TypeError, OSError):
+            return 0
+    report_dt = date(year, month, 1)
+    seniority_years = (report_dt - start_dt).days / 365.25
+    if seniority_years >= ASD_SENIORITY_YEARS_THRESHOLD:
+        return ASD_SENIORITY_SUPPLEMENT
+    return 0
 
 
 def _fetch_weekday_overrides(conn) -> tuple[dict[int, tuple[str, str]], dict[int, tuple[str, str]]]:
@@ -1566,6 +1594,17 @@ def get_daily_segments_data(
     )
     sick_day_sequence = _identify_sick_day_sequences(reports, prev_month_sick_dates)
 
+    # תוספת ותק ASD: +3₪ למדריך קבוע עם שנה+ ותק
+    employee_type = historical_person.get("employee_type")
+    person_start_date_row = conn.execute(
+        "SELECT start_date FROM people WHERE id = %s", (person_id,)
+    ).fetchone()
+    asd_seniority_bonus = _get_asd_seniority_supplement(
+        employee_type,
+        person_start_date_row["start_date"] if person_start_date_row else None,
+        year, month,
+    )
+
     # Build a map of (shift_type_id, housing_array_id) -> {"weekday": rate, "shabbat": rate}
     # This allows using custom rates for different housing arrays
     shift_rates = {}
@@ -1581,14 +1620,19 @@ def get_daily_segments_data(
             # Include rate_apartment_type_id in key because same shift can have different rates
             rate_key = (shift_id, housing_array_id, rate_apartment_type_id)
             if rate_key not in shift_rates:
+                # תוספת ותק ASD: הזרקה לחישוב התעריף (חלה רק כש-fallback לשכר מינימום)
+                effective_supplement = r.get("hourly_wage_supplement") or 0
+                if asd_seniority_bonus and is_asd_housing_array(housing_array_id):
+                    effective_supplement += asd_seniority_bonus
+                rate_report = dict(r)
+                rate_report["hourly_wage_supplement"] = effective_supplement
                 weekday_rate = get_effective_hourly_rate(
-                    r, minimum_wage, is_shabbat=False, housing_rates_cache=housing_rates_cache
+                    rate_report, minimum_wage, is_shabbat=False, housing_rates_cache=housing_rates_cache
                 )
                 shabbat_rate = get_effective_hourly_rate(
-                    r, minimum_wage, is_shabbat=True, housing_rates_cache=housing_rates_cache
+                    rate_report, minimum_wage, is_shabbat=True, housing_rates_cache=housing_rates_cache
                 )
-                hourly_supplement = r.get("hourly_wage_supplement") or 0
-                shift_rates[rate_key] = {"weekday": weekday_rate, "shabbat": shabbat_rate, "supplement": hourly_supplement}
+                shift_rates[rate_key] = {"weekday": weekday_rate, "shabbat": shabbat_rate, "supplement": effective_supplement}
             if shift_id not in shift_names_map:
                 shift_names_map[shift_id] = r.get("shift_name", "")
             if shift_id not in shift_is_special_hourly:
@@ -1596,12 +1640,19 @@ def get_daily_segments_data(
             if shift_id in SHABBAT_SHIFT_IDS or shift_id in TAGBUR_SHIFT_IDS:
                 shabbat_shifts.add(shift_id)
         # מילוי תוספת סוג דירה (לתשלום / לתעריף)
+        is_asd_array = is_asd_housing_array(housing_array_id)
         apt_type_id = r.get("apartment_type_id")
         if apt_type_id and apt_type_id not in apt_type_supplement:
-            apt_type_supplement[apt_type_id] = r.get("hourly_wage_supplement") or 0
+            base_supplement = r.get("hourly_wage_supplement") or 0
+            if asd_seniority_bonus and is_asd_array:
+                base_supplement += asd_seniority_bonus
+            apt_type_supplement[apt_type_id] = base_supplement
         actual_apt_tid = r.get("actual_apartment_type_id")
         if actual_apt_tid and actual_apt_tid not in apt_type_supplement:
-            apt_type_supplement[actual_apt_tid] = r.get("actual_hourly_wage_supplement") or 0
+            actual_supplement = r.get("actual_hourly_wage_supplement") or 0
+            if asd_seniority_bonus and is_asd_array:
+                actual_supplement += asd_seniority_bonus
+            apt_type_supplement[actual_apt_tid] = actual_supplement
 
     # טעינת תעריפי "שעת עבודה" לכל housing_array_id שנמצא בדיווחים
     # כי Uncovered Minutes ישולמו לפי תעריף זה
@@ -1733,8 +1784,8 @@ def get_daily_segments_data(
         if has_asd_night and actual_apt_id_for_asd == HIGH_FUNCTIONING_APT_TYPE:
             asd_night_high_func = True
 
-        # ASD (תפקוד גבוה/נמוך): משמרת לילה משתמשת בסגמנטים מהטבלה כמו שהם
-        is_asd_apartment = actual_apt_id_for_asd in (HIGH_FUNCTIONING_APT_TYPE, LOW_FUNCTIONING_APT_TYPE)
+        # מערך דיור ASD: משמרת לילה משתמשת בסגמנטים מהטבלה כמו שהם
+        is_asd_apartment = is_asd_housing_array(r.get("housing_array_id"))
 
         if is_night and not is_asd_apartment:
             # יצירת סגמנטים דינמיים לפי זמן הכניסה בפועל
@@ -1862,9 +1913,11 @@ def get_daily_segments_data(
             CUTOFF = 480  # 08:00
             display_date = r_date  # יום הדיווח
             day_key = display_date.strftime("%d/%m/%Y")
-            entry = daily_map.setdefault(day_key, {"shifts": set(), "segments": [], "is_fixed_segments": False, "escort_bonus_minutes": 0, "day_shift_types": set()})
+            entry = daily_map.setdefault(day_key, {"shifts": set(), "segments": [], "is_fixed_segments": False, "escort_bonus_minutes": 0, "day_shift_types": set(), "housing_array_id": None})
             entry["is_fixed_segments"] = True  # סימון שזו משמרת קבועה
             entry["day_shift_types"].add(r["shift_type_id"])  # Track shift types for Shabbat detection
+            if r.get("housing_array_id") is not None:
+                entry["housing_array_id"] = r.get("housing_array_id")
             _register_asd_night_labels(entry, r, has_asd_night, actual_apt_id_for_asd)
             # ASD + תפקוד גבוה: סימון לתשלום כוננות 150 ש"ח
             if asd_night_high_func:
@@ -2014,10 +2067,13 @@ def get_daily_segments_data(
                         "segments": [],
                         "is_fixed_segments": False,
                         "escort_bonus_minutes": 0,
-                        "day_shift_types": set()
+                        "day_shift_types": set(),
+                        "housing_array_id": None,
                     }
                 entry = daily_map[day_key]
                 entry["day_shift_types"].add(r["shift_type_id"])  # Track shift types for Shabbat detection
+                if r.get("housing_array_id") is not None:
+                    entry["housing_array_id"] = r.get("housing_array_id")
                 _register_asd_night_labels(entry, r, has_asd_night, actual_apt_id_for_asd)
 
                 # ASD לילה + תפקוד גבוה: סימון לתשלום כוננות 150 ש"ח
@@ -2664,11 +2720,11 @@ def get_daily_segments_data(
                         entry.get("asd_night_label_by_apt_type"),
                         "",
                         actual_apt_type,
-                    )
+                    ) if calculate_night_hours_in_segment(sb_start % 1440, sb_end % 1440) > 0 else ""
 
-                    # ASD לילה: סימון המשמרת והסוג — לפי סוג דירה + משמרת לילה ביום
+                    # ASD לילה: סימון המשמרת והסוג — לפי מערך דיור + משמרת לילה ביום
                     tb_is_asd_night = (
-                        actual_apt_type in (HIGH_FUNCTIONING_APT_TYPE, LOW_FUNCTIONING_APT_TYPE)
+                        is_asd_housing_array(entry.get("housing_array_id"))
                         and NIGHT_SHIFT_ID in entry.get("day_shift_types", set())
                     )
                     tb_sb_shift_name = "לילה" if tb_is_asd_night else "כוננות"
@@ -3177,7 +3233,7 @@ def get_daily_segments_data(
                         entry.get("asd_night_label_by_apt_type"),
                         display_apt_name or "",
                         display_apt_type,
-                    ),
+                    ) if calculate_night_hours_in_segment(seg_start % 1440, seg_end % 1440) > 0 else "",
                 })
 
             # Check if chain ends at 08:00 boundary (1920 = 08:00 + 1440)
@@ -3371,9 +3427,9 @@ def get_daily_segments_data(
                         event.get("actual_apt_type"),
                     )
 
-                    # ASD לילה: סימון המשמרת והסוג — לפי סוג דירה + משמרת לילה ביום
+                    # ASD לילה: סימון המשמרת והסוג — לפי מערך דיור + משמרת לילה ביום
                     is_asd_night_standby = (
-                        event.get("actual_apt_type") in (HIGH_FUNCTIONING_APT_TYPE, LOW_FUNCTIONING_APT_TYPE)
+                        is_asd_housing_array(entry.get("housing_array_id"))
                         and NIGHT_SHIFT_ID in entry.get("day_shift_types", set())
                     )
                     sb_shift_name = "לילה" if is_asd_night_standby else "כוננות"
