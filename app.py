@@ -39,6 +39,7 @@ from routes.admin import (
     manage_payment_codes, update_payment_codes,
     demo_sync_page, sync_demo_database, demo_sync_status,
     get_month_lock_status, lock_month_api, unlock_month_api,
+    manage_special_days, add_special_day, toggle_special_day, delete_special_day,
 )
 from routes.summary import general_summary
 from routes.export import (
@@ -406,6 +407,31 @@ async def sync_demo_route(request: Request):
 def demo_sync_status_route(request: Request):
     """Get demo database status."""
     return demo_sync_status(request)
+
+
+# Special Days (Premium Days) Management
+@app.get("/admin/special-days", response_class=HTMLResponse)
+def manage_special_days_route(request: Request):
+    """Special days management page."""
+    return manage_special_days(request)
+
+
+@app.post("/admin/special-days/add")
+async def add_special_day_route(request: Request):
+    """Add a new special day."""
+    return await add_special_day(request)
+
+
+@app.post("/api/special-days/toggle")
+async def toggle_special_day_route(request: Request):
+    """Toggle special day active status."""
+    return await toggle_special_day(request)
+
+
+@app.post("/api/special-days/delete")
+async def delete_special_day_route(request: Request):
+    """Delete a special day."""
+    return await delete_special_day(request)
 
 
 # Month Lock APIs

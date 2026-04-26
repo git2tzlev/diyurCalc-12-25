@@ -226,6 +226,7 @@
         <a href="/reports" style="font-weight: normal; opacity: 0.9; font-size: 0.9em; background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px;">ניהול דוחות</a>
         {% if request.state.current_user and request.state.current_user.role == 'super_admin' %}
         <a href="/admin/payment-codes" style="font-weight: normal; opacity: 0.9; font-size: 0.9em; background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px;">ניהול סמלי שכר</a>
+        <a href="/admin/special-days" style="font-weight: normal; opacity: 0.9; font-size: 0.9em; background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px;">ימי פרימיום</a>
         <a href="/admin/email-settings" style="font-weight: normal; opacity: 0.9; font-size: 0.9em; background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px;">⚙️ הגדרות מייל</a>
         <a href="/admin/demo-sync" style="font-weight: normal; opacity: 0.9; font-size: 0.9em; background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px;">סנכרון דמו</a>
         {% endif %}

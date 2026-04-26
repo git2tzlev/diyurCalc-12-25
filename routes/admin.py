@@ -6,6 +6,7 @@ Contains administrative functionality like payment codes management.
 from __future__ import annotations
 
 import logging
+from datetime import date
 
 from fastapi import Request, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
@@ -16,6 +17,7 @@ from core.logic import get_payment_codes
 from core.auth import is_super_admin
 from scripts.db_sync import sync_database, check_demo_database_status
 from utils.utils import format_currency, human_date
+import psycopg2.extras
 
 logger = logging.getLogger(__name__)
 
@@ -436,3 +438,156 @@ async def save_all_segments_history_for_month(request: Request) -> JSONResponse:
             {"success": False, "error": str(e)},
             status_code=500
         )
+
+
+# =============================================================================
+# Special Days (Premium Days) Management
+# =============================================================================
+
+DAY_TYPE_LABELS = {
+    "purim": "פורים",
+    "independence": "יום העצמאות",
+    "elections": "יום הבחירות",
+    "custom": "מותאם אישית",
+}
+
+STANDBY_MODE_LABELS = {
+    "shabbat": "תעריף שבת",
+    "none": "רגיל",
+}
+
+
+def manage_special_days(request: Request) -> HTMLResponse:
+    """דף ניהול ימי פרימיום. רק למנהל על."""
+    _require_super_admin(request)
+    with get_conn() as conn:
+        cursor = conn.conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        try:
+            cursor.execute("""
+                SELECT * FROM special_days
+                ORDER BY start_date DESC, id DESC
+            """)
+            days = [dict(row) for row in cursor.fetchall()]
+        except psycopg2.errors.UndefinedTable:
+            conn.conn.rollback()
+            days = []
+        finally:
+            cursor.close()
+
+    for d in days:
+        if d.get("start_time"):
+            d["start_time_str"] = d["start_time"].strftime("%H:%M")
+        if d.get("end_time"):
+            d["end_time_str"] = d["end_time"].strftime("%H:%M")
+        d["day_type_label"] = DAY_TYPE_LABELS.get(d.get("day_type"), d.get("day_type", ""))
+        d["standby_mode_label"] = STANDBY_MODE_LABELS.get(d.get("standby_mode"), d.get("standby_mode", ""))
+
+    # שליפת ערים מהדירות לבחירה בטופס
+    with get_conn() as conn:
+        cursor = conn.conn.cursor()
+        cursor.execute("""
+            SELECT DISTINCT city FROM apartments
+            WHERE city IS NOT NULL AND city != ''
+            ORDER BY city
+        """)
+        cities = [row[0] for row in cursor.fetchall()]
+        cursor.close()
+
+    return templates.TemplateResponse("special_days.html", {
+        "request": request,
+        "days": days,
+        "day_types": DAY_TYPE_LABELS,
+        "standby_modes": STANDBY_MODE_LABELS,
+        "cities": cities,
+    })
+
+
+async def add_special_day(request: Request) -> RedirectResponse:
+    """הוספת יום פרימיום חדש. רק למנהל על."""
+    _require_super_admin(request)
+    try:
+        form = await request.form()
+        day_type = form.get("day_type", "custom")
+        name = form.get("name", "")
+        start_date_str = form.get("start_date", "")
+        start_time = form.get("start_time", "08:00")
+        end_date_str = form.get("end_date", "")
+        end_time = form.get("end_time", "22:00")
+        rate_pct = int(form.get("rate_pct", 150))
+        standby_mode = form.get("standby_mode", "none")
+
+        if not start_date_str or not end_date_str or not name:
+            raise ValueError("חובה למלא שם, תאריך התחלה ותאריך סיום")
+
+        # סינון ערים: checkbox-based
+        city_mode = form.get("city_mode", "all")
+        selected_cities = form.getlist("selected_cities")
+        city_filter = None
+        city_exclude = None
+        if city_mode == "filter" and selected_cities:
+            city_filter = selected_cities
+        elif city_mode == "exclude" and selected_cities:
+            city_exclude = selected_cities
+
+        with get_conn() as conn:
+            conn.execute("""
+                INSERT INTO special_days
+                    (day_type, name, start_date, start_time, end_date, end_time,
+                     rate_pct, standby_mode, city_filter, city_exclude, source)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'manual')
+            """, (
+                day_type, name, start_date_str, start_time,
+                end_date_str, end_time, rate_pct, standby_mode,
+                city_filter, city_exclude,
+            ))
+            conn.commit()
+
+        return RedirectResponse(url="/admin/special-days", status_code=303)
+    except Exception as e:
+        logger.error(f"Error adding special day: {e}", exc_info=True)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+async def toggle_special_day(request: Request) -> JSONResponse:
+    """הפעלה/ביטול יום פרימיום. רק למנהל על."""
+    _require_super_admin(request)
+    try:
+        data = await request.json()
+        day_id = data.get("id")
+        is_active = data.get("is_active")
+
+        if day_id is None or is_active is None:
+            return JSONResponse({"success": False, "error": "id and is_active required"}, status_code=400)
+
+        with get_conn() as conn:
+            conn.execute(
+                "UPDATE special_days SET is_active = %s WHERE id = %s",
+                (is_active, day_id),
+            )
+            conn.commit()
+
+        status = "הופעל" if is_active else "בוטל"
+        return JSONResponse({"success": True, "message": f"יום פרימיום {status}"})
+    except Exception as e:
+        logger.error(f"Error toggling special day: {e}", exc_info=True)
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+async def delete_special_day(request: Request) -> JSONResponse:
+    """מחיקת יום פרימיום. רק למנהל על."""
+    _require_super_admin(request)
+    try:
+        data = await request.json()
+        day_id = data.get("id")
+
+        if day_id is None:
+            return JSONResponse({"success": False, "error": "id required"}, status_code=400)
+
+        with get_conn() as conn:
+            conn.execute("DELETE FROM special_days WHERE id = %s", (day_id,))
+            conn.commit()
+
+        return JSONResponse({"success": True, "message": "יום פרימיום נמחק"})
+    except Exception as e:
+        logger.error(f"Error deleting special day: {e}", exc_info=True)
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)

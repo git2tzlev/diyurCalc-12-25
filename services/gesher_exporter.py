@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Any
 
 from core.database import get_housing_array_filter
+from core.history import get_minimum_wage_for_month
 
 # נתיב לקובץ התצורה
 CONFIG_PATH = Path(__file__).parent / "gesher_config.ini"
@@ -252,15 +253,10 @@ def calculate_value(totals: Dict, internal_key: str, value_type: str, minimum_wa
         return (round(raw_value, 2), 0.0)
 
 
-def get_minimum_wage(conn) -> float:
-    """שליפת שכר מינימום מהדאטאבייס"""
-    try:
-        row = conn.execute("SELECT hourly_rate FROM minimum_wage_rates ORDER BY effective_from DESC LIMIT 1").fetchone()
-        if row and row["hourly_rate"]:
-            return float(row["hourly_rate"]) / 100
-    except Exception as e:
-        print(f"Warning: Failed to get minimum wage from DB: {e}")
-    return 34.40  # ברירת מחדל
+def get_minimum_wage(conn, year: int, month: int) -> float:
+    """שליפת שכר מינימום היסטורי לפי חודש."""
+    raw_conn = conn.conn if hasattr(conn, 'conn') else conn
+    return get_minimum_wage_for_month(raw_conn, year, month)
 
 
 def format_gesher_header(company: str, year: int, month: int) -> str:
@@ -331,7 +327,7 @@ def generate_gesher_file_for_person(conn, person_id: int, year: int, month: int)
     options = get_export_options()
     
     shabbat_cache = get_shabbat_times_cache(conn)
-    minimum_wage = get_minimum_wage(conn)
+    minimum_wage = get_minimum_wage(conn, year, month)
     
     # וידוא קוד מירב
     try:
@@ -426,7 +422,7 @@ def generate_gesher_file(conn, year: int, month: int, filter_name: str = None, c
     if company is None:
         company = options.get('default_company', '001')
 
-    minimum_wage = get_minimum_wage(conn)
+    minimum_wage = get_minimum_wage(conn, year, month)
     housing_filter = get_housing_array_filter()
 
     # שליפת מיפוי עובדים למפעלים - עם סינון לפי מערך דיור אם מוגדר
@@ -549,7 +545,7 @@ def generate_gesher_file_for_multiple(conn, person_ids: List[int], year: int, mo
     if not export_codes:
         export_codes = load_export_config()
     options = get_export_options()
-    minimum_wage = get_minimum_wage(conn)
+    minimum_wage = get_minimum_wage(conn, year, month)
 
     # שליפת פרטי העובדים
     if not person_ids:
@@ -677,7 +673,7 @@ def get_export_preview(
         export_codes = load_export_config()
 
     options = get_export_options()
-    minimum_wage = get_minimum_wage(conn)
+    minimum_wage = get_minimum_wage(conn, year, month)
 
     # חישוב יעיל - כל העובדים בבת אחת
     if summary_data is None:

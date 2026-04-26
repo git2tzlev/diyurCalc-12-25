@@ -1,0 +1,375 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+    .sd-card {
+        max-width: 1100px;
+        margin: 0 auto;
+        animation: fadeIn 0.4s ease-out;
+    }
+
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .sd-table {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        margin-top: 20px;
+        font-size: 14px;
+    }
+
+    .sd-table th, .sd-table td {
+        padding: 10px 12px;
+        border-bottom: 1px solid #edf2f7;
+    }
+
+    .sd-table th {
+        background: #f8fafc;
+        font-weight: 600;
+        text-align: right;
+        font-size: 13px;
+        color: #4a5568;
+    }
+
+    .sd-table tr:hover {
+        background: #fdfdfd;
+    }
+
+    .sd-table .inactive {
+        opacity: 0.5;
+        background: #f9f9f9;
+    }
+
+    .badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 12px;
+        font-weight: 600;
+    }
+
+    .badge-purim { background: #e9d8fd; color: #553c9a; }
+    .badge-independence { background: #bee3f8; color: #2a4365; }
+    .badge-elections { background: #fefcbf; color: #744210; }
+    .badge-custom { background: #e2e8f0; color: #4a5568; }
+    .badge-active { background: #c6f6d5; color: #276749; }
+    .badge-disabled { background: #fed7d7; color: #9b2c2c; }
+
+    .add-form {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 20px;
+        margin-top: 20px;
+    }
+
+    .add-form .form-row {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-bottom: 12px;
+        align-items: end;
+    }
+
+    .add-form .form-group {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .add-form label {
+        font-size: 12px;
+        font-weight: 600;
+        color: #4a5568;
+    }
+
+    .add-form input, .add-form select {
+        border: 1px solid #e2e8f0;
+        border-radius: 6px;
+        padding: 6px 10px;
+        font-size: 14px;
+    }
+
+    .add-form input:focus, .add-form select:focus {
+        border-color: #3182ce;
+        box-shadow: 0 0 0 3px rgba(66, 153, 225, 0.15);
+        outline: none;
+    }
+
+    .btn {
+        border: none;
+        padding: 8px 16px;
+        border-radius: 6px;
+        font-weight: 600;
+        cursor: pointer;
+        font-size: 13px;
+        transition: background 0.2s;
+    }
+
+    .btn-primary { background: #2b6cb0; color: white; }
+    .btn-primary:hover { background: #2c5282; }
+    .btn-danger { background: #e53e3e; color: white; }
+    .btn-danger:hover { background: #c53030; }
+    .btn-sm { padding: 4px 10px; font-size: 12px; }
+
+    .btn-toggle {
+        background: none;
+        border: 1px solid #cbd5e0;
+        padding: 4px 10px;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 12px;
+    }
+
+    .btn-toggle:hover { background: #edf2f7; }
+
+    .back-link {
+        color: #4a5568;
+        text-decoration: none;
+        font-size: 14px;
+    }
+
+    .back-link:hover { color: #2d3748; }
+
+    .city-hint {
+        font-size: 11px;
+        color: #a0aec0;
+    }
+
+    .city-select-group {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .city-mode-select {
+        margin-bottom: 4px;
+    }
+
+    .city-checkboxes {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        padding: 6px 8px;
+        border: 1px solid #e2e8f0;
+        border-radius: 6px;
+        background: white;
+        min-height: 32px;
+        align-items: center;
+    }
+
+    .city-checkboxes.disabled {
+        opacity: 0.4;
+        pointer-events: none;
+    }
+
+    .city-checkboxes label {
+        font-weight: normal;
+        font-size: 13px;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        cursor: pointer;
+    }
+</style>
+
+<div class="card sd-card">
+    <div class="header-line">
+        <div>
+            <h2 class="section-title" style="font-size: 22px; margin: 0; color: #1a202c;">ניהול ימי פרימיום</h2>
+            <p style="color: #718096; margin: 4px 0 0; font-size: 14px;">
+                פורים, יום העצמאות, יום הבחירות, וימים מיוחדים נוספים.
+            </p>
+        </div>
+        <div class="controls">
+            <a href="/summary" class="back-link"><span>&larr; חזרה לסיכום</span></a>
+        </div>
+    </div>
+
+    <!-- Add new day form -->
+    <div class="add-form">
+        <h3 style="margin: 0 0 12px; font-size: 16px; color: #2d3748;">הוספת יום חדש</h3>
+        <form method="post" action="/admin/special-days/add">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>סוג</label>
+                    <select name="day_type" style="width: 140px;">
+                        {% for key, label in day_types.items() %}
+                        <option value="{{ key }}">{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>שם</label>
+                    <input type="text" name="name" required placeholder="למשל: פורים תשפ&quot;ז" style="width: 180px;">
+                </div>
+                <div class="form-group">
+                    <label>תאריך התחלה</label>
+                    <input type="date" name="start_date" required>
+                </div>
+                <div class="form-group">
+                    <label>שעת התחלה</label>
+                    <input type="time" name="start_time" value="08:00" required style="width: 100px;">
+                </div>
+                <div class="form-group">
+                    <label>תאריך סיום</label>
+                    <input type="date" name="end_date" required>
+                </div>
+                <div class="form-group">
+                    <label>שעת סיום</label>
+                    <input type="time" name="end_time" value="22:00" required style="width: 100px;">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>תעריף %</label>
+                    <select name="rate_pct" style="width: 100px;">
+                        <option value="150" selected>150%</option>
+                        <option value="200">200%</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>כוננות</label>
+                    <select name="standby_mode" style="width: 130px;">
+                        {% for key, label in standby_modes.items() %}
+                        <option value="{{ key }}" {% if key == 'none' %}selected{% endif %}>{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group city-select-group">
+                    <label>סינון ערים</label>
+                    <select name="city_mode" id="cityMode" class="city-mode-select" onchange="updateCityMode()" style="width: 160px;">
+                        <option value="all" selected>כל הערים</option>
+                        <option value="filter">רק ערים שנבחרו</option>
+                        <option value="exclude">הכל חוץ מערים שנבחרו</option>
+                    </select>
+                    <div class="city-checkboxes disabled" id="cityCheckboxes">
+                        {% for city in cities %}
+                        <label><input type="checkbox" name="selected_cities" value="{{ city }}"> {{ city }}</label>
+                        {% endfor %}
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>&nbsp;</label>
+                    <button type="submit" class="btn btn-primary">הוסף</button>
+                </div>
+            </div>
+        </form>
+    </div>
+
+    <!-- Existing days table -->
+    {% if days %}
+    <table class="sd-table">
+        <thead>
+            <tr>
+                <th>סוג</th>
+                <th>שם</th>
+                <th>תאריך</th>
+                <th>שעות</th>
+                <th>תעריף</th>
+                <th>כוננות</th>
+                <th>ערים</th>
+                <th>מצב</th>
+                <th>פעולות</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for d in days %}
+            <tr class="{{ '' if d.is_active else 'inactive' }}" id="row-{{ d.id }}">
+                <td><span class="badge badge-{{ d.day_type }}">{{ d.day_type_label }}</span></td>
+                <td>{{ d.name }}</td>
+                <td style="direction: ltr; text-align: right;">{{ d.start_date }} {% if d.start_date != d.end_date %}&rarr; {{ d.end_date }}{% endif %}</td>
+                <td style="direction: ltr; text-align: right;">{{ d.start_time_str }}-{{ d.end_time_str }}</td>
+                <td>{{ d.rate_pct }}%</td>
+                <td>{{ d.standby_mode_label }}</td>
+                <td>
+                    {% if d.city_filter %}
+                        <span style="color: #2b6cb0;">{{ d.city_filter | join(', ') }}</span>
+                    {% elif d.city_exclude %}
+                        <span style="color: #e53e3e;">חוץ מ: {{ d.city_exclude | join(', ') }}</span>
+                    {% else %}
+                        <span style="color: #a0aec0;">הכל</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if d.is_active %}
+                        <span class="badge badge-active">פעיל</span>
+                    {% else %}
+                        <span class="badge badge-disabled">מבוטל</span>
+                    {% endif %}
+                </td>
+                <td style="white-space: nowrap;">
+                    <button class="btn-toggle" onclick="toggleDay({{ d.id }}, {{ 'false' if d.is_active else 'true' }})">
+                        {{ 'בטל' if d.is_active else 'הפעל' }}
+                    </button>
+                    <button class="btn btn-danger btn-sm" onclick="deleteDay({{ d.id }}, '{{ d.name }}')">
+                        מחק
+                    </button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="text-align: center; color: #a0aec0; margin-top: 40px; font-size: 16px;">
+        אין ימי פרימיום מוגדרים.
+        {% if not days %}
+        <br><span style="font-size: 13px;">ייתכן שטבלת special_days לא נוצרה &mdash; יש להריץ sql/create_special_days.sql</span>
+        {% endif %}
+    </p>
+    {% endif %}
+</div>
+
+<script>
+function updateCityMode() {
+    var mode = document.getElementById('cityMode').value;
+    var box = document.getElementById('cityCheckboxes');
+    if (mode === 'all') {
+        box.classList.add('disabled');
+        box.querySelectorAll('input').forEach(function(cb) { cb.checked = false; });
+    } else {
+        box.classList.remove('disabled');
+    }
+}
+
+async function toggleDay(id, newActive) {
+    try {
+        const res = await fetch('/api/special-days/toggle', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({id: id, is_active: newActive})
+        });
+        const data = await res.json();
+        if (data.success) {
+            location.reload();
+        } else {
+            alert(data.error || 'שגיאה');
+        }
+    } catch (e) {
+        alert('שגיאה: ' + e.message);
+    }
+}
+
+async function deleteDay(id, name) {
+    if (!confirm('למחוק את "' + name + '"?')) return;
+    try {
+        const res = await fetch('/api/special-days/delete', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({id: id})
+        });
+        const data = await res.json();
+        if (data.success) {
+            document.getElementById('row-' + id).remove();
+        } else {
+            alert(data.error || 'שגיאה');
+        }
+    } catch (e) {
+        alert('שגיאה: ' + e.message);
+    }
+}
+</script>
+{% endblock %}

@@ -7,8 +7,14 @@ from core.time_utils import (
     REGULAR_HOURS_LIMIT, OVERTIME_125_LIMIT,
     FRIDAY, SATURDAY,
     span_minutes, to_local_date, _get_shabbat_boundaries,
-    _get_purim_boundaries, _is_purim_time,
     classify_day_type,
+)
+from core.premium_windows import (
+    PremiumWindow,
+    get_premium_windows_for_range,
+    get_window_at,
+    minutes_until_state_change,
+    filter_windows_by_city,
 )
 from utils.utils import overlap_minutes, to_gematria, month_range_ts, merge_intervals, find_uncovered_intervals
 from convertdate import hebrew
@@ -73,7 +79,6 @@ from core.constants import (
     calculate_night_hours_in_segment,
     # Night hours threshold
     NIGHT_HOURS_THRESHOLD,
-    JERUSALEM_CITY_NAMES,
     # Sick/Vacation constants
     WEEKDAY_SHIFT_TYPE_ID,
     WEEKDAY_STANDBY_START,
@@ -158,17 +163,20 @@ def _get_shabbat_standby_segment_id(conn) -> int | None:
     return result
 
 
-def _get_purim_standby_rate(
+def _get_premium_standby_rate(
     conn, apt_type: int | None, married: bool,
     actual_date: date, start_min: int,
-    apt_city: str, year: int = None, month: int = None
+    premium_windows: Optional[List[PremiumWindow]],
+    year: int = None, month: int = None,
 ) -> float | None:
     """
-    אם הכוננות חלה בשעות פורים (08:00-22:00), מחזיר תעריף כוננות שבת.
-    אחרת מחזיר None (להשתמש בתעריף הרגיל).
+    אם הכוננות חלה בחלון פרימיום עם standby_mode='shabbat' (למשל פורים),
+    מחזיר תעריף כוננות שבת. אחרת מחזיר None (להשתמש בתעריף הרגיל).
     """
-    is_jerusalem = (apt_city or "") in JERUSALEM_CITY_NAMES
-    if not _is_purim_time(actual_date, start_min, is_jerusalem):
+    if not premium_windows:
+        return None
+    window = get_window_at(premium_windows, actual_date, start_min)
+    if window is None or window.standby_mode != "shabbat":
         return None
 
     shabbat_seg_id = _get_shabbat_standby_segment_id(conn)
@@ -477,7 +485,7 @@ def _calculate_chain_wages(
     shabbat_cache: Dict[str, Dict[str, str]],
     minutes_offset: int = 0,
     is_night_shift: bool = False,
-    is_jerusalem: bool = False
+    premium_windows: Optional[List[PremiumWindow]] = None,
 ) -> Dict[str, Any]:
     """
     חישוב שכר לרצף עבודה (chain) בשיטת בלוקים.
@@ -485,25 +493,31 @@ def _calculate_chain_wages(
     במקום לעבור דקה-דקה, מחשב בלוקים לפי גבולות:
     - 480 דקות (מעבר 100% -> 125%) - או 420 למשמרת לילה
     - 600 דקות (מעבר 125% -> 150%) - או 540 למשמרת לילה
-    - גבולות שבת/חג/פורים (כניסה/יציאה)
+    - גבולות שבת/חג (כניסה/יציאה מ-shabbat_cache)
+    - גבולות חלונות פרימיום (פורים/עצמאות/בחירות מ-premium_windows)
 
     Args:
         chain_segments: List of (start_min, end_min, shift_id, actual_date) tuples
         shabbat_cache: Cache of Shabbat times
         minutes_offset: Minutes already worked in this chain (from previous day's carryover)
         is_night_shift: Whether this is a night shift (uses 7-hour day instead of 8)
-        is_jerusalem: Whether the apartment is in Jerusalem (affects Purim date)
+        premium_windows: רשימת חלונות פרימיום (פורים/עצמאות/בחירות). None = אין.
 
     Returns:
         Dict with calc100, calc125, calc150, calc175, calc200,
         calc150_shabbat, calc150_overtime, calc150_shabbat_100, calc150_shabbat_50,
-        and segments_detail - list of (start_min, end_min, label, is_shabbat) for display
+        calc150_purim/_independence, calc200_elections — שדות per-origin לייצוא מירב,
+        segments_detail - list of (start_min, end_min, label, is_shabbat) for display.
     """
+    windows = premium_windows or []
     result = {
         "calc100": 0, "calc125": 0, "calc150": 0, "calc175": 0, "calc200": 0,
         "calc150_shabbat": 0, "calc150_overtime": 0,
         "calc150_shabbat_100": 0, "calc150_shabbat_50": 0,
-        "segments_detail": []  # For display: list of (start_min, end_min, label, is_shabbat)
+        "calc150_purim": 0, "calc175_purim": 0, "calc200_purim": 0,
+        "calc150_independence": 0, "calc175_independence": 0, "calc200_independence": 0,
+        "calc200_elections": 0,
+        "segments_detail": []
     }
 
     if not chain_segments:
@@ -525,6 +539,9 @@ def _calculate_chain_wages(
     # Start from offset if this chain continues from previous day
     minutes_processed = minutes_offset
 
+    # תוויות תצוגה לפי origin של חלון פרימיום
+    _ORIGIN_LABELS = {"purim": "פורים", "independence": "עצמאות", "elections": "בחירות"}
+
     for seg_start, seg_end, seg_actual_date in flat_segments:
         seg_duration = seg_end - seg_start
         seg_offset = 0
@@ -532,10 +549,6 @@ def _calculate_chain_wages(
         # Get Shabbat/Holiday boundaries for THIS segment's actual date
         shabbat_enter, shabbat_exit = _get_shabbat_boundaries(seg_actual_date, shabbat_cache)
         seg_is_shabbat_or_holiday = (shabbat_enter > 0)
-
-        # בדיקת גבולות פורים
-        purim_enter, purim_exit = _get_purim_boundaries(seg_actual_date, is_jerusalem)
-        seg_is_purim = (purim_enter >= 0)
 
         # סיווג סוג היום: ערב חג/שבת, יום חג/שבת, או חול
         day_type = classify_day_type(seg_actual_date, shabbat_cache)
@@ -568,37 +581,56 @@ def _calculate_chain_wages(
             # Take the minimum
             block_size = min(minutes_until_tier_change, minutes_left_in_seg)
 
-            # גבולות פורים - חיתוך הבלוק כדי שכל בלוק יהיה כולו בפורים או כולו מחוצה לו
-            # פורים: תעריף חג מ-08:00 עד 22:00 באותו יום בלבד
-            block_in_purim = False
-            if seg_is_purim:
-                actual_minute = current_abs_minute % MINUTES_PER_DAY
-                if purim_enter <= actual_minute < purim_exit:
-                    block_in_purim = True
-                    block_size = min(block_size, purim_exit - actual_minute)
-                elif actual_minute < purim_enter:
-                    block_size = min(block_size, purim_enter - actual_minute)
+            # חיתוך בגבולות חלון פרימיום — כל בלוק יהיה כולו בתוך חלון אחד או כולו מחוץ לכולם
+            days_over = current_abs_minute // MINUTES_PER_DAY
+            physical_date = seg_actual_date + timedelta(days=days_over)
+            physical_min = current_abs_minute % MINUTES_PER_DAY
+            current_premium = get_window_at(windows, physical_date, physical_min) if windows else None
+            if windows:
+                block_size = min(
+                    block_size,
+                    minutes_until_state_change(windows, physical_date, physical_min, block_size),
+                )
 
             # Helper to add segment detail
             def add_segment_detail(start_min, end_min, rate_label, is_shabbat):
                 result["segments_detail"].append((start_min, end_min, rate_label, is_shabbat))
 
-            if block_in_purim:
-                # פורים = תעריף חג (כמו שבת)
+            if current_premium is not None:
+                # נמצאים בחלון פרימיום (פורים/עצמאות/בחירות וכו')
                 block_abs_start = current_abs_minute
                 block_abs_end = current_abs_minute + block_size
-                if shabbat_rate == "150%":
-                    result["calc150"] += block_size
-                    result["calc150_shabbat"] += block_size
-                    result["calc150_shabbat_100"] += block_size
-                    result["calc150_shabbat_50"] += block_size
-                    add_segment_detail(block_abs_start, block_abs_end, "150% פורים", True)
-                elif shabbat_rate == "175%":
-                    result["calc175"] += block_size
-                    add_segment_detail(block_abs_start, block_abs_end, "175% פורים", True)
+                origin = current_premium.origin
+                origin_label = _ORIGIN_LABELS.get(origin, origin)
+
+                if current_premium.rate_pct == 150:
+                    # 150%-style (כמו שבת) — tier stacking ל-150/175/200 לפי שעת הרצף
+                    if shabbat_rate == "150%":
+                        result["calc150"] += block_size
+                        result["calc150_shabbat"] += block_size
+                        result["calc150_shabbat_100"] += block_size
+                        result["calc150_shabbat_50"] += block_size
+                        result[f"calc150_{origin}"] = result.get(f"calc150_{origin}", 0) + block_size
+                        add_segment_detail(block_abs_start, block_abs_end, f"150% {origin_label}", True)
+                    elif shabbat_rate == "175%":
+                        result["calc175"] += block_size
+                        result[f"calc175_{origin}"] = result.get(f"calc175_{origin}", 0) + block_size
+                        add_segment_detail(block_abs_start, block_abs_end, f"175% {origin_label}", True)
+                    else:
+                        result["calc200"] += block_size
+                        result[f"calc200_{origin}"] = result.get(f"calc200_{origin}", 0) + block_size
+                        add_segment_detail(block_abs_start, block_abs_end, f"200% {origin_label}", True)
                 else:
-                    result["calc200"] += block_size
-                    add_segment_detail(block_abs_start, block_abs_end, "200% פורים", True)
+                    # Flat rate (למשל בחירות 200%) — ללא tier stacking, ללא פיצול פנסיה
+                    rate_label = f"{current_premium.rate_pct}% {origin_label}"
+                    if current_premium.rate_pct >= 200:
+                        result["calc200"] += block_size
+                        result[f"calc200_{origin}"] = result.get(f"calc200_{origin}", 0) + block_size
+                    else:
+                        # תעריף לא סטנדרטי — לא אמור לקרות אלא אם הוזן ידנית
+                        result["calc150"] += block_size
+                        result[f"calc150_{origin}"] = result.get(f"calc150_{origin}", 0) + block_size
+                    add_segment_detail(block_abs_start, block_abs_end, rate_label, True)
 
             # Now check Shabbat/Holiday boundaries within this block
             elif seg_is_shabbat_or_holiday:
@@ -1497,6 +1529,18 @@ def get_daily_segments_data(
 
     # Build apartment type change dates cache
     apartment_change_dates = get_all_apartment_type_change_dates(conn, list(apartment_ids))
+
+    # טעינת חלונות פרימיום (ימים מיוחדים בלבד) לחודש המבוקש + כרית 2 ימים מכל צד
+    # מסננים שבת/חג כי אלה כבר מטופלים ב-_get_shabbat_boundaries + shabbat_cache
+    _month_start_d = date(year, month, 1)
+    if month == 12:
+        _month_end_d = date(year + 1, 1, 1)
+    else:
+        _month_end_d = date(year, month + 1, 1)
+    _all_windows = get_premium_windows_for_range(
+        conn, _month_start_d - timedelta(days=2), _month_end_d + timedelta(days=2)
+    )
+    premium_windows_all = [w for w in _all_windows if w.origin not in ("shabbat", "holiday")]
 
     # Fetch segments early - needed for weekday overrides when (year, month) >= (2026, 2)
     shift_ids = {r["shift_type_id"] for r in reports if r["shift_type_id"]}
@@ -2520,12 +2564,13 @@ def get_daily_segments_data(
 
             if ratio >= STANDBY_CANCEL_OVERLAP_THRESHOLD:
                 # כוננות מתבטלת - מורידים עד 70₪, משלמים את ההפרש
-                # בפורים: תעריף כוננות שבת
-                purim_rate = _get_purim_standby_rate(
-                    conn, apt_type, bool(married), actual_date, sb_start, sb_apt_city, year, month
+                # חלון פרימיום (פורים) עם standby_mode='shabbat': תעריף כוננות שבת
+                _pw_filtered = filter_windows_by_city(premium_windows_all, sb_apt_city or "")
+                premium_rate = _get_premium_standby_rate(
+                    conn, apt_type, bool(married), actual_date, sb_start, _pw_filtered, year, month
                 ) if actual_date else None
-                if purim_rate is not None:
-                    standby_rate = purim_rate
+                if premium_rate is not None:
+                    standby_rate = premium_rate
                 elif seg_id:
                     standby_rate = get_standby_rate(conn, seg_id, apt_type, bool(married), year, month)
                 else:
@@ -2700,12 +2745,13 @@ def get_daily_segments_data(
                     if entry.get("asd_night_high_func") and actual_apt_type == HIGH_FUNCTIONING_APT_TYPE:
                         standby_rate = ASD_NIGHT_STANDBY_RATE
                     else:
-                        # בפורים: תעריף כוננות שבת
-                        purim_rate = _get_purim_standby_rate(
-                            conn, apt_type, bool(married), actual_date, sb_start, _sb_apt_city, year, month
+                        # חלון פרימיום (פורים) עם standby_mode='shabbat': תעריף כוננות שבת
+                        _pw_filtered = filter_windows_by_city(premium_windows_all, _sb_apt_city or "")
+                        premium_rate = _get_premium_standby_rate(
+                            conn, apt_type, bool(married), actual_date, sb_start, _pw_filtered, year, month
                         ) if actual_date else None
-                        if purim_rate is not None:
-                            standby_rate = purim_rate
+                        if premium_rate is not None:
+                            standby_rate = premium_rate
                         elif seg_id:
                             standby_rate = get_standby_rate(conn, seg_id, apt_type, bool(married), year, month)
                         else:
@@ -2840,9 +2886,9 @@ def get_daily_segments_data(
             # Include actual_date for each segment for correct Shabbat calculation
             chain_segs = [(s, e, sid, adate) for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date, apt_city in segments]
 
-            # Determine if apartment is in Jerusalem (for Purim date calculation)
+            # חלונות פרימיום מסוננים לפי עיר הדירה הראשונה ברצף
             first_city = segments[0][14] if segments else ""
-            chain_is_jerusalem = (first_city or "") in JERUSALEM_CITY_NAMES
+            chain_premium_windows = filter_windows_by_city(premium_windows_all, first_city or "")
 
             # Calculate night hours in current chain segments
             # Times are in extended 00:00-32:00 axis (0-1920 minutes)
@@ -2866,7 +2912,10 @@ def get_daily_segments_data(
             # Use optimized block calculation with carryover offset
             # Pass night chain flag for 7-hour workday threshold
             # Each segment includes its actual_date for correct Shabbat boundary calculation
-            result = _calculate_chain_wages(chain_segs, shabbat_cache, minutes_offset, chain_is_night, chain_is_jerusalem)
+            result = _calculate_chain_wages(
+                chain_segs, shabbat_cache, minutes_offset, chain_is_night,
+                premium_windows=chain_premium_windows,
+            )
 
             c_100 = result["calc100"]
             c_125 = result["calc125"]
@@ -3406,15 +3455,15 @@ def get_daily_segments_data(
                         if entry.get("asd_night_high_func") and actual_apt_type_ev == HIGH_FUNCTIONING_APT_TYPE:
                             rate = ASD_NIGHT_STANDBY_RATE
                         else:
-                            # בפורים: תעריף כוננות שבת
+                            # חלון פרימיום (פורים) עם standby_mode='shabbat': תעריף כוננות שבת
                             ev_actual_date = event.get("actual_date")
-                            purim_rate = _get_purim_standby_rate(
+                            _pw_filtered = filter_windows_by_city(premium_windows_all, event.get("apt_city", "") or "")
+                            premium_rate = _get_premium_standby_rate(
                                 conn, apt_type, bool(event.get("married")),
-                                ev_actual_date, start,
-                                event.get("apt_city", ""), year, month
+                                ev_actual_date, start, _pw_filtered, year, month
                             ) if ev_actual_date else None
-                            if purim_rate is not None:
-                                rate = purim_rate
+                            if premium_rate is not None:
+                                rate = premium_rate
                             else:
                                 rate = get_standby_rate(conn, event.get("seg_id") or 0, apt_type, bool(event.get("married")), year, month)
                         d_standby_pay += rate

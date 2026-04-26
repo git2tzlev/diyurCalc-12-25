@@ -12,6 +12,60 @@
 
 ---
 
+## [2.22.0] - 2026-04-23
+
+### שינויים
+- **תיקון באג:** סינון חלונות שבת/חג מ-`premium_windows_all` ב-`get_daily_segments_data` — שבת וחגים מטופלים ע"י `_get_shabbat_boundaries` ולא צריכים לעבור דרך ענף premium שגורם לספירה כפולה של `calc150_shabbat`
+- **ממשק אדמין לימי פרימיום:** דף `/admin/special-days` עם:
+  - הוספת יום מיוחד (פורים/עצמאות/בחירות/מותאם) עם כל הפרמטרים
+  - הפעלה/ביטול יום קיים (`is_active`)
+  - מחיקת יום
+  - סינון לפי ערים (whitelist/blacklist)
+- קבצים: `app_utils.py`, `routes/admin.py`, `app.py`, `templates/base.html`, `templates/special_days.html`
+
+### סיבה
+באג: חלונות שבת מ-`get_premium_windows_for_range` נכנסו לענף premium ב-`_calculate_chain_wages` במקום לענף הייעודי, מה שגרם לספירה כפולה של `calc150_shabbat`. ממשק: עד עכשיו ניהול ימי פרימיום היה רק ב-SQL/סקריפט.
+
+---
+
+## [2.21.0] - 2026-04-23
+
+### שינויים
+- איחוד הטיפול בפורים — שלב 2+3 (refactor המנוע + ניקוי קוד ישן)
+- **החלפת הלוגיקה הקשיחה של פורים** ב-`_calculate_chain_wages` ([app_utils.py](app_utils.py)) בלולאה גנרית מעל `PremiumWindow` — כעת פורים/עצמאות/בחירות נשלפים מ-DB ועובדים באותו זרם קוד
+- **מחיקת פונקציות שלא בשימוש:**
+  - `_get_purim_date`, `_get_purim_boundaries`, `_is_purim_time` ([core/time_utils.py](core/time_utils.py))
+  - `_get_purim_standby_rate` ([app_utils.py](app_utils.py)) הוחלפה ב-`_get_premium_standby_rate` שעובדת עם `PremiumWindow.standby_mode`
+  - קבועים: `PURIM_ENTER_MINUTES`, `PURIM_EXIT_MINUTES`, `JERUSALEM_CITY_NAMES` ([core/constants.py](core/constants.py))
+  - `tests/test_purim.py` (נספג לתוך `tests/test_premium_windows.py`)
+- חתימת `_calculate_chain_wages` השתנתה: `is_jerusalem` הוסר, `premium_windows` נוסף במקומו (סינון עיר מתבצע ב-`filter_windows_by_city` לפני הקריאה)
+- שדות פלט חדשים ב-`_calculate_chain_wages`: `calc150_purim`, `calc150_independence`, `calc200_elections` וכו' — לאפשר ייצוא לקודי מירב נפרדים
+- **Fallback בטוח:** אם טבלת `special_days` לא קיימת (מיגרציה לא רצה), המערכת רצה ללא ימי פרימיום מיוחדים + אזהרה חד-פעמית בלוג
+- טעינת חלונות פרימיום אוטומטית ב-`get_daily_segments_data` לכל חודש
+- קבצים: `app_utils.py`, `core/constants.py`, `core/time_utils.py`
+
+### סיבה
+המנוע כבר לא יודע מה זה "פורים" — הוא רק מטפל ב"חלונות פרימיום" שמגיעים מה-DB. זה מאפשר להוסיף עצמאות ובחירות כרשומות בלבד, ללא נגיעה בקוד.
+
+**דרישת deploy:** יש להריץ `sql/create_special_days.sql` + `py scripts/seed_purim_days.py` לפני שהשינוי ייכנס לפרודקשן, אחרת פורים לא יקבל תעריף פרימיום (אבל המערכת תעבוד ללא שגיאה).
+
+---
+
+## [2.20.0] - 2026-04-23
+
+### שינויים
+- תשתית חדשה לחלונות פרימיום (שבת/פורים/עצמאות/בחירות) — שלב 1 מתוך 3 (אינפרסטרוקטורה בלבד, ללא שינוי התנהגות)
+- **טבלה חדשה `special_days`** לאחסון ימים מיוחדים עם תעריף (פורים, יום העצמאות, יום הבחירות, מותאם). תומכת ב-city_filter/city_exclude ו-standby_mode
+- **שירות חדש `core/premium_windows.py`** — נקודת כניסה מאוחדת שמאחדת `shabbat_times` + `special_days` לרשימת "חלונות פרימיום" אחידה
+- **סקריפט seeding `scripts/seed_purim_days.py`** — יוצר אוטומטית רשומות פורים ל-20 שנה קדימה, כולל טיפול בפורים ירושלים ובחריגת תשפ"ו
+- **בדיקות יחידה `tests/test_premium_windows.py`** — 27 בדיקות לסינון ערים, חפיפת חלונות, וחוק max-rate-wins
+- קבצים: `sql/create_special_days.sql`, `core/premium_windows.py`, `scripts/seed_purim_days.py`, `tests/test_premium_windows.py`
+
+### סיבה
+הוספת יום העצמאות (150% בחלון 20:00→20:00) ויום הבחירות (200% בחלון 07:00-22:00) דורשת מנגנון גנרי לימי פרימיום. המנגנון הקיים של פורים בקוד קשיח לא יאפשר להוסיף בחירות שתאריכן לא ידוע מראש. שלב זה מניח תשתית ללא שינוי התנהגות — המנוע הקיים ממשיך לעבוד; Refactor יתבצע בשלב 2.
+
+---
+
 ## [2.19.0] - 2026-04-16
 
 ### שינויים
