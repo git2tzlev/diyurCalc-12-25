@@ -9,7 +9,7 @@ Seeding של ימי פורים בטבלת special_days ל-20 שנה קדימה.
 
 - שנה שבה פורים זהה לשאר הארץ ולירושלים → שורה אחת (city_filter=NULL)
 - שנה שבה שונה → שתי שורות:
-    1. י"ד אדר עבור כל הערים **חוץ מירושלים** (city_exclude=['ירושלים'])
+    1. י"ד אדר עבור כל הערים שאינן ירושלים (city_filter=[שאר הערים מה-DB])
     2. ט"ו אדר עבור ירושלים בלבד (city_filter=['ירושלים'])
 
 התעריף: 150% בטווח 08:00-22:00 באותו יום. כוננות = תעריף שבת.
@@ -60,21 +60,18 @@ def _build_purim_rows(gregorian_year: int) -> list[dict]:
             "name": name,
             "purim_date": non_jerusalem_date,
             "city_filter": None,
-            "city_exclude": None,
         }]
 
     return [
         {
             "name": name,
             "purim_date": non_jerusalem_date,
-            "city_filter": None,
-            "city_exclude": [JERUSALEM],
+            "city_filter": "NON_JERUSALEM",  # placeholder — replaced at insert time
         },
         {
             "name": f"שושן פורים {_hebrew_year_label(hebrew_year)}",
             "purim_date": jerusalem_date,
             "city_filter": [JERUSALEM],
-            "city_exclude": None,
         },
     ]
 
@@ -111,11 +108,27 @@ def seed_purim_days(years: int, dry_run: bool) -> None:
     current_year = date.today().year
     target_years = range(current_year, current_year + years)
 
+    # שליפת רשימת ערים שאינן ירושלים מה-DB (לסינון פורים vs שושן פורים)
+    conn = get_pooled_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT DISTINCT city FROM apartments "
+            "WHERE city IS NOT NULL AND city != '' AND city != %s ORDER BY city",
+            (JERUSALEM,),
+        )
+        non_jerusalem_cities = [r[0] for r in cursor.fetchall()] or None
+        cursor.close()
+    finally:
+        return_connection(conn)
+
     all_rows: list[tuple] = []
     for g_year in target_years:
         for row in _build_purim_rows(g_year):
+            city_filter = row["city_filter"]
+            if city_filter == "NON_JERUSALEM":
+                city_filter = non_jerusalem_cities
             all_rows.append((
-                "purim",
                 row["name"],
                 row["purim_date"],
                 PURIM_START_TIME,
@@ -123,19 +136,15 @@ def seed_purim_days(years: int, dry_run: bool) -> None:
                 PURIM_END_TIME,
                 PURIM_RATE_PCT,
                 PURIM_STANDBY_MODE,
-                row["city_filter"],
-                row["city_exclude"],
-                "auto_seeded",
+                city_filter,
             ))
 
     print(f"נבנו {len(all_rows)} שורות פורים ל-{years} שנים ({current_year}-{current_year + years - 1})")
     for row in all_rows:
         filter_note = ""
-        if row[8]:
-            filter_note = f" [רק: {', '.join(row[8])}]"
-        elif row[9]:
-            filter_note = f" [חוץ מ: {', '.join(row[9])}]"
-        print(f"  {row[2]} — {row[1]}{filter_note}")
+        if row[7]:
+            filter_note = f" [רק: {', '.join(row[7])}]"
+        print(f"  {row[1]} -- {row[0]}{filter_note}")
 
     if dry_run:
         print("\n-- dry-run: לא מוכנס ל-DB --")
@@ -147,12 +156,12 @@ def seed_purim_days(years: int, dry_run: bool) -> None:
         try:
             cursor.executemany("""
                 INSERT INTO special_days
-                    (day_type, name, start_date, start_time, end_date, end_time,
-                     rate_pct, standby_mode, city_filter, city_exclude, source)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    (name, start_date, start_time, end_date, end_time,
+                     rate_pct, standby_mode, city_filter)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """, all_rows)
             conn.commit()
-            print(f"\n✓ הוכנסו {cursor.rowcount} שורות ל-special_days")
+            print(f"\nInserted {cursor.rowcount} rows into special_days")
         finally:
             cursor.close()
     finally:

@@ -133,6 +133,17 @@
     </div>
     {% endif %}
 
+    {% if multi_housing is defined and multi_housing | length > 0 %}
+    <!-- הזהרה על מדריכים במספר מערכי דיור -->
+    <div style="margin-bottom: 10px; padding: 10px 15px; background: #fee2e2; border: 1px solid #fca5a5; border-radius: 6px; display: flex; align-items: center; gap: 10px;">
+        <span style="font-size: 18px;">&#9888;</span>
+        <span style="font-size: 13px; color: #991b1b;">
+            <strong>{{ multi_housing | length }}</strong> מדריכ{% if multi_housing | length > 1 %}ים פעילים{% else %} פעיל{% endif %} ביותר ממערך דיור אחד בחודש זה.
+        </span>
+        <button onclick="showMultiHousingModal()" style="padding: 4px 10px; font-size: 12px; background: #fca5a5; border: none; border-radius: 4px; cursor: pointer;">הצג</button>
+    </div>
+    {% endif %}
+
     {% if preview %}
     <!-- חיפוש ובחירה -->
     <div style="margin-bottom: 10px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
@@ -246,6 +257,35 @@
     </div>
 </div>
 
+<!-- Modal מדריכים במספר מערכי דיור -->
+<div id="multiHousingModal" class="modal-overlay" onclick="if(event.target===this)hideMultiHousingModal()">
+    <div class="modal-content" style="max-width: 500px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <h3 style="margin: 0; color: #991b1b;">מדריכים במספר מערכי דיור</h3>
+            <button onclick="hideMultiHousingModal()" style="background: none; border: none; font-size: 20px; cursor: pointer;">&times;</button>
+        </div>
+        <p style="font-size: 12px; color: #666; margin-bottom: 15px;">מדריכים אלו עובדים ביותר ממערך דיור אחד בחודש זה. יש לוודא שהנתונים תקינים בכל מערך.</p>
+        <table class="legend-table">
+            <thead><tr><th>שם</th><th>מערכי דיור</th></tr></thead>
+            <tbody>
+                {% if multi_housing is defined %}
+                {% for person in preview %}
+                {% if person.person_id in multi_housing %}
+                <tr>
+                    <td>
+                        <a href="/guide/{{ person.person_id }}?year={{ selected_year }}&month={{ selected_month }}"
+                           style="text-decoration: none; color: #0969da; font-weight: bold;">{{ person.name }}</a>
+                    </td>
+                    <td>{{ multi_housing[person.person_id] | join(', ') }}</td>
+                </tr>
+                {% endif %}
+                {% endfor %}
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
 <!-- Modal מקרא סמלים -->
 <div id="legendModal" class="modal-overlay" onclick="if(event.target===this)hideLegend()">
     <div class="modal-content">
@@ -354,11 +394,20 @@ function hideMissingModal() {
     document.getElementById('missingModal').classList.remove('show');
 }
 
+function showMultiHousingModal() {
+    document.getElementById('multiHousingModal').classList.add('show');
+}
+
+function hideMultiHousingModal() {
+    document.getElementById('multiHousingModal').classList.remove('show');
+}
+
 // Close modals with Escape key
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
         hideLegend();
         hideMissingModal();
+        hideMultiHousingModal();
     }
 });
 </script>

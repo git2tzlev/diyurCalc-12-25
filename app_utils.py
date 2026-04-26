@@ -506,7 +506,7 @@ def _calculate_chain_wages(
     Returns:
         Dict with calc100, calc125, calc150, calc175, calc200,
         calc150_shabbat, calc150_overtime, calc150_shabbat_100, calc150_shabbat_50,
-        calc150_purim/_independence, calc200_elections — שדות per-origin לייצוא מירב,
+        calc150_premium, calc175_premium, calc200_premium — שדות פרימיום,
         segments_detail - list of (start_min, end_min, label, is_shabbat) for display.
     """
     windows = premium_windows or []
@@ -514,9 +514,7 @@ def _calculate_chain_wages(
         "calc100": 0, "calc125": 0, "calc150": 0, "calc175": 0, "calc200": 0,
         "calc150_shabbat": 0, "calc150_overtime": 0,
         "calc150_shabbat_100": 0, "calc150_shabbat_50": 0,
-        "calc150_purim": 0, "calc175_purim": 0, "calc200_purim": 0,
-        "calc150_independence": 0, "calc175_independence": 0, "calc200_independence": 0,
-        "calc200_elections": 0,
+        "calc150_premium": 0, "calc175_premium": 0, "calc200_premium": 0,
         "segments_detail": []
     }
 
@@ -539,8 +537,7 @@ def _calculate_chain_wages(
     # Start from offset if this chain continues from previous day
     minutes_processed = minutes_offset
 
-    # תוויות תצוגה לפי origin של חלון פרימיום
-    _ORIGIN_LABELS = {"purim": "פורים", "independence": "עצמאות", "elections": "בחירות"}
+    _PREMIUM_LABEL = "פרימיום"
 
     for seg_start, seg_end, seg_actual_date in flat_segments:
         seg_duration = seg_end - seg_start
@@ -597,39 +594,36 @@ def _calculate_chain_wages(
                 result["segments_detail"].append((start_min, end_min, rate_label, is_shabbat))
 
             if current_premium is not None:
-                # נמצאים בחלון פרימיום (פורים/עצמאות/בחירות וכו')
+                # נמצאים בחלון פרימיום (יום מיוחד)
                 block_abs_start = current_abs_minute
                 block_abs_end = current_abs_minute + block_size
-                origin = current_premium.origin
-                origin_label = _ORIGIN_LABELS.get(origin, origin)
 
                 if current_premium.rate_pct == 150:
-                    # 150%-style (כמו שבת) — tier stacking ל-150/175/200 לפי שעת הרצף
+                    # 150% — tier stacking כמו שבת: 150%/175%/200% לפי שעת הרצף
                     if shabbat_rate == "150%":
                         result["calc150"] += block_size
                         result["calc150_shabbat"] += block_size
                         result["calc150_shabbat_100"] += block_size
                         result["calc150_shabbat_50"] += block_size
-                        result[f"calc150_{origin}"] = result.get(f"calc150_{origin}", 0) + block_size
-                        add_segment_detail(block_abs_start, block_abs_end, f"150% {origin_label}", True)
+                        result["calc150_premium"] += block_size
+                        add_segment_detail(block_abs_start, block_abs_end, f"150% {_PREMIUM_LABEL}", True)
                     elif shabbat_rate == "175%":
                         result["calc175"] += block_size
-                        result[f"calc175_{origin}"] = result.get(f"calc175_{origin}", 0) + block_size
-                        add_segment_detail(block_abs_start, block_abs_end, f"175% {origin_label}", True)
+                        result["calc175_premium"] += block_size
+                        add_segment_detail(block_abs_start, block_abs_end, f"175% {_PREMIUM_LABEL}", True)
                     else:
                         result["calc200"] += block_size
-                        result[f"calc200_{origin}"] = result.get(f"calc200_{origin}", 0) + block_size
-                        add_segment_detail(block_abs_start, block_abs_end, f"200% {origin_label}", True)
+                        result["calc200_premium"] += block_size
+                        add_segment_detail(block_abs_start, block_abs_end, f"200% {_PREMIUM_LABEL}", True)
                 else:
-                    # Flat rate (למשל בחירות 200%) — ללא tier stacking, ללא פיצול פנסיה
-                    rate_label = f"{current_premium.rate_pct}% {origin_label}"
+                    # Flat rate (למשל 200%) — ללא tier stacking
+                    rate_label = f"{current_premium.rate_pct}% {_PREMIUM_LABEL}"
                     if current_premium.rate_pct >= 200:
                         result["calc200"] += block_size
-                        result[f"calc200_{origin}"] = result.get(f"calc200_{origin}", 0) + block_size
+                        result["calc200_premium"] += block_size
                     else:
-                        # תעריף לא סטנדרטי — לא אמור לקרות אלא אם הוזן ידנית
                         result["calc150"] += block_size
-                        result[f"calc150_{origin}"] = result.get(f"calc150_{origin}", 0) + block_size
+                        result["calc150_premium"] += block_size
                     add_segment_detail(block_abs_start, block_abs_end, rate_label, True)
 
             # Now check Shabbat/Holiday boundaries within this block
@@ -3718,6 +3712,7 @@ def aggregate_daily_segments_to_monthly(
         "professional_support": 0.0,
         "holiday_payment": 0.0,
         "extras": 0.0,
+        "extras_for_pension": 0.0,
 
         # ימי עבודה
         "actual_work_days": 0,
@@ -3924,17 +3919,21 @@ def aggregate_daily_segments_to_monthly(
         housing_filter = get_housing_array_filter()
         if housing_filter is not None:
             payment_comps = conn.execute("""
-                SELECT (pc.quantity * pc.rate) as total_amount, pc.component_type_id
+                SELECT (pc.quantity * pc.rate) as total_amount, pc.component_type_id,
+                       COALESCE(pct.for_pension, FALSE) as for_pension
                 FROM payment_components pc
                 JOIN apartments ap ON ap.id = pc.apartment_id
+                LEFT JOIN payment_component_types pct ON pc.component_type_id = pct.id
                 WHERE pc.person_id = %s AND pc.date >= %s AND pc.date < %s
                   AND ap.housing_array_id = %s
             """, (person_id, month_start, month_end, housing_filter)).fetchall()
         else:
             payment_comps = conn.execute("""
-                SELECT (quantity * rate) as total_amount, component_type_id
-                FROM payment_components
-                WHERE person_id = %s AND date >= %s AND date < %s
+                SELECT pc.quantity * pc.rate as total_amount, pc.component_type_id,
+                       COALESCE(pct.for_pension, FALSE) as for_pension
+                FROM payment_components pc
+                LEFT JOIN payment_component_types pct ON pc.component_type_id = pct.id
+                WHERE pc.person_id = %s AND pc.date >= %s AND pc.date < %s
             """, (person_id, month_start, month_end)).fetchall()
 
     for pc in payment_comps:
@@ -3944,6 +3943,8 @@ def aggregate_daily_segments_to_monthly(
             monthly_totals["travel"] += amount
         elif component_type == 13:
             monthly_totals["professional_support"] += amount
+        elif pc["for_pension"]:
+            monthly_totals["extras_for_pension"] += amount
         else:
             monthly_totals["extras"] += amount
 
@@ -3999,7 +4000,8 @@ def aggregate_daily_segments_to_monthly(
         monthly_totals["travel"] +
         monthly_totals["professional_support"] +
         monthly_totals["holiday_payment"] +
-        monthly_totals["extras"]
+        monthly_totals["extras"] +
+        monthly_totals["extras_for_pension"]
     )
 
     # שמירת שכר אפקטיבי
@@ -4043,7 +4045,8 @@ def aggregate_daily_segments_to_monthly(
         _round_pay(monthly_totals.get("travel", 0) or 0) +
         _round_pay(monthly_totals.get("professional_support", 0) or 0) +
         _round_pay(monthly_totals.get("holiday_payment", 0) or 0) +
-        _round_pay(monthly_totals.get("extras", 0) or 0)
+        _round_pay(monthly_totals.get("extras", 0) or 0) +
+        _round_pay(monthly_totals.get("extras_for_pension", 0) or 0)
     )
 
     # תעריף בסיס ממוצע - ממוצע משוקלל של כל התעריפים בשעות רגילות (כולל תוספות סוג דירה)

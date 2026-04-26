@@ -1,429 +1,971 @@
 <!doctype html>
+
 <html lang="he" dir="rtl">
+
 <head>
+
   <meta charset="utf-8">
+
   <meta name="viewport" content="width=device-width, initial-scale=1">
+
   <title>{{ title or "ניהול משמרות" }}</title>
-  <style>
+
+    <style>
+
     :root {
+
       font-family: "Segoe UI", Arial, sans-serif;
-      color: #111;
-      background: #f7f7f7;
+
+      color: #333; /* Darker text for better contrast */
+
+      background: #f0f2f5; /* Lighter background */
+
     }
+
     body {
+
       margin: 0;
+
       padding: 0 0 40px;
-      background: #f7f7f7;
+
+      background: #f0f2f5;
+
     }
+
     header {
-      background: var(--header-bg, #1f6feb);
-      color: #fff;
-      padding: 12px 20px;
+
+      background: linear-gradient(to right, #2c3e50, #4a69bd); /* Modern gradient background */
+
+      color: #ffffff; /* White text for contrast */
+
+      padding: 15px 25px; /* Increased padding */
+
       display: flex;
+
       align-items: center;
+
       justify-content: space-between;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
-      transition: background 0.3s;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15); /* Stronger shadow for depth */
+
+      transition: all 0.3s ease-in-out; /* Smooth transition for all changes */
+
+      border-bottom: 3px solid #5cb85c; /* A subtle accent line */
+
     }
+
     header.demo-mode {
-      background: #e67e22 !important;
+
+      background: linear-gradient(to right, #d35400, #e67e22) !important; /* Orange gradient for demo mode */
+
+      border-bottom-color: #f0ad4e !important;
+
     }
+
     header a {
-      color: #fff;
+
+      color: #ffffff;
+
       text-decoration: none;
-      font-weight: 600;
+
+      font-weight: 500; /* Slightly lighter font weight */
+
+      padding: 8px 12px;
+
+      border-radius: 6px; /* Slightly rounded corners for links */
+
+      transition: background 0.2s ease-in-out;
+
     }
-    main {
-      max-width: fit-content;
-      min-width: 900px;
-      margin: 24px auto;
-      padding: 0 20px;
+
+    header a:hover {
+
+      background: rgba(255, 255, 255, 0.2); /* Light background on hover */
+
+      text-decoration: none;
+
     }
-    .card {
-      background: #fff;
-      border-radius: 10px;
-      padding: 16px 18px;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-      margin-bottom: 16px;
+
+    .nav-link {
+
+        font-weight: normal; 
+
+        opacity: 0.9; 
+
+        font-size: 0.9em; 
+
+        background: rgba(255,255,255,0.2); 
+
+        padding: 4px 8px; 
+
+        border-radius: 4px;
+
+        margin-right: 5px;
+        white-space: nowrap; /* Ensure text stays on one line */
+
     }
-    table {
-      width: 100%;
-      border-collapse: collapse;
+
+    .nav-link:hover {
+
+        background: rgba(255,255,255,0.3);
+
     }
-    th, td {
-      padding: 8px 10px;
-      border-bottom: 1px solid #eee;
-      text-align: right;
-    }
-    th {
-      background: #f2f4f7;
-      font-weight: 700;
-      font-size: 14px;
-    }
-    tr:nth-child(even) { background: #fafafa; }
-    a { color: #1f6feb; }
-    .pill {
-      display: inline-block;
-      padding: 2px 8px;
-      border-radius: 12px;
-      background: #e8f0ff;
-      color: #1f6feb;
-      font-size: 12px;
-    }
-    .tabs {
-      margin-top: 12px;
-    }
-    .tabs input[type=radio] { display: none; }
-    .tabs label {
-      padding: 10px 14px;
-      background: #e9eef5;
-      border: 1px solid #d0d7de;
-      cursor: pointer;
-      border-bottom: none;
-      margin-left: 4px;
-      border-radius: 8px 8px 0 0;
-      font-weight: 600;
-    }
-    .tabs label:hover { background: #dfe7f1; }
-    .tabs .tab-panels {
-      border: 1px solid #d0d7de;
-      border-radius: 0 10px 10px 10px;
-      background: #fff;
-      padding: 14px;
-      margin-top: -1px;
-    }
-    .tabs .panel { display: none; }
-    #tab-shifts:checked ~ .tab-panels .panel-shifts { display: block; }
-    #tab-segments:checked ~ .tab-panels .panel-segments { display: block; }
-    #tab-chains:checked ~ .tab-panels .panel-chains { display: block; }
-    #tab-monthly:checked ~ .tab-panels .panel-monthly { display: block; }
-    #tab-merav:checked ~ .tab-panels .panel-merav { display: block; }
-    #tab-simple:checked ~ .tab-panels .panel-simple { display: block; }
-    
-    #tab-shifts:checked + label,
-    #tab-segments:checked + label,
-    #tab-chains:checked + label,
-    #tab-monthly:checked + label,
-    #tab-merav:checked + label,
-    #tab-simple:checked + label {
-      background: #fff;
-      border-bottom: 2px solid #fff;
-      position: relative;
-      top: 1px;
-      z-index: 2;
-    }
-    .muted { color: #666; font-size: 14px; }
-    .header-line { display: flex; align-items: center; justify-content: space-between; }
-    .controls { display: flex; gap: 8px; align-items: center; }
-    select, button {
-      padding: 6px 10px;
+
+    .main-nav-link { /* New style for the main title link */
+
+      font-size: 1.2em; 
+
+      font-weight: 700; 
+
+      padding: 5px 10px; 
+
+      background: rgba(255,255,255,0.1); 
+
       border-radius: 6px;
-      border: 1px solid #c8d1dc;
-      font-size: 14px;
+
     }
-    button {
-      background: #1f6feb;
-      color: #fff;
-      border: none;
+
+    .main-nav-link:hover {
+
+      background: rgba(255,255,255,0.2);
+
+    }
+
+
+
+    /* Updated styles for select and button in header */
+
+    header select,
+
+    header button {
+
+      padding: 8px 14px; /* Slightly larger padding */
+
+      border-radius: 20px; /* More rounded corners */
+
+      border: 1px solid rgba(255,255,255,0.4); /* Lighter border */
+
+      font-size: 0.9em;
+
       cursor: pointer;
+
+      background: rgba(255,255,255,0.1); /* Slightly transparent background */
+
+      color: #fff;
+
+      transition: all 0.2s ease-in-out;
+
     }
+
+
+
+    header select:hover,
+
+    header button:hover {
+
+      background: rgba(255,255,255,0.2); /* More transparent on hover */
+
+      border-color: #fff;
+
+    }
+
+
+
+    header button {
+
+      background: #5cb85c; /* Green button for actions */
+
+      border-color: #5cb85c;
+
+    }
+
+    header button:hover {
+
+      background: #4cae4c;
+
+      border-color: #4cae4c;
+
+    }
+
+
+
+    /* Specific styles for demo toggle button */
+
+    #demo-toggle-btn {
+
+        border: 2px solid #fff; /* White border for emphasis */
+
+        background: transparent;
+
+    }
+
+    #demo-toggle-btn:hover {
+
+        background: rgba(255, 255, 255, 0.1);
+
+    }
+
+    #demo-indicator {
+
+        width: 12px; /* Larger indicator */
+
+        height: 12px;
+
+        border-radius: 50%;
+
+        margin-left: 5px; /* Spacing from label */
+
+    }
+
+
+
+    /* Version and user info styles */
+
+    .header-info {
+
+        color: #fff;
+
+        text-align: left;
+
+        font-size: 0.7em; /* Adjusted font size */
+
+        opacity: 0.9;
+
+        display: flex;
+
+        flex-direction: column; /* Changed from row to column */
+        align-items: flex-start; /* Changed from center to flex-start */
+        gap: 0; /* Removed gap for vertical spacing */
+    }
+
+    .header-info div:first-child {
+
+        font-weight: 500;
+
+    }
+
+    .header-info div:last-child {
+
+        font-size: 0.6em; /* Adjusted font size */
+
+        opacity: 0.7;
+
+    }
+
+    .user-info-section {
+
+        display: flex;
+
+        align-items: center;
+
+        gap: 5px; /* Adjusted gap */
+    }
+
+    .user-info-section span {
+
+        color: #fff;
+
+        font-size: 0.8em; /* Adjusted font size */
+
+        font-weight: 500;
+
+    }
+
+    .user-info-section a {
+
+        color: #fff; 
+
+        opacity: 0.8; 
+
+        font-size: 0.7em; /* Adjusted font size */
+
+        background: rgba(255,255,255,0.15); 
+
+        padding: 3px 8px; /* Adjusted padding */
+
+        border-radius: 15px; /* Pill-shaped logout button */
+
+    }
+
+    .user-info-section a:hover {
+
+        background: rgba(255,255,255,0.25);
+
+    }
+
+    main {
+
+      max-width: fit-content;
+
+      min-width: 900px;
+
+      margin: 24px auto;
+
+      padding: 0 20px;
+
+    }
+
+    .card {
+
+      background: #fff;
+
+      border-radius: 10px;
+
+      padding: 16px 18px;
+
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+
+      margin-bottom: 16px;
+
+    }
+
+    table {
+
+      width: 100%;
+
+      border-collapse: collapse;
+
+    }
+
+    th, td {
+
+      padding: 8px 10px;
+
+      border-bottom: 1px solid #eee;
+
+      text-align: right;
+
+    }
+
+    th {
+
+      background: #f2f4f7;
+
+      font-weight: 700;
+
+      font-size: 14px;
+
+    }
+
+    tr:nth-child(even) { background: #fafafa; }
+
+    a { color: #1f6feb; }
+
+    .pill {
+
+      display: inline-block;
+
+      padding: 2px 8px;
+
+      border-radius: 12px;
+
+      background: #e8f0ff;
+
+      color: #1f6feb;
+
+      font-size: 12px;
+
+    }
+
+    .tabs {
+
+      margin-top: 12px;
+
+    }
+
+    .tabs input[type=radio] { display: none; }
+
+    .tabs label {
+
+      padding: 10px 14px;
+
+      background: #e9eef5;
+
+      border: 1px solid #d0d7de;
+
+      cursor: pointer;
+
+      border-bottom: none;
+
+      margin-left: 4px;
+
+      border-radius: 8px 8px 0 0;
+
+      font-weight: 600;
+
+    }
+
+    .tabs label:hover { background: #dfe7f1; }
+
+    .tabs .tab-panels {
+
+      border: 1px solid #d0d7de;
+
+      border-radius: 0 10px 10px 10px;
+
+      background: #fff;
+
+      padding: 14px;
+
+      margin-top: -1px;
+
+    }
+
+    .tabs .panel { display: none; }
+
+    #tab-shifts:checked ~ .tab-panels .panel-shifts { display: block; }
+
+    #tab-segments:checked ~ .tab-panels .panel-segments { display: block; }
+
+    #tab-chains:checked ~ .tab-panels .panel-chains { display: block; }
+
+    #tab-monthly:checked ~ .tab-panels .panel-monthly { display: block; }
+
+    #tab-merav:checked ~ .tab-panels .panel-merav { display: block; }
+
+    #tab-notes:checked ~ .tab-panels .panel-notes { display: block; }
+
+    #tab-simple:checked ~ .tab-panels .panel-simple { display: block; }
+
+
+
+    #tab-shifts:checked + label,
+
+    #tab-segments:checked + label,
+
+    #tab-chains:checked + label,
+
+    #tab-monthly:checked + label,
+
+    #tab-merav:checked + label,
+
+    #tab-notes:checked + label,
+
+    #tab-simple:checked + label {
+
+      background: #fff;
+
+      border-bottom: 2px solid #fff;
+
+      position: relative;
+
+      top: 1px;
+
+      z-index: 2;
+
+    }
+
+    .muted { color: #666; font-size: 14px; }
+
+    .header-line { display: flex; align-items: center; justify-content: space-between; }
+
+    .controls { display: flex; gap: 8px; align-items: center; }
+
+    select, button {
+
+      padding: 6px 10px;
+
+      border-radius: 6px;
+
+      border: 1px solid #c8d1dc;
+
+      font-size: 14px;
+
+    }
+
+    button {
+
+      background: #1f6feb;
+
+      color: #fff;
+
+      border: none;
+
+      cursor: pointer;
+
+    }
+
     button:hover { background: #1957b8; }
+
     .section-title { margin: 0 0 12px; }
 
     /* Print styles */
+
     @media print {
+
       @page {
+
         size: landscape;
+
         margin: 10mm;
+
       }
 
       body {
+
         background: #fff;
+
         padding: 0;
+
         margin: 0;
+
         -webkit-print-color-adjust: exact !important;
+
         print-color-adjust: exact !important;
+
       }
 
       header {
+
         display: none !important;
+
       }
 
       main {
+
         max-width: 100% !important;
+
         margin: 0 !important;
+
         padding: 0 !important;
+
       }
 
       .card {
+
         box-shadow: none;
+
         border: none;
+
         padding: 0;
+
         max-width: 100% !important;
+
       }
 
       .controls, button, select, form, .header-line .controls {
+
         display: none !important;
+
       }
 
       .header-line {
+
         justify-content: center;
+
         margin-bottom: 10px;
+
       }
 
       table {
+
         width: 100% !important;
+
         min-width: 0 !important;
+
         font-size: 9px !important;
+
         table-layout: fixed !important;
+
       }
 
       th, td {
+
         padding: 3px 4px !important;
+
         font-size: 9px !important;
+
         word-wrap: break-word;
+
         overflow: hidden;
+
       }
 
       th {
+
         background: #f2f4f7 !important;
+
       }
 
       th div {
+
         font-size: 7px !important;
+
+        
+
       }
 
       /* Remove sticky positioning for print */
+
       td[style*="sticky"], th[style*="sticky"] {
+
         position: static !important;
+
       }
 
       /* Ensure colors print */
+
       tr[style*="background"], td[style*="background"], th[style*="background"] {
+
         -webkit-print-color-adjust: exact !important;
+
         print-color-adjust: exact !important;
+
       }
 
       /* Hide overflow container scroll */
+
       div[style*="overflow-x"] {
+
         overflow: visible !important;
+
       }
 
       a {
+
         text-decoration: none !important;
+
         color: #000 !important;
+
       }
+
     }
-  </style>
+
+</style>
+
 </head>
+
 <body>
+
   <header>
-    <div style="display: flex; gap: 20px; align-items: center;">
-        <img src="/static/logo_tzohar_new.jpg" alt="לוגו עמותת צהר" style="height: 36px; border-radius: 4px;">
-        <a href="/">מדריכים - דוח שעות</a>
-        <a href="/summary" style="font-weight: normal; opacity: 0.9; font-size: 0.9em; background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px;">סיכום שכר כללי</a>
-        <a href="/stats" style="font-weight: normal; opacity: 0.9; font-size: 0.9em; background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px;">סטטיסטיקות</a>
-        <a href="/reports" style="font-weight: normal; opacity: 0.9; font-size: 0.9em; background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px;">ניהול דוחות</a>
+   <div style="display: flex; align-items: center; gap: 10px;"> {# Left group #}
+        <img src="/static/logo_tzohar_new.jpg" alt="לוגו עמותת צהר" style="height: 40px; border-radius: 6px;">
+        <a href="/" class="main-nav-link">מדריכים - דוח שעות</a>
+        {# Navigation links #}
+        <a href="/summary" class="nav-link">סיכום שכר כללי</a>
+        <a href="/stats" class="nav-link">סטטיסטיקות</a>
+        <a href="/reports" class="nav-link">ניהול דוחות</a>
         {% if request.state.current_user and request.state.current_user.role == 'super_admin' %}
-        <a href="/admin/payment-codes" style="font-weight: normal; opacity: 0.9; font-size: 0.9em; background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px;">ניהול סמלי שכר</a>
-        <a href="/admin/special-days" style="font-weight: normal; opacity: 0.9; font-size: 0.9em; background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px;">ימי פרימיום</a>
-        <a href="/admin/email-settings" style="font-weight: normal; opacity: 0.9; font-size: 0.9em; background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px;">⚙️ הגדרות מייל</a>
-        <a href="/admin/demo-sync" style="font-weight: normal; opacity: 0.9; font-size: 0.9em; background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px;">סנכרון דמו</a>
+        <a href="/admin/payment-codes" class="nav-link">ניהול סמלי שכר</a>
+        <a href="/admin/special-days" class="nav-link">ימי פרימיום</a>
+        <a href="/admin/email-settings" class="nav-link">⚙️ הגדרות מייל</a>
+        <a href="/admin/demo-sync" class="nav-link">סנכרון דמו</a>
         {% endif %}
-    </div>
-    <div style="display: flex; align-items: center; gap: 12px;">
+        {# Controls group #}
         {% if not request.state.current_user or request.state.current_user.role != 'framework_manager' %}
-        <select id="housing-array-select" onchange="setHousingArrayFilter(this.value)" style="
-            padding: 6px 10px;
-            border-radius: 6px;
-            border: 1px solid rgba(255,255,255,0.5);
-            background: rgba(255,255,255,0.15);
-            color: #fff;
-            font-size: 0.85em;
-            cursor: pointer;
-        ">
+        <select id="housing-array-select" onchange="setHousingArrayFilter(this.value)">
             <option value="">כל המערכים</option>
         </select>
         {% endif %}
         {% if request.state.current_user and request.state.current_user.role == 'super_admin' %}
-        <button id="demo-toggle-btn" onclick="toggleDemoMode()" style="
-            padding: 6px 12px;
-            border-radius: 6px;
-            border: 2px solid #fff;
-            background: transparent;
-            color: #fff;
-            font-size: 0.85em;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            transition: all 0.2s;
-        ">
-            <span id="demo-indicator" style="
-                width: 10px;
-                height: 10px;
-                border-radius: 50%;
-                background: #28a745;
-            "></span>
+        <button id="demo-toggle-btn" onclick="toggleDemoMode()">
+            <span id="demo-indicator"></span>
             <span id="demo-label">ייצור</span>
         </button>
         {% endif %}
-        <div style="color: #fff; text-align: left; font-size: 0.85em;">
-            <div>גרסה {{ app_version }}</div>
-            <div id="db-name-display" style="font-size: 0.75em; opacity: 0.8;"></div>
+        <div class="header-info">
+            <div>גרסה {{ app_version }}</div>
+            <div id="db-name-display"></div>
         </div>
-        {% if request.state.current_user %}
-        <div style="display: flex; align-items: center; gap: 8px; border-right: 1px solid rgba(255,255,255,0.3); padding-right: 12px;">
-            <span style="color: #fff; font-size: 0.85em;">{{ request.state.current_user.name }}</span>
-            <a href="/logout" style="color: #fff; opacity: 0.8; font-size: 0.8em; background: rgba(255,255,255,0.15); padding: 4px 8px; border-radius: 4px;">יציאה</a>
-        </div>
-        {% endif %}
     </div>
+    {# Right group: User info section #}
+    {% if request.state.current_user %}
+    <div class="user-info-section">
+        <span>{{ request.state.current_user.name }}</span>
+        <a href="/logout">יציאה</a>
+    </div>
+    {% endif %}
   </header>
+
   <main>
+
     {% block content %}{% endblock %}
+
   </main>
 
+
+
   <script>
+
     // Demo mode toggle functionality
+
     function updateDemoUI(isDemo) {
+
         const indicator = document.getElementById('demo-indicator');
+
         const label = document.getElementById('demo-label');
+
         const btn = document.getElementById('demo-toggle-btn');
+
         const header = document.querySelector('header');
+
         const dbDisplay = document.getElementById('db-name-display');
 
+
+
         if (isDemo) {
+
             indicator.style.background = '#ffc107';
+
             label.textContent = 'פיתוח';
+
             btn.style.background = 'rgba(255, 193, 7, 0.3)';
+
             btn.style.borderColor = '#ffc107';
+
             header.classList.add('demo-mode');
+
             dbDisplay.textContent = 'מסד: diyurdemodb (פיתוח)';
+
         } else {
+
             indicator.style.background = '#28a745';
+
             label.textContent = 'עבודה';
+
             btn.style.background = 'transparent';
+
             btn.style.borderColor = '#fff';
+
             header.classList.remove('demo-mode');
+
             dbDisplay.textContent = 'מסד: defaultdb (עבודה)';
+
         }
+
     }
+
+
 
     async function toggleDemoMode() {
+
         // Prompt for password with hint
+
         const password = prompt('הזן סיסמה למעבר בין מצבים:\n(רמז: סיסמת WIFI)');
+
         if (password === null) return; // User cancelled
 
+
+
         try {
+
             const response = await fetch('/api/toggle-demo-mode', {
+
                 method: 'POST',
+
                 headers: { 'Content-Type': 'application/json' },
+
                 body: JSON.stringify({ password: password })
+
             });
+
             const data = await response.json();
 
+
+
             if (data.success) {
+
                 updateDemoUI(data.demo_mode);
+
                 // Reload the page to reflect new database
+
                 window.location.reload();
+
             } else {
+
                 alert(data.error || 'סיסמה שגויה');
+
             }
+
         } catch (err) {
+
             console.error('Failed to toggle demo mode:', err);
+
             alert('שגיאה בהחלפת מצב');
+
         }
+
     }
+
+
 
     // Check initial state on page load
+
     document.addEventListener('DOMContentLoaded', function() {
+
         const isDemo = document.cookie.split('; ').find(row => row.startsWith('demo_mode='))?.split('=')[1] === 'true';
+
         updateDemoUI(isDemo);
+
         loadHousingArrays();
+
         setupPeriodSaving();
+
     });
 
+
+
     // Save selected period to cookie when month/year changes
+
     function setupPeriodSaving() {
+
         const monthSelect = document.getElementById('month');
+
         const yearSelect = document.getElementById('year');
 
+
+
         if (monthSelect && yearSelect) {
+
             const saveSelectedPeriod = function() {
+
                 const month = monthSelect.value;
+
                 const year = yearSelect.value;
+
                 if (month && year) {
+
                     // שמירה סינכרונית ב-cookie - עובד גם כש-form.submit() מנווט מיד
+
                     document.cookie = `selected_period=${year}-${month};path=/;max-age=${86400*365};SameSite=Lax`;
+
                 }
+
             };
 
+
+
             const form = monthSelect.closest('form');
+
             if (form) {
+
                 form.addEventListener('submit', saveSelectedPeriod);
+
             }
 
+
+
             monthSelect.addEventListener('change', saveSelectedPeriod);
+
             yearSelect.addEventListener('change', saveSelectedPeriod);
+
         }
+
     }
+
+
 
     // Housing array filter functionality
+
     async function loadHousingArrays() {
+
         try {
+
             const response = await fetch('/api/housing-arrays');
+
             const arrays = await response.json();
+
             const select = document.getElementById('housing-array-select');
+
             if (!select) return;
 
+
+
             // Get current value from cookie
-            const currentId = document.cookie.split('; ')
-                .find(row => row.startsWith('housing_array_id='))?.split('=')[1] || '';
+
+            const currentId = document.cookie.split('; ').find(row => row.startsWith('housing_array_id='))?.split('=')[1] || '';
+
+
 
             arrays.forEach(arr => {
+
                 const option = document.createElement('option');
+
                 option.value = arr.id;
+
                 option.textContent = arr.name;
+
                 if (arr.id.toString() === currentId) {
+
                     option.selected = true;
+
                 }
+
                 select.appendChild(option);
+
             });
+
+
 
             // Update select style if filter is active
+
             updateHousingArrayUI(currentId);
+
         } catch (err) {
+
             console.error('Failed to load housing arrays:', err);
+
+            
+
         }
+
     }
+
+
 
     function updateHousingArrayUI(filterId) {
+
         const select = document.getElementById('housing-array-select');
+
         if (!select) return;
 
+
+
         if (filterId) {
+
             select.style.background = 'rgba(245, 158, 11, 0.4)';
+
             select.style.borderColor = '#f59e0b';
+
         } else {
+
             select.style.background = 'rgba(255,255,255,0.15)';
+
             select.style.borderColor = 'rgba(255,255,255,0.5)';
+
         }
+
     }
+
+
 
     async function setHousingArrayFilter(value) {
-        try {
-            await fetch('/api/set-housing-array-filter', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ housing_array_id: value ? parseInt(value) : null })
-            });
-            window.location.reload();
-        } catch (err) {
-            console.error('Failed to set housing array filter:', err);
-        }
-    }
-  </script>
-</body>
-</html>
 
+        try {
+
+            await fetch('/api/set-housing-array-filter', {
+
+                method: 'POST',
+
+                headers: { 'Content-Type': 'application/json' },
+
+                body: JSON.stringify({ housing_array_id: value ? parseInt(value) : null })
+
+            });
+
+            window.location.reload();
+
+        } catch (err) {
+
+            console.error('Failed to set housing array filter:', err);
+
+            
+
+        }
+
+    }
+
+  </script>
+
+</body>
+
+</html>

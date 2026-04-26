@@ -44,8 +44,7 @@ class PremiumWindow:
         origin: מקור החלון — 'shabbat'/'holiday'/'purim'/'independence'/'elections'/'custom'.
         standby_mode: מדיניות כוננות — 'shabbat' (תעריף כוננות שבת) או 'none' (רגיל).
         source_id: FK לרשומת המקור (shabbat_times אין id נפרד, special_days.id).
-        city_filter: whitelist של ערים (NULL = כולם). להחלה ב-filter_windows_by_city.
-        city_exclude: blacklist של ערים (NULL = לא מחריג).
+        city_filter: רק ערים אלה (NULL = כולם). להחלה ב-filter_windows_by_city.
     """
     start_date: date
     start_min: int
@@ -56,7 +55,6 @@ class PremiumWindow:
     standby_mode: str
     source_id: Optional[int]
     city_filter: Optional[tuple] = None
-    city_exclude: Optional[tuple] = None
 
 
 # =============================================================================
@@ -92,21 +90,17 @@ def _parse_iso_date(value: str | date | None) -> date | None:
 
 
 def _city_matches(window_filter: list[str] | None,
-                  window_exclude: list[str] | None,
                   apt_city: str | None) -> bool:
     """
     בדיקה אם הדירה מתאימה לפילטר הערים של החלון.
 
-    - window_filter=None ו-window_exclude=None → החלון חל על כולם
+    - window_filter=None → החלון חל על כולם
     - window_filter=[..] → החלון חל רק אם apt_city ברשימה
-    - window_exclude=[..] → החלון חל אלא אם apt_city ברשימה
     """
+    if window_filter is None:
+        return True
     normalized_city = (apt_city or "").strip()
-    if window_filter is not None:
-        return normalized_city in window_filter
-    if window_exclude is not None:
-        return normalized_city not in window_exclude
-    return True
+    return normalized_city in window_filter
 
 
 # =============================================================================
@@ -189,8 +183,8 @@ def _load_special_day_windows(
     try:
         try:
             cursor.execute("""
-                SELECT id, day_type, start_date, start_time, end_date, end_time,
-                       rate_pct, standby_mode, city_filter, city_exclude
+                SELECT id, name, start_date, start_time, end_date, end_time,
+                       rate_pct, standby_mode, city_filter
                 FROM special_days
                 WHERE is_active = true
                   AND start_date <= %s
@@ -217,11 +211,10 @@ def _load_special_day_windows(
             end_date=row["end_date"],
             end_min=_time_to_minutes(row["end_time"]),
             rate_pct=row["rate_pct"],
-            origin=row["day_type"],
+            origin="premium",
             standby_mode=row["standby_mode"],
             source_id=row["id"],
             city_filter=tuple(row["city_filter"]) if row["city_filter"] else None,
-            city_exclude=tuple(row["city_exclude"]) if row["city_exclude"] else None,
         ))
 
     return windows
@@ -230,12 +223,11 @@ def _load_special_day_windows(
 def filter_windows_by_city(
     windows: list[PremiumWindow], apt_city: str | None,
 ) -> list[PremiumWindow]:
-    """סינון חלונות לפי city_filter/city_exclude של כל חלון ביחס לעיר הדירה."""
+    """סינון חלונות לפי city_filter של כל חלון ביחס לעיר הדירה."""
     return [
         w for w in windows
         if _city_matches(
             list(w.city_filter) if w.city_filter else None,
-            list(w.city_exclude) if w.city_exclude else None,
             apt_city,
         )
     ]

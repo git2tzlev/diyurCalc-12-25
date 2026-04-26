@@ -12,7 +12,7 @@ from fastapi import Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from core.config import config
-from core.database import get_conn, get_housing_array_filter, get_default_period
+from core.database import get_conn, get_housing_array_filter, get_default_period, get_multi_housing_guides
 from core.logic import get_active_guides
 from utils.utils import month_range_ts, available_months_from_db, format_currency, human_date
 
@@ -62,7 +62,9 @@ def home(
     years_options = sorted({y for y, _ in months_all}, reverse=True)
 
     counts: dict[int, int] = {}
+    notes_counts: dict[int, int] = {}
     has_payment_components: set[int] = set()
+    multi_housing: dict[int, list[str]] = {}
     if selected_year and selected_month:
         start_dt, end_dt = month_range_ts(selected_year, selected_month)
         # Convert datetime to date for PostgreSQL date column
@@ -120,6 +122,19 @@ def home(
                     (start_date, end_date),
                 ):
                     has_payment_components.add(row["person_id"])
+
+            for row in conn.execute(
+                """
+                SELECT person_id, COUNT(*) AS cnt
+                FROM guide_monthly_notes
+                WHERE year = %s AND month = %s
+                GROUP BY person_id
+                """,
+                (selected_year, selected_month),
+            ):
+                notes_counts[row["person_id"]] = row["cnt"]
+
+            multi_housing = get_multi_housing_guides(conn, start_date, end_date)
         logger.info(f"Counts query took: {time.time() - counts_start:.4f}s")
 
     # Calculate seniority years for each guide
@@ -177,6 +192,8 @@ def home(
             "selected_year": selected_year,
             "selected_month": selected_month,
             "counts": counts,
+            "notes_counts": notes_counts,
+            "multi_housing": multi_housing,
             "q": q or "",
         },
     )

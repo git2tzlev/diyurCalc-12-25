@@ -38,6 +38,7 @@
         <th class="sortable" data-sort="type" data-type="text">סוג <span class="sort-indicator">⇅</span></th>
         <th class="sortable" data-sort="seniority" data-type="number">ותק (שנים) <span class="sort-indicator">⇅</span></th>
         <th class="sortable" data-sort="shifts" data-type="number">סה\"כ משמרות בחודש <span class="sort-indicator">⇅</span></th>
+        <th class="sortable" data-sort="notes" data-type="number">הערות <span class="sort-indicator">⇅</span></th>
         <th class="sortable" data-sort="status" data-type="text">סטטוס <span class="sort-indicator">⇅</span></th>
       </tr>
     </thead>
@@ -48,6 +49,9 @@
           <a href="/guide/{{ g['id'] }}{% if selected_month and selected_year %}?month={{ selected_month }}&year={{ selected_year }}{% endif %}" style="text-decoration: none; color: #0969da; font-weight: 500;" title="לחץ לצפייה בדוח מפורט">
             {{ g['name'] }}
           </a>
+          {% if multi_housing is defined and g['id'] in multi_housing %}
+          <span title="פעיל גם במערכים: {{ multi_housing[g['id']] | join(', ') }}" style="background: #fee2e2; color: #991b1b; padding: 1px 6px; border-radius: 10px; font-size: 11px; font-weight: 600; margin-right: 4px; cursor: help;">מרובה מערכים</span>
+          {% endif %}
         </td>
         <td data-sort-value="{% if g['type'] == 'permanent' %}קבוע{% elif g['type'] == 'substitute' %}מחליף{% else %}{{ g['type'] or '-' }}{% endif %}">
           {% if g['type'] == 'permanent' %}קבוע
@@ -62,11 +66,17 @@
           {% endif %}
         </td>
         <td data-sort-value="{{ counts.get(g['id'], 0) if counts is defined else 0 }}">{{ counts.get(g['id'], 0) if counts is defined else 0 }}</td>
+        <td data-sort-value="{{ notes_counts.get(g['id'], 0) if notes_counts is defined else 0 }}">
+          {% set nc = notes_counts.get(g['id'], 0) if notes_counts is defined else 0 %}
+          {% if nc > 0 %}
+          <span style="background: #fef3c7; color: #92400e; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 600;">{{ nc }}</span>
+          {% endif %}
+        </td>
         <td data-sort-value="{{ 'פעיל' if g['is_active'] else 'לא פעיל' }}">{{ 'פעיל' if g['is_active'] else 'לא פעיל' }}</td>
       </tr>
       {% else %}
       <tr>
-        <td colspan="5" class="muted">לא נמצאו מדריכים</td>
+        <td colspan="6" class="muted">לא נמצאו מדריכים</td>
       </tr>
       {% endfor %}
     </tbody>

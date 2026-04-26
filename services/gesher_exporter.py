@@ -68,6 +68,7 @@ def load_export_config_from_db(conn) -> Dict[str, Tuple[str, str, str]]:
             'professional_support': 'money',
             'holiday_payment': 'money',
             'extras': 'money',
+            'extras_for_pension': 'money',
             
             # נתונים אינפורמטיביים
             'actual_work_days': 'days_with_total_hours',  # ימים + סה"כ שעות

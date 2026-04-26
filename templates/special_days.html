@@ -51,10 +51,6 @@
         font-weight: 600;
     }
 
-    .badge-purim { background: #e9d8fd; color: #553c9a; }
-    .badge-independence { background: #bee3f8; color: #2a4365; }
-    .badge-elections { background: #fefcbf; color: #744210; }
-    .badge-custom { background: #e2e8f0; color: #4a5568; }
     .badge-active { background: #c6f6d5; color: #276749; }
     .badge-disabled { background: #fed7d7; color: #9b2c2c; }
 
@@ -195,16 +191,8 @@
         <form method="post" action="/admin/special-days/add">
             <div class="form-row">
                 <div class="form-group">
-                    <label>סוג</label>
-                    <select name="day_type" style="width: 140px;">
-                        {% for key, label in day_types.items() %}
-                        <option value="{{ key }}">{{ label }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="form-group">
                     <label>שם</label>
-                    <input type="text" name="name" required placeholder="למשל: פורים תשפ&quot;ז" style="width: 180px;">
+                    <input type="text" name="name" required placeholder="למשל: פורים תשפ&quot;ז" style="width: 200px;">
                 </div>
                 <div class="form-group">
                     <label>תאריך התחלה</label>
@@ -244,7 +232,6 @@
                     <select name="city_mode" id="cityMode" class="city-mode-select" onchange="updateCityMode()" style="width: 160px;">
                         <option value="all" selected>כל הערים</option>
                         <option value="filter">רק ערים שנבחרו</option>
-                        <option value="exclude">הכל חוץ מערים שנבחרו</option>
                     </select>
                     <div class="city-checkboxes disabled" id="cityCheckboxes">
                         {% for city in cities %}
@@ -265,7 +252,6 @@
     <table class="sd-table">
         <thead>
             <tr>
-                <th>סוג</th>
                 <th>שם</th>
                 <th>תאריך</th>
                 <th>שעות</th>
@@ -279,7 +265,6 @@
         <tbody>
             {% for d in days %}
             <tr class="{{ '' if d.is_active else 'inactive' }}" id="row-{{ d.id }}">
-                <td><span class="badge badge-{{ d.day_type }}">{{ d.day_type_label }}</span></td>
                 <td>{{ d.name }}</td>
                 <td style="direction: ltr; text-align: right;">{{ d.start_date }} {% if d.start_date != d.end_date %}&rarr; {{ d.end_date }}{% endif %}</td>
                 <td style="direction: ltr; text-align: right;">{{ d.start_time_str }}-{{ d.end_time_str }}</td>
@@ -288,8 +273,6 @@
                 <td>
                     {% if d.city_filter %}
                         <span style="color: #2b6cb0;">{{ d.city_filter | join(', ') }}</span>
-                    {% elif d.city_exclude %}
-                        <span style="color: #e53e3e;">חוץ מ: {{ d.city_exclude | join(', ') }}</span>
                     {% else %}
                         <span style="color: #a0aec0;">הכל</span>
                     {% endif %}

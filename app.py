@@ -33,7 +33,8 @@ from routes.home import home
 from routes.reports import reports_management
 from routes.guide import (
     simple_summary_view, guide_view,
-    shifts_report_pdf, shifts_report_preview, shifts_report_email, chains_report_email
+    shifts_report_pdf, shifts_report_preview, shifts_report_email, chains_report_email,
+    get_guide_notes, add_guide_note, delete_guide_note,
 )
 from routes.admin import (
     manage_payment_codes, update_payment_codes,
@@ -370,6 +371,24 @@ async def chains_report_email_route(request: Request, person_id: int, year: int,
     except Exception as e:
         logger.error(f"Unhandled error in chains_report_email_route: {e}", exc_info=True)
         return JSONResponse({"success": False, "error": f"שגיאה לא צפויה: {str(e)}"})
+
+
+@app.get("/api/guide/{person_id}/notes")
+def get_guide_notes_route(request: Request, person_id: int, year: int, month: int):
+    """שליפת הערות למדריך."""
+    return get_guide_notes(request, person_id, year, month)
+
+
+@app.post("/api/guide/{person_id}/notes")
+async def add_guide_note_route(request: Request, person_id: int):
+    """הוספת הערה למדריך."""
+    return await add_guide_note(request, person_id)
+
+
+@app.delete("/api/guide/notes/{note_id}")
+async def delete_guide_note_route(request: Request, note_id: int):
+    """מחיקת הערה."""
+    return await delete_guide_note(request, note_id)
 
 
 @app.get("/admin", include_in_schema=False)

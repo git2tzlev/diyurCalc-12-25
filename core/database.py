@@ -264,6 +264,27 @@ def get_current_db_name() -> str:
     return "עבודה"
 
 
+def get_multi_housing_guides(conn: "PostgresConnection", start_date, end_date) -> dict[int, list[str]]:
+    """מחזיר מדריכים שעובדים ביותר ממערך דיור אחד בתקופה נתונה.
+
+    Returns:
+        dict מ-person_id לרשימת שמות מערכי דיור
+    """
+    rows = conn.execute(
+        """
+        SELECT tr.person_id, array_agg(DISTINCT ha.name ORDER BY ha.name) AS arrays
+        FROM time_reports tr
+        JOIN apartments ap ON ap.id = tr.apartment_id
+        JOIN housing_arrays ha ON ha.id = ap.housing_array_id
+        WHERE tr.date >= %s AND tr.date < %s
+        GROUP BY tr.person_id
+        HAVING COUNT(DISTINCT ap.housing_array_id) > 1
+        """,
+        (start_date, end_date),
+    ).fetchall()
+    return {row["person_id"]: row["arrays"] for row in rows}
+
+
 def close_all_pools():
     """Close all database connection pools. Used for graceful shutdown."""
     global _prod_pool, _demo_pool

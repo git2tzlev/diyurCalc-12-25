@@ -444,13 +444,6 @@ async def save_all_segments_history_for_month(request: Request) -> JSONResponse:
 # Special Days (Premium Days) Management
 # =============================================================================
 
-DAY_TYPE_LABELS = {
-    "purim": "פורים",
-    "independence": "יום העצמאות",
-    "elections": "יום הבחירות",
-    "custom": "מותאם אישית",
-}
-
 STANDBY_MODE_LABELS = {
     "shabbat": "תעריף שבת",
     "none": "רגיל",
@@ -479,7 +472,6 @@ def manage_special_days(request: Request) -> HTMLResponse:
             d["start_time_str"] = d["start_time"].strftime("%H:%M")
         if d.get("end_time"):
             d["end_time_str"] = d["end_time"].strftime("%H:%M")
-        d["day_type_label"] = DAY_TYPE_LABELS.get(d.get("day_type"), d.get("day_type", ""))
         d["standby_mode_label"] = STANDBY_MODE_LABELS.get(d.get("standby_mode"), d.get("standby_mode", ""))
 
     # שליפת ערים מהדירות לבחירה בטופס
@@ -496,7 +488,6 @@ def manage_special_days(request: Request) -> HTMLResponse:
     return templates.TemplateResponse("special_days.html", {
         "request": request,
         "days": days,
-        "day_types": DAY_TYPE_LABELS,
         "standby_modes": STANDBY_MODE_LABELS,
         "cities": cities,
     })
@@ -507,7 +498,6 @@ async def add_special_day(request: Request) -> RedirectResponse:
     _require_super_admin(request)
     try:
         form = await request.form()
-        day_type = form.get("day_type", "custom")
         name = form.get("name", "")
         start_date_str = form.get("start_date", "")
         start_time = form.get("start_time", "08:00")
@@ -522,23 +512,18 @@ async def add_special_day(request: Request) -> RedirectResponse:
         # סינון ערים: checkbox-based
         city_mode = form.get("city_mode", "all")
         selected_cities = form.getlist("selected_cities")
-        city_filter = None
-        city_exclude = None
-        if city_mode == "filter" and selected_cities:
-            city_filter = selected_cities
-        elif city_mode == "exclude" and selected_cities:
-            city_exclude = selected_cities
+        city_filter = selected_cities if city_mode == "filter" and selected_cities else None
 
         with get_conn() as conn:
             conn.execute("""
                 INSERT INTO special_days
-                    (day_type, name, start_date, start_time, end_date, end_time,
-                     rate_pct, standby_mode, city_filter, city_exclude, source)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'manual')
+                    (name, start_date, start_time, end_date, end_time,
+                     rate_pct, standby_mode, city_filter)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """, (
-                day_type, name, start_date_str, start_time,
+                name, start_date_str, start_time,
                 end_date_str, end_time, rate_pct, standby_mode,
-                city_filter, city_exclude,
+                city_filter,
             ))
             conn.commit()
 

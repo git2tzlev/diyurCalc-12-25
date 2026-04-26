@@ -64,27 +64,21 @@ class TestCityMatches(unittest.TestCase):
     """בדיקות סינון ערים."""
 
     def test_no_filter_matches_all(self):
-        """אין filter ואין exclude → חל על כולם."""
-        self.assertTrue(_city_matches(None, None, "תל אביב"))
-        self.assertTrue(_city_matches(None, None, "ירושלים"))
-        self.assertTrue(_city_matches(None, None, None))
-        self.assertTrue(_city_matches(None, None, ""))
+        """אין filter → חל על כולם."""
+        self.assertTrue(_city_matches(None, "תל אביב"))
+        self.assertTrue(_city_matches(None, "ירושלים"))
+        self.assertTrue(_city_matches(None, None))
+        self.assertTrue(_city_matches(None, ""))
 
     def test_filter_whitelist(self):
         """filter = רק הערים ברשימה."""
-        self.assertTrue(_city_matches(["ירושלים"], None, "ירושלים"))
-        self.assertFalse(_city_matches(["ירושלים"], None, "תל אביב"))
-        self.assertFalse(_city_matches(["ירושלים"], None, None))
-
-    def test_exclude_blacklist(self):
-        """exclude = כל הערים חוץ מאלה ברשימה."""
-        self.assertTrue(_city_matches(None, ["ירושלים"], "תל אביב"))
-        self.assertFalse(_city_matches(None, ["ירושלים"], "ירושלים"))
-        self.assertTrue(_city_matches(None, ["ירושלים"], None))
+        self.assertTrue(_city_matches(["ירושלים"], "ירושלים"))
+        self.assertFalse(_city_matches(["ירושלים"], "תל אביב"))
+        self.assertFalse(_city_matches(["ירושלים"], None))
 
     def test_whitespace_stripped(self):
         """רווחים סביב שם עיר מתבטלים."""
-        self.assertTrue(_city_matches(["ירושלים"], None, "  ירושלים  "))
+        self.assertTrue(_city_matches(["ירושלים"], "  ירושלים  "))
 
 
 class TestIsWithinWindow(unittest.TestCase):

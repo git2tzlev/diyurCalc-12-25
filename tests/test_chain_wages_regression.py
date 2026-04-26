@@ -266,7 +266,7 @@ class TestPurimViaPremiumWindow(unittest.TestCase):
         self.assertEqual(result["calc150_shabbat_100"], 360)
         self.assertEqual(result["calc150_shabbat_50"], 360)
         self.assertEqual(result["calc100"], 0)
-        self.assertEqual(result["calc150_purim"], 360)
+        self.assertEqual(result["calc150_premium"], 360)
 
     def test_purim_crossing_start(self):
         """07:00-12:00 — 60 דקות 100% + 240 דקות 150% פורים."""
@@ -276,7 +276,7 @@ class TestPurimViaPremiumWindow(unittest.TestCase):
         )
         self.assertEqual(result["calc100"], 60)
         self.assertEqual(result["calc150"], 240)
-        self.assertEqual(result["calc150_purim"], 240)
+        self.assertEqual(result["calc150_premium"], 240)
 
     def test_purim_crossing_end(self):
         """20:00-23:00 — 120 דקות 150% + 60 דקות 100%."""
@@ -286,7 +286,7 @@ class TestPurimViaPremiumWindow(unittest.TestCase):
         )
         self.assertEqual(result["calc150"], 120)
         self.assertEqual(result["calc100"], 60)
-        self.assertEqual(result["calc150_purim"], 120)
+        self.assertEqual(result["calc150_premium"], 120)
 
     def test_purim_overtime_175(self):
         """08:00-18:00 בפורים — 8ש' ב-150% + 2ש' ב-175%."""
@@ -296,8 +296,8 @@ class TestPurimViaPremiumWindow(unittest.TestCase):
         )
         self.assertEqual(result["calc150"], 480)
         self.assertEqual(result["calc175"], 120)
-        self.assertEqual(result["calc150_purim"], 480)
-        self.assertEqual(result["calc175_purim"], 120)
+        self.assertEqual(result["calc150_premium"], 480)
+        self.assertEqual(result["calc175_premium"], 120)
 
     def test_purim_heavy_overtime_200(self):
         """08:00-20:00 בפורים — 8ש' 150% + 2ש' 175% + 2ש' 200%."""
@@ -308,7 +308,7 @@ class TestPurimViaPremiumWindow(unittest.TestCase):
         self.assertEqual(result["calc150"], 480)
         self.assertEqual(result["calc175"], 120)
         self.assertEqual(result["calc200"], 120)
-        self.assertEqual(result["calc200_purim"], 120)
+        self.assertEqual(result["calc200_premium"], 120)
 
     def test_purim_not_purim_day(self):
         """יום שאינו פורים — אין premium."""
@@ -318,7 +318,7 @@ class TestPurimViaPremiumWindow(unittest.TestCase):
         )
         self.assertEqual(result["calc100"], 360)
         self.assertEqual(result["calc150"], 0)
-        self.assertEqual(result["calc150_purim"], 0)
+        self.assertEqual(result["calc150_premium"], 0)
 
     def test_purim_before_0800(self):
         """05:00-07:00 בפורים — לפני חלון הפורים, 100%."""
@@ -366,7 +366,7 @@ class TestPurimViaPremiumWindow(unittest.TestCase):
             {}, 0, False, premium_windows=self.purim_windows,
         )
         labels = [lbl for _, _, lbl, _ in result["segments_detail"]]
-        self.assertTrue(any("פורים" in lbl for lbl in labels))
+        self.assertTrue(any("פרימיום" in lbl for lbl in labels))
 
 
 # =============================================================================
@@ -417,7 +417,7 @@ class TestShabbatPremiumNoInterference(unittest.TestCase):
             cache, 0, False, premium_windows=windows,
         )
         self.assertEqual(result["calc150_shabbat"], 360)
-        self.assertEqual(result["calc150_purim"], 0)
+        self.assertEqual(result["calc150_premium"], 0)
 
 
 # =============================================================================
@@ -457,7 +457,7 @@ class TestNightShiftPurim(unittest.TestCase):
 
         900-1320 (purim): 420 min
           - chain minutes 1-420 → 100% tier → shabbat_rate = 150%
-          - calc150 += 420, calc150_purim += 420
+          - calc150 += 420, calc150_premium += 420
           At 420 chain minutes: tier change to 125%.
 
         1320-1380 (after purim): 60 min
@@ -480,7 +480,7 @@ class TestNightShiftPurim(unittest.TestCase):
             {}, 0, True, premium_windows=windows,
         )
         # 420 min purim 150% + 480 min overtime 150% + 120 min 125%
-        self.assertEqual(result["calc150_purim"], 420)
+        self.assertEqual(result["calc150_premium"], 420)
         self.assertEqual(result["calc125"], 120)
         total = result["calc100"] + result["calc125"] + result["calc150"] + result["calc175"] + result["calc200"]
         self.assertEqual(total, 1020)
@@ -502,7 +502,7 @@ class TestElections(unittest.TestCase):
             {}, 0, False, premium_windows=windows,
         )
         self.assertEqual(result["calc200"], 360)
-        self.assertEqual(result["calc200_elections"], 360)
+        self.assertEqual(result["calc200_premium"], 360)
         self.assertEqual(result["calc150"], 0)
         self.assertEqual(result["calc100"], 0)
 
@@ -517,7 +517,7 @@ class TestElections(unittest.TestCase):
         )
         self.assertEqual(result["calc100"], 60)
         self.assertEqual(result["calc200"], 180)
-        self.assertEqual(result["calc200_elections"], 180)
+        self.assertEqual(result["calc200_premium"], 180)
 
 
 # =============================================================================
@@ -536,7 +536,7 @@ class TestIndependenceDay(unittest.TestCase):
             {}, 0, False, premium_windows=windows,
         )
         self.assertEqual(result["calc150"], 120)
-        self.assertEqual(result["calc150_independence"], 120)
+        self.assertEqual(result["calc150_premium"], 120)
 
     def test_independence_before_window(self):
         """18:00-19:30 בערב עצמאות (לפני 20:00) → חול 100%."""
@@ -566,7 +566,7 @@ class TestCarryoverWithPurim(unittest.TestCase):
             {}, 480, False, premium_windows=windows,
         )
         self.assertEqual(result["calc175"], 120)
-        self.assertEqual(result["calc175_purim"], 120)
+        self.assertEqual(result["calc175_premium"], 120)
         self.assertEqual(result["calc150"], 0)
 
 

@@ -4,7 +4,8 @@ Contains file export functionality for various formats.
 """
 from __future__ import annotations
 
-from datetime import datetime
+import calendar
+from datetime import datetime, date, timedelta
 from typing import Optional, List
 from urllib.parse import quote
 
@@ -12,7 +13,7 @@ from fastapi import Request, HTTPException
 from fastapi.responses import HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
 from core.config import config
-from core.database import get_conn, get_housing_array_filter, get_default_period
+from core.database import get_conn, get_housing_array_filter, get_default_period, get_multi_housing_guides
 from core.logic import calculate_monthly_summary
 from services import gesher_exporter
 
@@ -197,6 +198,12 @@ def export_gesher_preview(
                 "SELECT code, name FROM employers WHERE is_active::integer = 1 ORDER BY code"
             ).fetchall()
 
+        # זיהוי מדריכים במספר מערכי דיור
+        start_date = date(year, month, 1)
+        last_day = calendar.monthrange(year, month)[1]
+        end_date = date(year, month, last_day) + timedelta(days=1)
+        multi_housing = get_multi_housing_guides(conn, start_date, end_date)
+
     missing_merav_list = []
     for person_data in summary_data:
         meirav_code = person_data.get('merav_code') or person_data.get('meirav_code')
@@ -236,7 +243,8 @@ def export_gesher_preview(
         "show_zero": show_zero_flag,
         "years": list(range(2023, 2027)),
         "missing_merav_count": missing_merav_count,
-        "missing_merav_list": missing_merav_list
+        "missing_merav_list": missing_merav_list,
+        "multi_housing": multi_housing,
     })
 
 

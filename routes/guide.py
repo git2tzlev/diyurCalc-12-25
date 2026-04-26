@@ -8,13 +8,13 @@ import calendar
 import time
 import logging
 from datetime import datetime
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 
 from fastapi import Request, HTTPException
 from fastapi.responses import HTMLResponse, Response, JSONResponse
 from fastapi.templating import Jinja2Templates
 from core.config import config
-from core.database import get_conn, get_housing_array_filter
+from core.database import get_conn, get_housing_array_filter, get_multi_housing_guides
 from core.time_utils import get_shabbat_times_cache
 from core.logic import (
     get_payment_codes,
@@ -518,6 +518,16 @@ def guide_view(
                 "variable_rate_total": 0.0,
             }
 
+        guide_notes = _fetch_notes(conn, person_id, selected_year, selected_month)
+
+        # בדיקת מדריך במספר מערכי דיור
+        other_housing_arrays: list[str] = []
+        if selected_year and selected_month:
+            start_dt_date, end_dt_date = month_range_ts(selected_year, selected_month)
+            multi = get_multi_housing_guides(conn, start_dt_date.date(), end_dt_date.date())
+            if person_id in multi:
+                other_housing_arrays = multi[person_id]
+
     # Calculate total standby count
     total_standby_count = monthly_totals.get("standby", 0)
 
@@ -540,6 +550,8 @@ def guide_view(
             "payment_codes": payment_codes or {},
             "minimum_wage": MINIMUM_WAGE,
             "total_standby_count": total_standby_count,
+            "guide_notes": guide_notes,
+            "other_housing_arrays": other_housing_arrays,
         },
     )
     render_time = time.time() - render_start
@@ -1421,3 +1433,68 @@ async def chains_report_email(
     except Exception as e:
         logger.error(f"Error in chains_report_email execution: {e}", exc_info=True)
         return JSONResponse({"success": False, "error": f"שגיאה בשליחת המייל: {str(e)}"})
+
+
+# =============================================================================
+# הערות למדריך - Guide Monthly Notes
+# =============================================================================
+
+
+def _fetch_notes(conn, person_id: int, year: int, month: int) -> List[dict]:
+    """שליפת הערות למדריך וחודש מסוים."""
+    rows = conn.execute(
+        """
+        SELECT n.id, n.content, n.created_at, n.updated_at,
+               p.name AS created_by_name
+        FROM guide_monthly_notes n
+        LEFT JOIN people p ON n.created_by = p.id
+        WHERE n.person_id = %s AND n.year = %s AND n.month = %s
+        ORDER BY n.created_at DESC
+        """,
+        (person_id, year, month),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_guide_notes(request: Request, person_id: int, year: int, month: int) -> JSONResponse:
+    """API: שליפת הערות למדריך וחודש."""
+    with get_conn() as conn:
+        notes = _fetch_notes(conn, person_id, year, month)
+    for n in notes:
+        n["created_at"] = n["created_at"].strftime("%d/%m/%Y %H:%M") if n["created_at"] else ""
+    return JSONResponse({"notes": notes})
+
+
+async def add_guide_note(request: Request, person_id: int) -> JSONResponse:
+    """API: הוספת הערה למדריך."""
+    data = await request.json()
+    content = (data.get("content") or "").strip()
+    year = data.get("year")
+    month = data.get("month")
+
+    if not content:
+        return JSONResponse({"success": False, "error": "תוכן ההערה ריק"}, status_code=400)
+
+    user = getattr(request.state, "current_user", None)
+    created_by = user["id"] if user else None
+
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO guide_monthly_notes (person_id, year, month, content, created_by)
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            (person_id, year, month, content, created_by),
+        )
+        conn.conn.commit()
+
+    return JSONResponse({"success": True})
+
+
+async def delete_guide_note(request: Request, note_id: int) -> JSONResponse:
+    """API: מחיקת הערה."""
+    with get_conn() as conn:
+        conn.execute("DELETE FROM guide_monthly_notes WHERE id = %s", (note_id,))
+        conn.conn.commit()
+
+    return JSONResponse({"success": True})
