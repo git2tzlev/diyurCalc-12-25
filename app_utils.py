@@ -3943,7 +3943,7 @@ def aggregate_daily_segments_to_monthly(
             monthly_totals["travel"] += amount
         elif component_type == 13:
             monthly_totals["professional_support"] += amount
-        elif pc["for_pension"]:
+        elif pc.get("for_pension"):
             monthly_totals["extras_for_pension"] += amount
         else:
             monthly_totals["extras"] += amount

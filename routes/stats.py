@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from core.config import config
 from core.database import get_conn, get_housing_array_filter, get_default_period
+from core.auth import get_user_housing_array, is_framework_manager
 from core.logic import calculate_monthly_summary
 from utils.utils import format_currency, human_date, available_months_from_db
 
@@ -26,9 +27,15 @@ templates.env.globals["app_version"] = config.VERSION
 _stats_cache = {}
 
 
+def _stats_cache_key(year: int, month: int) -> str:
+    """מפתח cache כולל פילטר מערך דיור (מניעת דליפת נתונים בין מנהל על למנהל מסגרת)."""
+    hf = get_housing_array_filter()
+    return f"{year}-{month}-{hf if hf is not None else 'all'}"
+
+
 def _get_cached_summary(year: int, month: int):
     """מחזיר נתוני סיכום מה-cache או מחשב אותם."""
-    cache_key = f"{year}-{month}"
+    cache_key = _stats_cache_key(year, month)
     if cache_key not in _stats_cache:
         with get_conn() as conn:
             summary_data, grand_totals = calculate_monthly_summary(conn.conn, year, month)
@@ -87,6 +94,7 @@ def stats_page(
             "selected_month": month,
             "months": months_options,
             "years": years_options,
+            "is_framework_manager": is_framework_manager(request),
         },
     )
 
@@ -97,11 +105,13 @@ def get_salary_by_housing_array(year: int, month: int) -> JSONResponse:
 
     גישה פשוטה: מדריך שעבד בשני מערכים יופיע בשניהם עם כל השכר שלו.
     הסכום הכולל של הגרף עשוי להיות גבוה יותר מייצוא שכר (אם יש מדריכים ביותר ממערך אחד).
+    כשמוגדר פילטר מערך דיור — נספר רק עבודה בדירות של אותו מערך.
     """
     from collections import defaultdict
 
     # שימוש ב-cache - אותו חישוב כמו ייצוא שכר
     summary_data, grand_totals = _get_cached_summary(year, month)
+    housing_filter = get_housing_array_filter()
 
     with get_conn() as conn:
         # שליפת מערכי דיור לכל מדריך לפי הדירות שעבד בהן
@@ -115,15 +125,27 @@ def get_salary_by_housing_array(year: int, month: int) -> JSONResponse:
                 continue
 
             # מציאת כל מערכי הדיור שהמדריך עבד בהם
-            housing_arrays = conn.execute("""
-                SELECT DISTINCT ha.name
-                FROM time_reports tr
-                JOIN apartments ap ON ap.id = tr.apartment_id
-                JOIN housing_arrays ha ON ha.id = ap.housing_array_id
-                WHERE tr.person_id = %s
-                  AND EXTRACT(YEAR FROM tr.date) = %s
-                  AND EXTRACT(MONTH FROM tr.date) = %s
-            """, (person_id, year, month)).fetchall()
+            if housing_filter is not None:
+                housing_arrays = conn.execute("""
+                    SELECT DISTINCT ha.name
+                    FROM time_reports tr
+                    JOIN apartments ap ON ap.id = tr.apartment_id
+                    JOIN housing_arrays ha ON ha.id = ap.housing_array_id
+                    WHERE tr.person_id = %s
+                      AND EXTRACT(YEAR FROM tr.date) = %s
+                      AND EXTRACT(MONTH FROM tr.date) = %s
+                      AND ap.housing_array_id = %s
+                """, (person_id, year, month, housing_filter)).fetchall()
+            else:
+                housing_arrays = conn.execute("""
+                    SELECT DISTINCT ha.name
+                    FROM time_reports tr
+                    JOIN apartments ap ON ap.id = tr.apartment_id
+                    JOIN housing_arrays ha ON ha.id = ap.housing_array_id
+                    WHERE tr.person_id = %s
+                      AND EXTRACT(YEAR FROM tr.date) = %s
+                      AND EXTRACT(MONTH FROM tr.date) = %s
+                """, (person_id, year, month)).fetchall()
 
             # הוספת כל השכר של המדריך לכל מערך שעבד בו
             for row in housing_arrays:
@@ -350,15 +372,29 @@ def get_all_stats(year: int, month: int) -> JSONResponse:
     # שליפת נתוני בסיס - אותו חישוב כמו ייצוא שכר
     summary_data, grand_totals = _get_cached_summary(year, month)
 
+    housing_filter = get_housing_array_filter()
+
     with get_conn() as conn:
         # סוגי משמרות
-        shift_rows = conn.execute("""
-            SELECT st.name, COUNT(*) as count
-            FROM time_reports tr
-            JOIN shift_types st ON st.id = tr.shift_type_id
-            WHERE EXTRACT(YEAR FROM tr.date) = %s AND EXTRACT(MONTH FROM tr.date) = %s
-            GROUP BY st.id, st.name ORDER BY count DESC
-        """, (year, month)).fetchall()
+        if housing_filter is not None:
+            shift_rows = conn.execute("""
+                SELECT st.name, COUNT(*) as count
+                FROM time_reports tr
+                JOIN shift_types st ON st.id = tr.shift_type_id
+                JOIN apartments ap ON ap.id = tr.apartment_id
+                WHERE EXTRACT(YEAR FROM tr.date) = %s
+                  AND EXTRACT(MONTH FROM tr.date) = %s
+                  AND ap.housing_array_id = %s
+                GROUP BY st.id, st.name ORDER BY count DESC
+            """, (year, month, housing_filter)).fetchall()
+        else:
+            shift_rows = conn.execute("""
+                SELECT st.name, COUNT(*) as count
+                FROM time_reports tr
+                JOIN shift_types st ON st.id = tr.shift_type_id
+                WHERE EXTRACT(YEAR FROM tr.date) = %s AND EXTRACT(MONTH FROM tr.date) = %s
+                GROUP BY st.id, st.name ORDER BY count DESC
+            """, (year, month)).fetchall()
 
         # === חישוב שכר לפי מערך - מדריך מופיע בכל מערך שעבד בו ===
         totals_by_housing = defaultdict(float)
@@ -371,15 +407,27 @@ def get_all_stats(year: int, month: int) -> JSONResponse:
                 continue
 
             # מציאת כל מערכי הדיור שהמדריך עבד בהם
-            housing_arrays = conn.execute("""
-                SELECT DISTINCT ha.name
-                FROM time_reports tr
-                JOIN apartments ap ON ap.id = tr.apartment_id
-                JOIN housing_arrays ha ON ha.id = ap.housing_array_id
-                WHERE tr.person_id = %s
-                  AND EXTRACT(YEAR FROM tr.date) = %s
-                  AND EXTRACT(MONTH FROM tr.date) = %s
-            """, (person_id, year, month)).fetchall()
+            if housing_filter is not None:
+                housing_arrays = conn.execute("""
+                    SELECT DISTINCT ha.name
+                    FROM time_reports tr
+                    JOIN apartments ap ON ap.id = tr.apartment_id
+                    JOIN housing_arrays ha ON ha.id = ap.housing_array_id
+                    WHERE tr.person_id = %s
+                      AND EXTRACT(YEAR FROM tr.date) = %s
+                      AND EXTRACT(MONTH FROM tr.date) = %s
+                      AND ap.housing_array_id = %s
+                """, (person_id, year, month, housing_filter)).fetchall()
+            else:
+                housing_arrays = conn.execute("""
+                    SELECT DISTINCT ha.name
+                    FROM time_reports tr
+                    JOIN apartments ap ON ap.id = tr.apartment_id
+                    JOIN housing_arrays ha ON ha.id = ap.housing_array_id
+                    WHERE tr.person_id = %s
+                      AND EXTRACT(YEAR FROM tr.date) = %s
+                      AND EXTRACT(MONTH FROM tr.date) = %s
+                """, (person_id, year, month)).fetchall()
 
             # הוספת כל השכר לכל מערך
             for row in housing_arrays:
@@ -488,9 +536,17 @@ def get_shift_types_distribution(year: int, month: int) -> JSONResponse:
 # =============================================================================
 
 
-def _aggregate_by_apartment(summary_data: List, year: int, month: int) -> dict:
+def _aggregate_by_apartment(
+    summary_data: List,
+    year: int,
+    month: int,
+    housing_array_id: Optional[int] = None,
+) -> dict:
     """
     אגרגציה של נתוני סיכום לפי דירה.
+
+    Args:
+        housing_array_id: אם מוגדר — רק דירות ודיווחים באותו מערך דיור.
 
     Returns:
         dict: {apartment_id: {name, housing_array_id, housing_array_name, totals}}
@@ -500,11 +556,19 @@ def _aggregate_by_apartment(summary_data: List, year: int, month: int) -> dict:
     with get_conn() as conn:
         # שליפת כל הדירות עם מערך הדיור שלהן
         apartments = {}
-        rows = conn.execute("""
-            SELECT ap.id, ap.name, ap.housing_array_id, ha.name as housing_array_name
-            FROM apartments ap
-            LEFT JOIN housing_arrays ha ON ha.id = ap.housing_array_id
-        """).fetchall()
+        if housing_array_id is not None:
+            rows = conn.execute("""
+                SELECT ap.id, ap.name, ap.housing_array_id, ha.name as housing_array_name
+                FROM apartments ap
+                LEFT JOIN housing_arrays ha ON ha.id = ap.housing_array_id
+                WHERE ap.housing_array_id = %s
+            """, (housing_array_id,)).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT ap.id, ap.name, ap.housing_array_id, ha.name as housing_array_name
+                FROM apartments ap
+                LEFT JOIN housing_arrays ha ON ha.id = ap.housing_array_id
+            """).fetchall()
         for r in rows:
             apartments[r["id"]] = {
                 "name": r["name"],
@@ -514,12 +578,22 @@ def _aggregate_by_apartment(summary_data: List, year: int, month: int) -> dict:
 
         # שליפת קישור מדריך+דירה -> תשלומים מפורטים
         # צריך לשלוף את הדיווחים עצמם כדי לדעת איזה תשלום שייך לאיזו דירה
-        reports = conn.execute("""
-            SELECT tr.person_id, tr.apartment_id
-            FROM time_reports tr
-            WHERE EXTRACT(YEAR FROM tr.date) = %s
-              AND EXTRACT(MONTH FROM tr.date) = %s
-        """, (year, month)).fetchall()
+        if housing_array_id is not None:
+            reports = conn.execute("""
+                SELECT tr.person_id, tr.apartment_id
+                FROM time_reports tr
+                JOIN apartments ap ON ap.id = tr.apartment_id
+                WHERE EXTRACT(YEAR FROM tr.date) = %s
+                  AND EXTRACT(MONTH FROM tr.date) = %s
+                  AND ap.housing_array_id = %s
+            """, (year, month, housing_array_id)).fetchall()
+        else:
+            reports = conn.execute("""
+                SELECT tr.person_id, tr.apartment_id
+                FROM time_reports tr
+                WHERE EXTRACT(YEAR FROM tr.date) = %s
+                  AND EXTRACT(MONTH FROM tr.date) = %s
+            """, (year, month)).fetchall()
 
     # מיפוי מדריך -> דירות
     person_apartments = defaultdict(set)
@@ -569,9 +643,10 @@ def _aggregate_by_apartment(summary_data: List, year: int, month: int) -> dict:
 
 
 def get_compare_housing_arrays(
+    request: Request,
     year: int,
     month: int,
-    array_ids: List[int]
+    array_ids: List[int],
 ) -> JSONResponse:
     """
     השוואת 2-5 מערכי דיור - שכר ב-2 החודשים האחרונים.
@@ -582,6 +657,12 @@ def get_compare_housing_arrays(
         array_ids: רשימת מזהי מערכי דיור להשוואה (2-5)
     """
     from collections import defaultdict
+
+    if is_framework_manager(request):
+        return JSONResponse(
+            {"error": "השוואת מערכים אינה זמינה למנהל מסגרת"},
+            status_code=403,
+        )
 
     if not array_ids or len(array_ids) < 2:
         return JSONResponse({"error": "יש לבחור לפחות 2 מערכי דיור"}, status_code=400)
@@ -663,7 +744,7 @@ def get_top_apartments_by_percent(
     year: int,
     month: int,
     percent: int = 100,
-    limit: int = 10
+    limit: int = 10,
 ) -> JSONResponse:
     """
     Top 10 דירות עם הכי הרבה שכר באחוז מסוים.
@@ -675,7 +756,9 @@ def get_top_apartments_by_percent(
         limit: מספר דירות להציג
     """
     summary_data, _ = _get_cached_summary(year, month)
-    apartment_data = _aggregate_by_apartment(summary_data, year, month)
+    apartment_data = _aggregate_by_apartment(
+        summary_data, year, month, get_housing_array_filter()
+    )
 
     # מיפוי אחוז לשדה
     percent_field = f"calc{percent}"
@@ -702,10 +785,18 @@ def get_top_apartments_by_percent(
     })
 
 
+def _reject_housing_param_mismatch(housing_array_id: int) -> Optional[JSONResponse]:
+    """403 אם מנסים לשלוף מערך דיור שאינו הפילטר הפעיל (מנהל מסגרת / עוגייה)."""
+    hf = get_housing_array_filter()
+    if hf is not None and housing_array_id != hf:
+        return JSONResponse({"error": "אין הרשאה למערך דיור זה"}, status_code=403)
+    return None
+
+
 def get_apartments_in_array(
     year: int,
     month: int,
-    housing_array_id: int
+    housing_array_id: int,
 ) -> JSONResponse:
     """
     כל הדירות במערך דיור מסוים - סך השכר.
@@ -715,8 +806,12 @@ def get_apartments_in_array(
         month: חודש
         housing_array_id: מזהה מערך דיור
     """
+    denied = _reject_housing_param_mismatch(housing_array_id)
+    if denied:
+        return denied
+
     summary_data, _ = _get_cached_summary(year, month)
-    apartment_data = _aggregate_by_apartment(summary_data, year, month)
+    apartment_data = _aggregate_by_apartment(summary_data, year, month, housing_array_id)
 
     # סינון לפי מערך דיור
     filtered = {
@@ -758,8 +853,12 @@ def get_apartments_in_array_by_percent(
         month: חודש
         housing_array_id: מזהה מערך דיור
     """
+    denied = _reject_housing_param_mismatch(housing_array_id)
+    if denied:
+        return denied
+
     summary_data, _ = _get_cached_summary(year, month)
-    apartment_data = _aggregate_by_apartment(summary_data, year, month)
+    apartment_data = _aggregate_by_apartment(summary_data, year, month, housing_array_id)
 
     # סינון לפי מערך דיור
     filtered = {
@@ -807,7 +906,7 @@ def get_apartments_in_array_by_percent(
 def get_apartment_details(
     year: int,
     month: int,
-    apartment_id: int
+    apartment_id: int,
 ) -> JSONResponse:
     """
     פרטי דירה - שעות ושכר לפי סוג משמרת + מדריכים.
@@ -817,11 +916,20 @@ def get_apartment_details(
         month: חודש
         apartment_id: מזהה דירה
     """
+    hf = get_housing_array_filter()
     with get_conn() as conn:
         # שליפת שם הדירה
         apt_row = conn.execute(
-            "SELECT name FROM apartments WHERE id = %s", (apartment_id,)
+            "SELECT name, housing_array_id FROM apartments WHERE id = %s",
+            (apartment_id,),
         ).fetchone()
+        if hf is not None and (
+            not apt_row or apt_row["housing_array_id"] != hf
+        ):
+            return JSONResponse(
+                {"error": "אין הרשאה לדירה זו"},
+                status_code=403,
+            )
         apartment_name = apt_row["name"] if apt_row else f"דירה {apartment_id}"
 
         # שליפת כל המדריכים שעבדו בדירה בחודש
@@ -906,6 +1014,19 @@ def get_guide_yearly(person_id: int, year: int) -> JSONResponse:
         person_id: מזהה מדריך
         year: שנה (נקודת התחלה)
     """
+    hf = get_housing_array_filter()
+    if hf is not None:
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT housing_array_id FROM people WHERE id = %s",
+                (person_id,),
+            ).fetchone()
+        if not row or row["housing_array_id"] != hf:
+            return JSONResponse(
+                {"error": "אין הרשאה למדריך זה"},
+                status_code=403,
+            )
+
     from app_utils import get_daily_segments_data, aggregate_daily_segments_to_monthly
     from core.time_utils import get_shabbat_times_cache
     from core.history import get_minimum_wage_for_month
@@ -984,11 +1105,18 @@ def get_guide_yearly(person_id: int, year: int) -> JSONResponse:
 
 
 def get_housing_arrays_list() -> JSONResponse:
-    """רשימת כל מערכי הדיור."""
+    """רשימת מערכי הדיור (מסוננת כשמוגדר פילטר מערך — מנהל מסגרת / עוגייה)."""
+    hf = get_housing_array_filter()
     with get_conn() as conn:
-        rows = conn.execute(
-            "SELECT id, name FROM housing_arrays ORDER BY name"
-        ).fetchall()
+        if hf is not None:
+            rows = conn.execute(
+                "SELECT id, name FROM housing_arrays WHERE id = %s ORDER BY name",
+                (hf,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, name FROM housing_arrays ORDER BY name"
+            ).fetchall()
 
     return JSONResponse({
         "arrays": [{"id": r["id"], "name": r["name"]} for r in rows]
@@ -997,6 +1125,15 @@ def get_housing_arrays_list() -> JSONResponse:
 
 def get_apartments_list(housing_array_id: Optional[int] = None) -> JSONResponse:
     """רשימת דירות, אופציונלי לפי מערך דיור."""
+    hf = get_housing_array_filter()
+    if hf is not None:
+        if housing_array_id is not None and housing_array_id != hf:
+            return JSONResponse(
+                {"error": "אין הרשאה למערך דיור זה"},
+                status_code=403,
+            )
+        housing_array_id = hf
+
     with get_conn() as conn:
         if housing_array_id:
             rows = conn.execute("""
@@ -1015,14 +1152,356 @@ def get_apartments_list(housing_array_id: Optional[int] = None) -> JSONResponse:
 
 
 def get_guides_list() -> JSONResponse:
-    """רשימת כל המדריכים הפעילים."""
+    """רשימת מדריכים פעילים (מסוננת לפי מערך כשמוגדר פילטר)."""
+    hf = get_housing_array_filter()
     with get_conn() as conn:
-        rows = conn.execute("""
-            SELECT id, name FROM people
-            WHERE is_active::integer = 1
-            ORDER BY name
-        """).fetchall()
+        if hf is not None:
+            rows = conn.execute("""
+                SELECT id, name FROM people
+                WHERE is_active::integer = 1 AND housing_array_id = %s
+                ORDER BY name
+            """, (hf,)).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT id, name FROM people
+                WHERE is_active::integer = 1
+                ORDER BY name
+            """).fetchall()
 
     return JSONResponse({
         "guides": [{"id": r["id"], "name": r["name"]} for r in rows]
     })
+
+
+def get_overtime_by_housing_array(year: int, month: int) -> JSONResponse:
+    """
+    שעות נוספות לפי מערך דיור עם פירוט מדריכים.
+
+    מחזיר רשימת מערכי דיור עם שעות נוספות (125%, 150%, 175%, 200%) ועלותן הכספית,
+    כולל פירוט מדריכים עם חריגות ומייל הרכז לכל מערך.
+    """
+    from collections import defaultdict
+
+    summary_data, _ = _get_cached_summary(year, month)
+
+    # מסנן מדריכים עם שעות מעל 100% (125%, 150% חול בלבד, 175%, 200%)
+    overtime_people = [
+        p for p in summary_data
+        if (p["totals"].get("calc125", 0) > 0
+            or p["totals"].get("calc150_overtime", 0) > 0
+            or p["totals"].get("calc175", 0) > 0
+            or p["totals"].get("calc200", 0) > 0)
+    ]
+
+    if not overtime_people:
+        return JSONResponse({
+            "arrays": [],
+            "totals": {
+                "hours_125": 0, "hours_150": 0, "hours_175": 0, "hours_200": 0,
+                "cost_125": 0, "cost_150": 0, "cost_175": 0, "cost_200": 0,
+                "total_cost": 0, "guides_with_overtime": 0, "arrays_count": 0
+            }
+        })
+
+    person_ids = [p["person_id"] for p in overtime_people]
+    hf = get_housing_array_filter()
+
+    with get_conn() as conn:
+        # מציאת מערך הדיור לכל מדריך לפי הדירות שעבד בהן בחודש
+        if hf is not None:
+            person_housing_rows = conn.execute("""
+                SELECT DISTINCT tr.person_id, ha.id AS housing_array_id, ha.name AS housing_array_name
+                FROM time_reports tr
+                JOIN apartments ap ON ap.id = tr.apartment_id
+                JOIN housing_arrays ha ON ha.id = ap.housing_array_id
+                WHERE tr.person_id = ANY(%s)
+                  AND EXTRACT(YEAR FROM tr.date) = %s
+                  AND EXTRACT(MONTH FROM tr.date) = %s
+                  AND ap.housing_array_id = %s
+            """, (person_ids, year, month, hf)).fetchall()
+        else:
+            person_housing_rows = conn.execute("""
+                SELECT DISTINCT tr.person_id, ha.id AS housing_array_id, ha.name AS housing_array_name
+                FROM time_reports tr
+                JOIN apartments ap ON ap.id = tr.apartment_id
+                JOIN housing_arrays ha ON ha.id = ap.housing_array_id
+                WHERE tr.person_id = ANY(%s)
+                  AND EXTRACT(YEAR FROM tr.date) = %s
+                  AND EXTRACT(MONTH FROM tr.date) = %s
+            """, (person_ids, year, month)).fetchall()
+
+        # שליפת פרטי רכז לכל מערך דיור
+        coordinator_rows = conn.execute("""
+            SELECT p.housing_array_id, p.email, p.name AS coordinator_name
+            FROM people p
+            JOIN roles r ON r.id = p.role_id
+            WHERE r.name = 'framework_manager'
+              AND p.is_active::integer = 1
+              AND p.housing_array_id IS NOT NULL
+        """).fetchall()
+
+    # מיפוי מדריך -> מערכי דיור
+    person_to_arrays: dict = defaultdict(list)
+    for row in person_housing_rows:
+        person_to_arrays[row["person_id"]].append({
+            "id": row["housing_array_id"],
+            "name": row["housing_array_name"],
+        })
+
+    # מיפוי מערך -> פרטי רכז
+    array_coordinator: dict = {}
+    for row in coordinator_rows:
+        array_coordinator[row["housing_array_id"]] = {
+            "email": row["email"] or "",
+            "name": row["coordinator_name"],
+        }
+
+    # אגרגציה לפי מערך דיור
+    arrays_data: dict = defaultdict(lambda: {
+        "name": "",
+        "hours_125": 0.0, "hours_150": 0.0, "hours_175": 0.0, "hours_200": 0.0,
+        "cost_125": 0.0, "cost_150": 0.0, "cost_175": 0.0, "cost_200": 0.0,
+        "guides": [],
+    })
+
+    for person in overtime_people:
+        pid = person["person_id"]
+        totals = person["totals"]
+        hours_125 = totals.get("calc125", 0) / 60
+        hours_150 = totals.get("calc150_overtime", 0) / 60   # חול בלבד, לא שבת
+        hours_175 = totals.get("calc175", 0) / 60
+        hours_200 = totals.get("calc200", 0) / 60
+        cost_125 = totals.get("payment_calc125", 0)
+        cost_150 = totals.get("payment_calc150_overtime", 0)  # חול בלבד
+        cost_175 = totals.get("payment_calc175", 0)
+        cost_200 = totals.get("payment_calc200", 0)
+        total_cost = cost_125 + cost_150 + cost_175 + cost_200
+
+        for array_info in person_to_arrays.get(pid, []):
+            array_id = array_info["id"]
+            arrays_data[array_id]["name"] = array_info["name"]
+            arrays_data[array_id]["hours_125"] += hours_125
+            arrays_data[array_id]["hours_150"] += hours_150
+            arrays_data[array_id]["hours_175"] += hours_175
+            arrays_data[array_id]["hours_200"] += hours_200
+            arrays_data[array_id]["cost_125"] += cost_125
+            arrays_data[array_id]["cost_150"] += cost_150
+            arrays_data[array_id]["cost_175"] += cost_175
+            arrays_data[array_id]["cost_200"] += cost_200
+            arrays_data[array_id]["guides"].append({
+                "name": person["name"],
+                "person_id": pid,
+                "hours_125": round(hours_125, 1),
+                "hours_150": round(hours_150, 1),
+                "hours_175": round(hours_175, 1),
+                "hours_200": round(hours_200, 1),
+                "cost_125": round(cost_125, 2),
+                "cost_150": round(cost_150, 2),
+                "cost_175": round(cost_175, 2),
+                "cost_200": round(cost_200, 2),
+                "total_overtime_cost": round(total_cost, 2),
+            })
+
+    # בניית רשימה ממוינת לפי עלות שעות נוספות
+    result_arrays = []
+    for array_id, data in arrays_data.items():
+        total_cost = data["cost_125"] + data["cost_150"] + data["cost_175"] + data["cost_200"]
+        coordinator = array_coordinator.get(array_id, {"email": "", "name": ""})
+        result_arrays.append({
+            "id": array_id,
+            "name": data["name"],
+            "coordinator_email": coordinator["email"],
+            "coordinator_name": coordinator["name"],
+            "hours_125": round(data["hours_125"], 1),
+            "hours_150": round(data["hours_150"], 1),
+            "hours_175": round(data["hours_175"], 1),
+            "hours_200": round(data["hours_200"], 1),
+            "cost_125": round(data["cost_125"], 2),
+            "cost_150": round(data["cost_150"], 2),
+            "cost_175": round(data["cost_175"], 2),
+            "cost_200": round(data["cost_200"], 2),
+            "total_overtime_cost": round(total_cost, 2),
+            "guides_count": len(data["guides"]),
+            "guides": sorted(data["guides"], key=lambda g: -g["total_overtime_cost"]),
+        })
+
+    result_arrays.sort(key=lambda a: -a["total_overtime_cost"])
+
+    # סיכומים כלליים — 150% = חול בלבד (calc150_overtime), לא שבת
+    total_hours_125 = sum(p["totals"].get("calc125", 0) for p in overtime_people) / 60
+    total_hours_150 = sum(p["totals"].get("calc150_overtime", 0) for p in overtime_people) / 60
+    total_hours_175 = sum(p["totals"].get("calc175", 0) for p in overtime_people) / 60
+    total_hours_200 = sum(p["totals"].get("calc200", 0) for p in overtime_people) / 60
+    total_cost_125 = sum(p["totals"].get("payment_calc125", 0) for p in overtime_people)
+    total_cost_150 = sum(p["totals"].get("payment_calc150_overtime", 0) for p in overtime_people)
+    total_cost_175 = sum(p["totals"].get("payment_calc175", 0) for p in overtime_people)
+    total_cost_200 = sum(p["totals"].get("payment_calc200", 0) for p in overtime_people)
+
+    return JSONResponse({
+        "arrays": result_arrays,
+        "totals": {
+            "hours_125": round(total_hours_125, 1),
+            "hours_150": round(total_hours_150, 1),
+            "hours_175": round(total_hours_175, 1),
+            "hours_200": round(total_hours_200, 1),
+            "cost_125": round(total_cost_125, 2),
+            "cost_150": round(total_cost_150, 2),
+            "cost_175": round(total_cost_175, 2),
+            "cost_200": round(total_cost_200, 2),
+            "total_cost": round(total_cost_125 + total_cost_150 + total_cost_175 + total_cost_200, 2),
+            "guides_with_overtime": len(overtime_people),
+            "arrays_count": len(result_arrays),
+        },
+    })
+
+
+async def send_overtime_email_route(request: Request, year: int, month: int) -> JSONResponse:
+    """
+    שליחת דוח שעות נוספות לרכז של מערך דיור.
+
+    Body: { housing_array_id: int, custom_email?: string }
+    """
+    import asyncio
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    from services.email_service import get_email_settings
+
+    try:
+        body = await request.json()
+        housing_array_id = body.get("housing_array_id")
+        custom_email = body.get("custom_email", "").strip()
+
+        if not housing_array_id:
+            return JSONResponse({"success": False, "error": "חסר housing_array_id"})
+
+        managed_hid = get_user_housing_array(request)
+        if managed_hid is not None and int(housing_array_id) != int(managed_hid):
+            return JSONResponse(
+                {"success": False, "error": "אין הרשאה לשלוח דוח למערך זה"},
+                status_code=403,
+            )
+
+        # שליפת נתוני שעות נוספות
+        overtime_response = get_overtime_by_housing_array(year, month)
+        overtime_json = overtime_response.body
+        import json as _json
+        overtime_data = _json.loads(overtime_json)
+
+        # מציאת המערך הנבחר
+        target_array = next(
+            (a for a in overtime_data["arrays"] if a["id"] == housing_array_id), None
+        )
+        if not target_array:
+            return JSONResponse({"success": False, "error": "לא נמצאו שעות נוספות למערך זה"})
+
+        # קביעת כתובת מייל
+        to_email = custom_email or target_array.get("coordinator_email", "")
+        if not to_email:
+            return JSONResponse({"success": False, "error": "לא הוגדרה כתובת מייל לרכז המערך"})
+
+        with get_conn() as conn:
+            settings = get_email_settings(conn)
+
+        if not settings:
+            return JSONResponse({"success": False, "error": "הגדרות מייל לא נמצאו"})
+
+        # בניית תוכן HTML לאימייל
+        guides_rows = "".join(
+            f"""<tr style="border-bottom:1px solid #eee;">
+                <td style="padding:8px 12px;">{g['name']}</td>
+                <td style="padding:8px 12px; text-align:center; background:#fffbeb;">{g['hours_125']:.1f}</td>
+                <td style="padding:8px 12px; text-align:center; background:#fff1f2;">{g['hours_150']:.1f}</td>
+                <td style="padding:8px 12px; text-align:center; background:#fdf4ff;">{g['hours_175']:.1f}</td>
+                <td style="padding:8px 12px; text-align:center; background:#f5f3ff;">{g['hours_200']:.1f}</td>
+                <td style="padding:8px 12px; text-align:center; font-weight:700;">₪{g['total_overtime_cost']:,.0f}</td>
+            </tr>"""
+            for g in target_array["guides"]
+        )
+
+        total_hours_ot = target_array['hours_125'] + target_array['hours_150']
+        total_hours_shabbat = target_array['hours_175'] + target_array['hours_200']
+
+        html_body = f"""
+        <html dir="rtl"><body style="font-family: Arial, sans-serif; color: #1e293b; background: #f8fafc; margin:0; padding:20px;">
+        <div style="max-width:750px; margin:0 auto; background:white; border-radius:12px; box-shadow:0 4px 12px rgba(0,0,0,0.08); overflow:hidden;">
+            <div style="background:linear-gradient(135deg,#667eea,#764ba2); padding:24px 28px; color:white;">
+                <h2 style="margin:0; font-size:20px;">דוח שעות נוספות — {target_array['name']}</h2>
+                <p style="margin:6px 0 0; opacity:0.85; font-size:14px;">חודש {month:02d}/{year}</p>
+            </div>
+            <div style="padding:24px 28px;">
+                <div style="display:flex; gap:12px; margin-bottom:24px; flex-wrap:wrap;">
+                    <div style="flex:1; min-width:100px; background:#fef3c7; border-radius:10px; padding:14px; text-align:center;">
+                        <div style="font-size:22px; font-weight:700; color:#d97706;">{target_array['hours_125']:.1f}</div>
+                        <div style="font-size:11px; color:#92400e; margin-top:4px;">שעות 125%</div>
+                    </div>
+                    <div style="flex:1; min-width:100px; background:#fee2e2; border-radius:10px; padding:14px; text-align:center;">
+                        <div style="font-size:22px; font-weight:700; color:#dc2626;">{target_array['hours_150']:.1f}</div>
+                        <div style="font-size:11px; color:#991b1b; margin-top:4px;">שעות 150%</div>
+                    </div>
+                    <div style="flex:1; min-width:100px; background:#fce7f3; border-radius:10px; padding:14px; text-align:center;">
+                        <div style="font-size:22px; font-weight:700; color:#9d174d;">{target_array['hours_175']:.1f}</div>
+                        <div style="font-size:11px; color:#831843; margin-top:4px;">שעות 175% (שבת)</div>
+                    </div>
+                    <div style="flex:1; min-width:100px; background:#f5f3ff; border-radius:10px; padding:14px; text-align:center;">
+                        <div style="font-size:22px; font-weight:700; color:#7c3aed;">{target_array['hours_200']:.1f}</div>
+                        <div style="font-size:11px; color:#5b21b6; margin-top:4px;">שעות 200% (שבת)</div>
+                    </div>
+                    <div style="flex:1; min-width:100px; background:#ecfdf5; border-radius:10px; padding:14px; text-align:center;">
+                        <div style="font-size:20px; font-weight:700; color:#065f46;">₪{target_array['total_overtime_cost']:,.0f}</div>
+                        <div style="font-size:11px; color:#064e3b; margin-top:4px;">עלות כוללת</div>
+                    </div>
+                </div>
+                <table style="width:100%; border-collapse:collapse; font-size:13px;">
+                    <thead>
+                        <tr style="color:#64748b; font-size:12px;">
+                            <th style="padding:9px 10px; text-align:right; font-weight:600; background:#f1f5f9;">שם מדריך</th>
+                            <th style="padding:9px 10px; text-align:center; font-weight:600; background:#fef9c3;">ש׳ 125%</th>
+                            <th style="padding:9px 10px; text-align:center; font-weight:600; background:#fee2e2;">ש׳ 150%</th>
+                            <th style="padding:9px 10px; text-align:center; font-weight:600; background:#fce7f3;">ש׳ 175%</th>
+                            <th style="padding:9px 10px; text-align:center; font-weight:600; background:#f5f3ff;">ש׳ 200%</th>
+                            <th style="padding:9px 10px; text-align:center; font-weight:600; background:#f1f5f9;">סה"כ עלות</th>
+                        </tr>
+                    </thead>
+                    <tbody>{guides_rows}</tbody>
+                    <tfoot>
+                        <tr style="background:#f8fafc; font-weight:700; border-top:2px solid #e2e8f0;">
+                            <td style="padding:9px 10px;">סה"כ</td>
+                            <td style="padding:9px 10px; text-align:center; color:#d97706;">{target_array['hours_125']:.1f}</td>
+                            <td style="padding:9px 10px; text-align:center; color:#dc2626;">{target_array['hours_150']:.1f}</td>
+                            <td style="padding:9px 10px; text-align:center; color:#9d174d;">{target_array['hours_175']:.1f}</td>
+                            <td style="padding:9px 10px; text-align:center; color:#7c3aed;">{target_array['hours_200']:.1f}</td>
+                            <td style="padding:9px 10px; text-align:center; color:#065f46;">₪{target_array['total_overtime_cost']:,.0f}</td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+            <div style="padding:16px 28px; background:#f8fafc; border-top:1px solid #e2e8f0; text-align:center; font-size:12px; color:#94a3b8;">
+                הודעה זו נשלחה אוטומטית ממערכת DiyurCalc — עמותת צהר הלב
+            </div>
+        </div>
+        </body></html>
+        """
+
+        def _send() -> dict:
+            msg = MIMEMultipart("alternative")
+            msg["Subject"] = f"דוח שעות נוספות — {target_array['name']} — {month:02d}/{year}"
+            msg["From"] = f"{settings.get('from_name', 'צהר')} <{settings['from_email']}>"
+            msg["To"] = to_email
+            msg.attach(MIMEText(html_body, "html", "utf-8"))
+
+            use_ssl = settings.get("smtp_secure", False)
+            smtp_cls = smtplib.SMTP_SSL if use_ssl else smtplib.SMTP
+            with smtp_cls(settings["smtp_host"], int(settings["smtp_port"])) as server:
+                if not use_ssl:
+                    server.starttls()
+                server.login(settings["smtp_user"], settings["smtp_password"])
+                server.sendmail(settings["from_email"], to_email, msg.as_string())
+            return {"success": True, "message": f"הדוח נשלח בהצלחה אל {to_email}"}
+
+        result = await asyncio.to_thread(_send)
+        return JSONResponse(result)
+
+    except Exception as e:
+        logger.error(f"Error in send_overtime_email_route: {e}", exc_info=True)
+        return JSONResponse({"success": False, "error": str(e)})

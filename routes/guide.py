@@ -14,7 +14,12 @@ from fastapi import Request, HTTPException
 from fastapi.responses import HTMLResponse, Response, JSONResponse
 from fastapi.templating import Jinja2Templates
 from core.config import config
-from core.database import get_conn, get_housing_array_filter, get_multi_housing_guides
+from core.database import (
+    get_conn,
+    get_housing_array_filter,
+    get_multi_housing_guides,
+    set_housing_array_filter,
+)
 from core.time_utils import get_shabbat_times_cache
 from core.logic import (
     get_payment_codes,
@@ -644,24 +649,46 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
     start_date = start_dt.date()
     end_date = end_dt.date()
 
-    # שליפת משמרות
-    reports = conn.execute("""
-        SELECT
-            tr.id, tr.date, tr.start_time, tr.end_time, tr.shift_type_id,
-            tr.rate_apartment_type_id, tr.asd_night_marking,
-            tr.description,
-            a.apartment_type_id,
-            st.name AS shift_type_name,
-            a.name AS apartment_name,
-            rate_at.name AS rate_apartment_type_name
-        FROM time_reports tr
-        LEFT JOIN shift_types st ON tr.shift_type_id = st.id
-        LEFT JOIN apartments a ON tr.apartment_id = a.id
-        LEFT JOIN apartment_types rate_at ON rate_at.id = tr.rate_apartment_type_id
-        WHERE tr.person_id = %s
-          AND tr.date >= %s AND tr.date < %s
-        ORDER BY tr.date, tr.start_time
-    """, (person_id, start_date, end_date)).fetchall()
+    # שליפת משמרות (עם סינון דירות למערך כשמוגדר פילטר — תואם לחישוב הסגמנטים)
+    if housing_filter is not None:
+        reports = conn.execute("""
+            SELECT
+                tr.id, tr.date, tr.start_time, tr.end_time, tr.shift_type_id,
+                tr.rate_apartment_type_id, tr.asd_night_marking,
+                tr.description,
+                a.apartment_type_id,
+                a.housing_array_id,
+                st.name AS shift_type_name,
+                a.name AS apartment_name,
+                rate_at.name AS rate_apartment_type_name
+            FROM time_reports tr
+            LEFT JOIN shift_types st ON tr.shift_type_id = st.id
+            LEFT JOIN apartments a ON tr.apartment_id = a.id
+            LEFT JOIN apartment_types rate_at ON rate_at.id = tr.rate_apartment_type_id
+            WHERE tr.person_id = %s
+              AND tr.date >= %s AND tr.date < %s
+              AND (a.id IS NULL OR a.housing_array_id = %s)
+            ORDER BY tr.date, tr.start_time
+        """, (person_id, start_date, end_date, housing_filter)).fetchall()
+    else:
+        reports = conn.execute("""
+            SELECT
+                tr.id, tr.date, tr.start_time, tr.end_time, tr.shift_type_id,
+                tr.rate_apartment_type_id, tr.asd_night_marking,
+                tr.description,
+                a.apartment_type_id,
+                a.housing_array_id,
+                st.name AS shift_type_name,
+                a.name AS apartment_name,
+                rate_at.name AS rate_apartment_type_name
+            FROM time_reports tr
+            LEFT JOIN shift_types st ON tr.shift_type_id = st.id
+            LEFT JOIN apartments a ON tr.apartment_id = a.id
+            LEFT JOIN apartment_types rate_at ON rate_at.id = tr.rate_apartment_type_id
+            WHERE tr.person_id = %s
+              AND tr.date >= %s AND tr.date < %s
+            ORDER BY tr.date, tr.start_time
+        """, (person_id, start_date, end_date)).fetchall()
 
     # שליפת סגמנטים
     shift_ids = list({r["shift_type_id"] for r in reports if r["shift_type_id"]})
@@ -788,17 +815,31 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
                 "note": _compose_shift_note(r),
             })
 
-    # שליפת תשלומים נוספים
-    payment_comps = conn.execute("""
-        SELECT
-            pc.quantity, pc.rate, pc.description,
-            pct.name AS component_type_name
-        FROM payment_components pc
-        LEFT JOIN payment_component_types pct ON pc.component_type_id = pct.id
-        WHERE pc.person_id = %s
-          AND pc.date >= %s AND pc.date < %s
-        ORDER BY pc.date
-    """, (person_id, start_date, end_date)).fetchall()
+    # שליפת תשלומים נוספים (לפי דירות במערך כשמוגדר פילטר)
+    if housing_filter is not None:
+        payment_comps = conn.execute("""
+            SELECT
+                pc.quantity, pc.rate, pc.description,
+                pct.name AS component_type_name
+            FROM payment_components pc
+            LEFT JOIN payment_component_types pct ON pc.component_type_id = pct.id
+            INNER JOIN apartments a ON pc.apartment_id = a.id
+            WHERE pc.person_id = %s
+              AND pc.date >= %s AND pc.date < %s
+              AND a.housing_array_id = %s
+            ORDER BY pc.date
+        """, (person_id, start_date, end_date, housing_filter)).fetchall()
+    else:
+        payment_comps = conn.execute("""
+            SELECT
+                pc.quantity, pc.rate, pc.description,
+                pct.name AS component_type_name
+            FROM payment_components pc
+            LEFT JOIN payment_component_types pct ON pc.component_type_id = pct.id
+            WHERE pc.person_id = %s
+              AND pc.date >= %s AND pc.date < %s
+            ORDER BY pc.date
+        """, (person_id, start_date, end_date)).fetchall()
 
     payments_by_type: Dict[str, float] = {}
     total_additions = 0.0
@@ -979,7 +1020,7 @@ def shifts_report_preview(
     month: Optional[int] = None,
     year: Optional[int] = None
 ) -> HTMLResponse:
-    """תצוגה מקדימה של הדוח שנשלח במייל - למנהל על בלבד."""
+    """תצוגה מקדימה של דוח משמרות (זהה ל-PDF) — למשתמש מורשה לפי מערך דיור."""
     housing_filter = get_housing_array_filter()
     _validate_guide_access(person_id, housing_filter)
 
@@ -988,7 +1029,7 @@ def shifts_report_preview(
         year, month = now.year, now.month
 
     with get_conn() as conn:
-        pdf_data = prepare_guide_pdf_data(conn, person_id, year, month)
+        pdf_data = prepare_guide_pdf_data(conn, person_id, year, month, housing_filter)
 
     if not pdf_data:
         raise HTTPException(status_code=404, detail="מדריך לא נמצא")
@@ -1025,7 +1066,8 @@ def _generate_shifts_pdf(person_id: int, year: int, month: int, session_token: O
 
         # הכנת נתונים באמצעות הפונקציה המשותפת
         with get_conn() as conn:
-            pdf_data = prepare_guide_pdf_data(conn, person_id, year, month)
+            hf = get_housing_array_filter()
+            pdf_data = prepare_guide_pdf_data(conn, person_id, year, month, hf)
 
         if not pdf_data:
             logger.error(f"Person not found: {person_id}")
@@ -1144,7 +1186,14 @@ async def shifts_report_email(
         logger.error(f"Error in shifts_report_email setup: {e}", exc_info=True)
         return JSONResponse({"success": False, "error": f"שגיאה: {str(e)}"})
 
-    def send_email_task(pid: int, y: int, m: int, email: Optional[str]):
+    array_filter_for_thread = housing_filter
+
+    def send_email_task(pid: int, y: int, m: int, email: Optional[str]) -> dict:
+        """
+        רץ בתהליכון: חובה לקבע את פילטר מערך הדיור ב-ContextVar
+        (אחרת מנהל מסגרת לא מקבל את אותו חישוב כמו בבקשת HTTP).
+        """
+        set_housing_array_filter(array_filter_for_thread)
         try:
             with get_conn() as conn:
                 settings = get_email_settings(conn)
@@ -1200,6 +1249,8 @@ async def shifts_report_email(
         except Exception as e:
             logger.error(f"Error sending shifts email: {e}")
             return {"success": False, "error": str(e)}
+        finally:
+            set_housing_array_filter(None)
 
     try:
         result = await asyncio.to_thread(send_email_task, person_id, year, month, custom_email)
@@ -1370,7 +1421,10 @@ async def chains_report_email(
         logger.error(f"Error in chains_report_email setup: {e}", exc_info=True)
         return JSONResponse({"success": False, "error": f"שגיאה: {str(e)}"})
 
-    def send_email_task(pid: int, y: int, m: int, email: Optional[str]):
+    array_filter_for_thread = housing_filter
+
+    def send_email_task(pid: int, y: int, m: int, email: Optional[str]) -> dict:
+        set_housing_array_filter(array_filter_for_thread)
         try:
             # שליפת הגדרות ופרטי מדריך - חיבור DB קצר
             with get_conn() as conn:
@@ -1426,6 +1480,8 @@ async def chains_report_email(
         except Exception as e:
             logger.error(f"Error sending chains email: {e}")
             return {"success": False, "error": str(e)}
+        finally:
+            set_housing_array_filter(None)
 
     try:
         result = await asyncio.to_thread(send_email_task, person_id, year, month, custom_email)

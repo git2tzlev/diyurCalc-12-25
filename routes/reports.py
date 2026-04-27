@@ -14,6 +14,7 @@ from fastapi.templating import Jinja2Templates
 from core.config import config
 from core.database import get_conn, get_housing_array_filter, get_default_period
 from core.logic import get_active_guides
+from core.auth import get_user_housing_array
 from utils.utils import month_range_ts, available_months_from_db, format_currency, human_date
 
 logger = logging.getLogger(__name__)
@@ -37,16 +38,34 @@ def reports_management(
     - שליחת דוח לכל מדריך למייל שלו
     - שליחת דוח בודד למייל מותאם
     """
-    # שליפת מערכי דיור
+    managed_array = get_user_housing_array(request)
+
+    # שליפת מערכי דיור (מנהל מסגרת — רק המערך שלו)
     housing_arrays = []
     with get_conn() as conn:
-        rows = conn.execute(
-            "SELECT id, name FROM housing_arrays ORDER BY name"
-        ).fetchall()
-        housing_arrays = [{"id": r["id"], "name": r["name"]} for r in rows]
+        if managed_array is not None:
+            row = conn.execute(
+                "SELECT id, name FROM housing_arrays WHERE id = %s",
+                (managed_array,),
+            ).fetchone()
+            housing_arrays = (
+                [{"id": row["id"], "name": row["name"]}] if row else []
+            )
+        else:
+            rows = conn.execute(
+                "SELECT id, name FROM housing_arrays ORDER BY name"
+            ).fetchall()
+            housing_arrays = [{"id": r["id"], "name": r["name"]} for r in rows]
 
-    # שימוש בפילטר מהפרמטר או מהעוגייה
-    effective_filter = housing_array_id if housing_array_id is not None else get_housing_array_filter()
+    # שימוש בפילטר מהפרמטר או מהעוגייה; מנהל מסגרת תמיד מוגבל למערך שלו
+    if managed_array is not None:
+        effective_filter = managed_array
+    else:
+        effective_filter = (
+            housing_array_id
+            if housing_array_id is not None
+            else get_housing_array_filter()
+        )
 
     # שליפת חודשים זמינים
     months_all = available_months_from_db(effective_filter)
@@ -159,6 +178,7 @@ def reports_management(
             "total_guides": len(guides_with_reports),
             "guides_with_email": guides_with_email,
             "housing_arrays": housing_arrays,
-            "selected_housing_array": housing_array_id,
+            "selected_housing_array": effective_filter,
+            "reports_array_locked": managed_array is not None,
         }
     )

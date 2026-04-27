@@ -267,22 +267,33 @@ def get_current_db_name() -> str:
 def get_multi_housing_guides(conn: "PostgresConnection", start_date, end_date) -> dict[int, list[str]]:
     """מחזיר מדריכים שעובדים ביותר ממערך דיור אחד בתקופה נתונה.
 
+    מזהה לפי תעודת זהות (id_number) - גם אם המדריך מופיע כשני רשומות
+    שונות בטבלת people עם אותו מספר זהות.
+
     Returns:
         dict מ-person_id לרשימת שמות מערכי דיור
     """
     rows = conn.execute(
         """
-        SELECT tr.person_id, array_agg(DISTINCT ha.name ORDER BY ha.name) AS arrays
+        SELECT p.id_number,
+               array_agg(DISTINCT p.id) AS person_ids,
+               array_agg(DISTINCT ha.name ORDER BY ha.name) AS arrays
         FROM time_reports tr
+        JOIN people p ON p.id = tr.person_id
         JOIN apartments ap ON ap.id = tr.apartment_id
         JOIN housing_arrays ha ON ha.id = ap.housing_array_id
         WHERE tr.date >= %s AND tr.date < %s
-        GROUP BY tr.person_id
+          AND p.id_number IS NOT NULL AND p.id_number != ''
+        GROUP BY p.id_number
         HAVING COUNT(DISTINCT ap.housing_array_id) > 1
         """,
         (start_date, end_date),
     ).fetchall()
-    return {row["person_id"]: row["arrays"] for row in rows}
+    result: dict[int, list[str]] = {}
+    for row in rows:
+        for pid in row["person_ids"]:
+            result[pid] = row["arrays"]
+    return result
 
 
 def close_all_pools():

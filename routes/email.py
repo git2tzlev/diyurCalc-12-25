@@ -17,7 +17,11 @@ from starlette.responses import StreamingResponse
 
 from core.config import config
 from core.database import get_conn
-from core.auth import is_super_admin
+from core.auth import (
+    enforce_framework_manager_guide_access,
+    get_user_housing_array,
+    is_super_admin,
+)
 from services.email_service import (
     get_email_settings,
     save_email_settings,
@@ -142,6 +146,7 @@ async def test_email_settings(request: Request) -> JSONResponse:
 async def send_guide_email_route(request: Request, person_id: int, year: int, month: int) -> JSONResponse:
     """שליחת דוח מדריך במייל."""
     try:
+        enforce_framework_manager_guide_access(request, person_id)
         custom_email = None
         try:
             body = await request.json()
@@ -162,7 +167,8 @@ async def send_all_guides_email_route(request: Request, year: int, month: int) -
     """שליחת דוחות לכל המדריכים הפעילים."""
     try:
         import asyncio
-        result = await asyncio.to_thread(send_all_guides_email, year, month)
+        hid = get_user_housing_array(request)
+        result = await asyncio.to_thread(send_all_guides_email, year, month, hid)
         return JSONResponse(result)
     except Exception as e:
         logger.error(f"Error in send_all_guides_email_route: {e}", exc_info=True)
@@ -179,7 +185,10 @@ async def send_all_to_single_email_route(request: Request, year: int, month: int
             return JSONResponse({"success": False, "error": "יש להזין כתובת מייל"})
 
         import asyncio
-        result = await asyncio.to_thread(send_all_guides_to_single_email, year, month, target_email)
+        hid = get_user_housing_array(request)
+        result = await asyncio.to_thread(
+            send_all_guides_to_single_email, year, month, target_email, hid
+        )
         return JSONResponse(result)
     except Exception as e:
         logger.error(f"Error in send_all_to_single_email_route: {e}", exc_info=True)
@@ -196,7 +205,8 @@ async def send_selected_guides_emails_route(request: Request, year: int, month: 
             return JSONResponse({"success": False, "error": "לא נבחרו מדריכים"})
 
         import asyncio
-        result = await asyncio.to_thread(send_selected_guides_email, guide_ids, year, month)
+        hid = get_user_housing_array(request)
+        result = await asyncio.to_thread(send_selected_guides_email, guide_ids, year, month, hid)
         return JSONResponse(result)
     except Exception as e:
         logger.error(f"Error in send_selected_guides_emails_route: {e}", exc_info=True)
@@ -217,7 +227,10 @@ async def send_selected_guides_to_single_email_route(request: Request, year: int
             return JSONResponse({"success": False, "error": "לא נבחרו מדריכים"})
 
         import asyncio
-        result = await asyncio.to_thread(send_selected_guides_to_single_email, guide_ids, year, month, target_email)
+        hid = get_user_housing_array(request)
+        result = await asyncio.to_thread(
+            send_selected_guides_to_single_email, guide_ids, year, month, target_email, hid
+        )
         return JSONResponse(result)
     except Exception as e:
         logger.error(f"Error in send_selected_guides_to_single_email_route: {e}", exc_info=True)
@@ -262,15 +275,28 @@ async def send_bulk_stream(request: Request, year: int, month: int) -> Streaming
                 yield _sse_event("error", {"message": "הגדרות מייל לא נמצאו"})
             return StreamingResponse(error_stream(), media_type="text/event-stream")
 
-        guides = conn.execute("""
-            SELECT DISTINCT p.id, p.name, p.email
-            FROM people p
-            JOIN time_reports tr ON tr.person_id = p.id
-            WHERE p.is_active = TRUE
-            AND EXTRACT(YEAR FROM tr.date) = %s
-            AND EXTRACT(MONTH FROM tr.date) = %s
-            ORDER BY p.name
-        """, (year, month)).fetchall()
+        hid = get_user_housing_array(request)
+        if hid is not None:
+            guides = conn.execute("""
+                SELECT DISTINCT p.id, p.name, p.email
+                FROM people p
+                JOIN time_reports tr ON tr.person_id = p.id
+                WHERE p.is_active = TRUE
+                AND p.housing_array_id = %s
+                AND EXTRACT(YEAR FROM tr.date) = %s
+                AND EXTRACT(MONTH FROM tr.date) = %s
+                ORDER BY p.name
+            """, (hid, year, month)).fetchall()
+        else:
+            guides = conn.execute("""
+                SELECT DISTINCT p.id, p.name, p.email
+                FROM people p
+                JOIN time_reports tr ON tr.person_id = p.id
+                WHERE p.is_active = TRUE
+                AND EXTRACT(YEAR FROM tr.date) = %s
+                AND EXTRACT(MONTH FROM tr.date) = %s
+                ORDER BY p.name
+            """, (year, month)).fetchall()
 
     if not guides:
         async def empty_stream() -> AsyncGenerator[str, None]:

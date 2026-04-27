@@ -345,6 +345,10 @@
             <span class="tab-icon">👤</span>
             מדריך
         </button>
+        <button class="tab-btn" data-tab="overtime" onclick="switchTab('overtime', this); loadOvertimeData()">
+            <span class="tab-icon">⚠️</span>
+            שעות נוספות לרכזים
+        </button>
     </div>
 
     <!-- Tab 1: Housing Arrays -->
@@ -365,6 +369,7 @@
             </div>
         </div>
 
+        {% if not is_framework_manager %}
         <div class="filter-bar" style="margin-top: 24px;">
             <div class="filter-group">
                 <label>בחר 2-5 מערכים להשוואה</label>
@@ -387,6 +392,7 @@
                 </div>
             </div>
         </div>
+        {% endif %}
 
         <div class="filter-bar" style="margin-top: 24px;">
             <div class="filter-group">
@@ -527,6 +533,119 @@
                     <div class="loading-overlay" id="loading-guide-yearly" style="display: none;"><div class="spinner"></div></div>
                     <canvas id="chart-guide-yearly"></canvas>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab 5: Overtime for Coordinators -->
+    <div class="tab-content" id="tab-overtime">
+        <style>
+            .ot-kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
+            @media (max-width: 900px) { .ot-kpi-grid { grid-template-columns: repeat(2, 1fr); } }
+            .ot-kpi { border-radius: 14px; padding: 20px; text-align: center; }
+            .ot-kpi-value { font-size: 28px; font-weight: 700; line-height: 1.1; }
+            .ot-kpi-label { font-size: 12px; font-weight: 600; margin-top: 6px; opacity: 0.75; }
+            .ot-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+            .ot-table th { background: #f1f5f9; color: #475569; padding: 10px 14px; font-weight: 600; text-align: right; font-size: 13px; }
+            .ot-table td { padding: 12px 14px; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
+            .ot-table tbody tr:hover { background: #f8fafc; }
+            .ot-badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+            .ot-badge-red   { background: #fee2e2; color: #dc2626; }
+            .ot-badge-yellow{ background: #fef3c7; color: #d97706; }
+            .ot-badge-green { background: #dcfce7; color: #16a34a; }
+            .ot-expand-btn { background: none; border: 1px solid #e2e8f0; padding: 5px 12px; border-radius: 8px; cursor: pointer; font-size: 13px; color: #475569; transition: all 0.2s; }
+            .ot-expand-btn:hover { background: #f1f5f9; border-color: #cbd5e1; }
+            .ot-details-row td { padding: 0; background: #fafbfc; }
+            .ot-details-inner { padding: 0 14px 14px 14px; }
+            .ot-inner-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+            .ot-inner-table th { background: #f8fafc; color: #64748b; padding: 8px 12px; font-weight: 600; font-size: 12px; text-align: right; border-bottom: 1px solid #e2e8f0; }
+            .ot-inner-table td { padding: 8px 12px; border-bottom: 1px solid #f1f5f9; }
+            .ot-inner-table tr:last-child td { border-bottom: none; }
+            .ot-send-btn { padding: 6px 14px; background: linear-gradient(135deg,#667eea,#764ba2); color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; transition: all 0.2s; white-space: nowrap; }
+            .ot-send-btn:hover { opacity: 0.9; transform: translateY(-1px); }
+            .ot-send-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+            .ot-email-row { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+            .ot-email-input { padding: 7px 12px; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 13px; min-width: 220px; flex: 1; }
+            .ot-email-input:focus { outline: none; border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,0.1); }
+            .ot-status { font-size: 13px; padding: 4px 10px; border-radius: 6px; }
+            .ot-status-ok { background: #dcfce7; color: #16a34a; }
+            .ot-status-err { background: #fee2e2; color: #dc2626; }
+        </style>
+
+        <!-- KPI Cards — 6 cards: 125% | 150% (חול) | 175% (שבת) | 200% (שבת) | עלות | מדריכים -->
+        <div class="ot-kpi-grid" style="grid-template-columns: repeat(6, 1fr);">
+            <div class="ot-kpi" style="background:#fef3c7;">
+                <div class="ot-kpi-value" style="color:#d97706;" id="ot-total-hours-125">—</div>
+                <div class="ot-kpi-label" style="color:#92400e;">שעות 125%<br><span style="font-weight:400;">(חול)</span></div>
+            </div>
+            <div class="ot-kpi" style="background:#fff7ed;">
+                <div class="ot-kpi-value" style="color:#c2410c;" id="ot-total-hours-150">—</div>
+                <div class="ot-kpi-label" style="color:#9a3412;">שעות 150%<br><span style="font-weight:400;">(חול)</span></div>
+            </div>
+            <div class="ot-kpi" style="background:#fce7f3;">
+                <div class="ot-kpi-value" style="color:#be185d;" id="ot-total-hours-175">—</div>
+                <div class="ot-kpi-label" style="color:#9d174d;">שעות 175%<br><span style="font-weight:400;">(שבת)</span></div>
+            </div>
+            <div class="ot-kpi" style="background:#f5f3ff;">
+                <div class="ot-kpi-value" style="color:#7c3aed;" id="ot-total-hours-200">—</div>
+                <div class="ot-kpi-label" style="color:#5b21b6;">שעות 200%<br><span style="font-weight:400;">(שבת)</span></div>
+            </div>
+            <div class="ot-kpi" style="background:#ecfdf5;">
+                <div class="ot-kpi-value" style="color:#065f46; font-size:22px;" id="ot-total-cost">—</div>
+                <div class="ot-kpi-label" style="color:#064e3b;">עלות כוללת</div>
+            </div>
+            <div class="ot-kpi" style="background:#eff6ff;">
+                <div class="ot-kpi-value" style="color:#1d4ed8;" id="ot-total-guides">—</div>
+                <div class="ot-kpi-label" style="color:#1e40af;">מדריכים עם חריגות</div>
+            </div>
+        </div>
+
+        <!-- Overtime Bar Chart -->
+        <div class="chart-card" style="margin-bottom: 24px;">
+            <div class="chart-header">
+                <h3 class="chart-title">
+                    <span class="chart-title-icon">⚠️</span>
+                    עלות שעות נוספות לפי מערך דיור
+                </h3>
+            </div>
+            <div class="chart-wrapper" style="height: 300px;">
+                <div class="loading-overlay" id="loading-overtime-chart"><div class="spinner"></div></div>
+                <canvas id="chart-overtime"></canvas>
+            </div>
+        </div>
+
+        <!-- Overtime Table per Housing Array -->
+        <div class="chart-card">
+            <div class="chart-header">
+                <h3 class="chart-title">
+                    <span class="chart-title-icon">📋</span>
+                    פירוט לפי מערך דיור
+                    <span id="ot-arrays-count" style="font-size:14px; color:#64748b; margin-right:12px;"></span>
+                </h3>
+            </div>
+            <div id="ot-loading-msg" style="text-align:center; padding:40px; color:#94a3b8;">
+                <div class="spinner" style="margin: 0 auto 12px;"></div>
+                טוען נתונים...
+            </div>
+            <div id="ot-table-wrap" style="display:none; overflow-x:auto;">
+                <table class="ot-table">
+                    <thead>
+                        <tr>
+                            <th>מערך דיור</th>
+                            <th style="text-align:center; background:#fef9c3;">ש׳ 125%<br><small style="font-weight:400;color:#92400e;">חול</small></th>
+                            <th style="text-align:center; background:#fff7ed;">ש׳ 150%<br><small style="font-weight:400;color:#9a3412;">חול</small></th>
+                            <th style="text-align:center; background:#fce7f3;">ש׳ 175%<br><small style="font-weight:400;color:#9d174d;">שבת</small></th>
+                            <th style="text-align:center; background:#f5f3ff;">ש׳ 200%<br><small style="font-weight:400;color:#5b21b6;">שבת</small></th>
+                            <th style="text-align:center;">סה"כ עלות</th>
+                            <th style="text-align:center;">מדריכים</th>
+                            <th style="text-align:center;">פרטים</th>
+                        </tr>
+                    </thead>
+                    <tbody id="ot-tbody"></tbody>
+                </table>
+            </div>
+            <div id="ot-empty-msg" style="display:none; text-align:center; padding:40px; color:#94a3b8;">
+                אין שעות נוספות לחודש זה
             </div>
         </div>
     </div>
@@ -884,6 +1003,212 @@ async function loadGuideYearly() {
     } catch (err) {
         console.error('Error:', err);
         hideLoading('guide-yearly');
+    }
+}
+
+// === TAB 5: Overtime for Coordinators ===
+let overtimeLoaded = false;
+let overtimeData = null;  // cache loaded data
+
+async function loadOvertimeData() {
+    if (overtimeLoaded) return;
+    overtimeLoaded = true;
+    showLoading('overtime-chart');
+    try {
+        const res = await fetch(`/api/stats/overtime?year=${selectedYear}&month=${selectedMonth}`);
+        overtimeData = await res.json();
+        hideLoading('overtime-chart');
+        rerenderOvertimeView();
+    } catch (err) {
+        console.error('Overtime load error:', err);
+        hideLoading('overtime-chart');
+        document.getElementById('ot-loading-msg').innerHTML =
+            '<span style="color:#ef4444;">שגיאה בטעינת נתונים</span>';
+    }
+}
+
+function rerenderOvertimeView() {
+    if (!overtimeData) return;
+
+    const totals = overtimeData.totals;
+    const arrays = overtimeData.arrays;
+
+    // KPI Cards — תמיד 4 שיעורים: 125% (חול), 150% (חול), 175% (שבת), 200% (שבת)
+    document.getElementById('ot-total-hours-125').textContent = totals.hours_125.toFixed(1) + ' ש׳';
+    document.getElementById('ot-total-hours-150').textContent = totals.hours_150.toFixed(1) + ' ש׳';
+    document.getElementById('ot-total-hours-175').textContent = totals.hours_175.toFixed(1) + ' ש׳';
+    document.getElementById('ot-total-hours-200').textContent = totals.hours_200.toFixed(1) + ' ש׳';
+    document.getElementById('ot-total-cost').textContent = formatCurrency(totals.total_cost);
+    document.getElementById('ot-total-guides').textContent = totals.guides_with_overtime;
+    document.getElementById('ot-arrays-count').textContent =
+        `(${totals.arrays_count} מערכים עם חריגות)`;
+
+    const sortedArrays = [...arrays]
+        .filter(a => a.total_overtime_cost > 0)
+        .sort((x, y) => y.total_overtime_cost - x.total_overtime_cost);
+
+    // Bar Chart — תמיד 4 datasets
+    if (sortedArrays.length > 0) {
+        const ctx = document.getElementById('chart-overtime').getContext('2d');
+        if (charts['overtime']) charts['overtime'].destroy();
+
+        charts['overtime'] = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: sortedArrays.map(a => a.name),
+                datasets: [
+                    { label: 'עלות 125% (חול)', data: sortedArrays.map(a => a.cost_125), backgroundColor: '#fbbf24', borderRadius: 2 },
+                    { label: 'עלות 150% (חול)', data: sortedArrays.map(a => a.cost_150), backgroundColor: '#f97316', borderRadius: 2 },
+                    { label: 'עלות 175% (שבת)', data: sortedArrays.map(a => a.cost_175), backgroundColor: '#ec4899', borderRadius: 2 },
+                    { label: 'עלות 200% (שבת)', data: sortedArrays.map(a => a.cost_200), backgroundColor: '#8b5cf6', borderRadius: 2 },
+                ]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false, indexAxis: 'y',
+                plugins: {
+                    legend: { position: 'top', rtl: true, labels: { padding: 16, usePointStyle: true } },
+                    tooltip: { rtl: true, callbacks: { label: ctx => `${ctx.dataset.label}: ${formatCurrency(ctx.parsed.x)}` } }
+                },
+                scales: {
+                    x: { stacked: true, grid: { color: '#f1f5f9' }, ticks: { callback: v => formatCurrency(v) } },
+                    y: { stacked: true, reverse: false, grid: { display: false } }
+                }
+            }
+        });
+    }
+
+    // Build Table
+    document.getElementById('ot-loading-msg').style.display = 'none';
+    if (sortedArrays.length === 0) {
+        document.getElementById('ot-empty-msg').style.display = 'block';
+        document.getElementById('ot-table-wrap').style.display = 'none';
+        return;
+    }
+    document.getElementById('ot-empty-msg').style.display = 'none';
+    document.getElementById('ot-table-wrap').style.display = 'block';
+
+    const tbody = document.getElementById('ot-tbody');
+    tbody.innerHTML = '';
+
+    sortedArrays.forEach((arr, idx) => {
+        const totalH = arr.hours_125 + arr.hours_150 + arr.hours_175 + arr.hours_200;
+        const badgeClass = totalH > 15 ? 'ot-badge-red' : totalH > 7 ? 'ot-badge-yellow' : 'ot-badge-green';
+
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td><strong>${arr.name}</strong></td>
+            <td style="text-align:center; background:#fffbeb;">${arr.hours_125 > 0 ? arr.hours_125.toFixed(1) : '—'}</td>
+            <td style="text-align:center; background:#fff7ed;">${arr.hours_150 > 0 ? arr.hours_150.toFixed(1) : '—'}</td>
+            <td style="text-align:center; background:#fdf4ff;">${arr.hours_175 > 0 ? arr.hours_175.toFixed(1) : '—'}</td>
+            <td style="text-align:center; background:#f5f3ff;">${arr.hours_200 > 0 ? arr.hours_200.toFixed(1) : '—'}</td>
+            <td style="text-align:center;">
+                <span class="ot-badge ${badgeClass}">${formatCurrency(arr.total_overtime_cost)}</span>
+            </td>
+            <td style="text-align:center; color:#1d4ed8; font-weight:600;">${arr.guides_count}</td>
+            <td style="text-align:center;">
+                <button class="ot-expand-btn" onclick="toggleOtDetails(${idx}, this)">פרטים ▼</button>
+            </td>`;
+        tbody.appendChild(tr);
+
+        // Detail row
+        const detailTr = document.createElement('tr');
+        detailTr.className = 'ot-details-row';
+        detailTr.id = `ot-detail-${idx}`;
+        detailTr.style.display = 'none';
+
+        const guidesRows = arr.guides.map(g => {
+            if (g.total_overtime_cost <= 0) return '';
+            return `<tr>
+                <td><a href="/guide/${g.person_id}?month=${selectedMonth}&year=${selectedYear}"
+                       style="color:#1f6feb; text-decoration:none; font-weight:500;">${g.name}</a></td>
+                <td style="text-align:center; background:#fffbeb;">${g.hours_125 > 0 ? g.hours_125.toFixed(1) : '—'}</td>
+                <td style="text-align:center; background:#fff7ed;">${g.hours_150 > 0 ? g.hours_150.toFixed(1) : '—'}</td>
+                <td style="text-align:center; background:#fdf4ff;">${g.hours_175 > 0 ? g.hours_175.toFixed(1) : '—'}</td>
+                <td style="text-align:center; background:#f5f3ff;">${g.hours_200 > 0 ? g.hours_200.toFixed(1) : '—'}</td>
+                <td style="text-align:center; font-weight:700;">${formatCurrency(g.total_overtime_cost)}</td>
+            </tr>`;
+        }).join('');
+
+        const emailPlaceholder = arr.coordinator_email
+            ? `value="${arr.coordinator_email}"`
+            : `placeholder="הזן מייל רכז..."`;
+
+        detailTr.innerHTML = `
+            <td colspan="8">
+                <div class="ot-details-inner">
+                    <table class="ot-inner-table">
+                        <thead>
+                            <tr>
+                                <th>מדריך</th>
+                                <th style="text-align:center; background:#fef9c3;">ש׳ 125%<br><small>חול</small></th>
+                                <th style="text-align:center; background:#fff7ed;">ש׳ 150%<br><small>חול</small></th>
+                                <th style="text-align:center; background:#fce7f3;">ש׳ 175%<br><small>שבת</small></th>
+                                <th style="text-align:center; background:#f5f3ff;">ש׳ 200%<br><small>שבת</small></th>
+                                <th style="text-align:center;">סה"כ עלות</th>
+                            </tr>
+                        </thead>
+                        <tbody>${guidesRows || '<tr><td colspan="6" style="text-align:center;color:#94a3b8;padding:12px;">אין שעות חריגות</td></tr>'}</tbody>
+                    </table>
+                    <div class="ot-email-row">
+                        <input class="ot-email-input" type="email" id="ot-email-${idx}"
+                               ${emailPlaceholder} placeholder="מייל הרכז">
+                        <button class="ot-send-btn" onclick="sendOvertimeEmail(${arr.id}, ${idx})">
+                            שלח דוח לרכז
+                        </button>
+                        <span class="ot-status" id="ot-status-${idx}" style="display:none;"></span>
+                    </div>
+                </div>
+            </td>`;
+        tbody.appendChild(detailTr);
+    });
+}
+
+function toggleOtDetails(idx, btn) {
+    const row = document.getElementById(`ot-detail-${idx}`);
+    const isOpen = row.style.display !== 'none';
+    row.style.display = isOpen ? 'none' : 'table-row';
+    btn.textContent = isOpen ? 'פרטים ▼' : 'סגור ▲';
+    btn.style.background = isOpen ? '' : '#f1f5f9';
+}
+
+async function sendOvertimeEmail(arrayId, idx) {
+    const emailInput = document.getElementById(`ot-email-${idx}`);
+    const statusEl = document.getElementById(`ot-status-${idx}`);
+    const btn = emailInput.nextElementSibling;
+
+    const email = emailInput.value.trim();
+    if (!email) {
+        statusEl.textContent = 'יש להזין כתובת מייל';
+        statusEl.className = 'ot-status ot-status-err';
+        statusEl.style.display = 'inline-block';
+        return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'שולח...';
+    statusEl.style.display = 'none';
+
+    try {
+        const res = await fetch(
+            `/api/stats/send-overtime-email?year=${selectedYear}&month=${selectedMonth}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ housing_array_id: arrayId, custom_email: email })
+            }
+        );
+        const result = await res.json();
+
+        statusEl.textContent = result.success ? result.message : (result.error || 'שגיאה בשליחה');
+        statusEl.className = result.success ? 'ot-status ot-status-ok' : 'ot-status ot-status-err';
+        statusEl.style.display = 'inline-block';
+    } catch (err) {
+        statusEl.textContent = 'שגיאת רשת';
+        statusEl.className = 'ot-status ot-status-err';
+        statusEl.style.display = 'inline-block';
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'שלח דוח לרכז';
     }
 }
 

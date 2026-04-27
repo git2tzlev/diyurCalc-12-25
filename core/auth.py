@@ -181,3 +181,24 @@ def get_user_housing_array(request) -> Optional[int]:
     if user and user.get('role') == 'framework_manager':
         return user.get('housing_array_id')
     return None
+
+
+def enforce_framework_manager_guide_access(request, person_id: int) -> None:
+    """
+    דורש שמנהל מסגרת ייגש רק למדריכים הרשומים למערך הדיור שלו.
+
+    Raises:
+        HTTPException: 403 אם אין הרשאה.
+    """
+    from fastapi import HTTPException
+
+    hid = get_user_housing_array(request)
+    if hid is None:
+        return
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT housing_array_id FROM people WHERE id = %s",
+            (person_id,),
+        ).fetchone()
+    if not row or row["housing_array_id"] != hid:
+        raise HTTPException(status_code=403, detail="אין הרשאה לצפות במדריך זה")

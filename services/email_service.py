@@ -496,7 +496,9 @@ def send_guide_email(person_id: int, year: int, month: int, custom_email: Option
         return {"success": False, "error": str(e)}
 
 
-def send_all_guides_email(year: int, month: int) -> Dict[str, Any]:
+def send_all_guides_email(
+    year: int, month: int, housing_array_id: Optional[int] = None
+) -> Dict[str, Any]:
     """שליחת דוחות לכל המדריכים הפעילים. משחרר חיבור DB לפני הלולאה."""
     try:
         # שליפת הגדרות ורשימת מדריכים - חיבור DB קצר
@@ -505,16 +507,29 @@ def send_all_guides_email(year: int, month: int) -> Dict[str, Any]:
             if not settings:
                 return {"success": False, "error": "הגדרות מייל לא נמצאו"}
 
-            guides = conn.execute("""
-                SELECT DISTINCT p.id, p.name, p.email
-                FROM people p
-                JOIN time_reports tr ON tr.person_id = p.id
-                WHERE p.is_active = TRUE
-                AND p.email IS NOT NULL
-                AND p.email != ''
-                AND EXTRACT(YEAR FROM tr.date) = %s
-                AND EXTRACT(MONTH FROM tr.date) = %s
-            """, (year, month)).fetchall()
+            if housing_array_id is not None:
+                guides = conn.execute("""
+                    SELECT DISTINCT p.id, p.name, p.email
+                    FROM people p
+                    JOIN time_reports tr ON tr.person_id = p.id
+                    WHERE p.is_active = TRUE
+                    AND p.email IS NOT NULL
+                    AND p.email != ''
+                    AND p.housing_array_id = %s
+                    AND EXTRACT(YEAR FROM tr.date) = %s
+                    AND EXTRACT(MONTH FROM tr.date) = %s
+                """, (housing_array_id, year, month)).fetchall()
+            else:
+                guides = conn.execute("""
+                    SELECT DISTINCT p.id, p.name, p.email
+                    FROM people p
+                    JOIN time_reports tr ON tr.person_id = p.id
+                    WHERE p.is_active = TRUE
+                    AND p.email IS NOT NULL
+                    AND p.email != ''
+                    AND EXTRACT(YEAR FROM tr.date) = %s
+                    AND EXTRACT(MONTH FROM tr.date) = %s
+                """, (year, month)).fetchall()
 
         if not guides:
             return {"success": False, "error": "לא נמצאו מדריכים פעילים עם מייל לחודש זה"}
@@ -545,7 +560,12 @@ def send_all_guides_email(year: int, month: int) -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
-def send_all_guides_to_single_email(year: int, month: int, target_email: str) -> Dict[str, Any]:
+def send_all_guides_to_single_email(
+    year: int,
+    month: int,
+    target_email: str,
+    housing_array_id: Optional[int] = None,
+) -> Dict[str, Any]:
     """שליחת כל דוחות המדריכים למייל אחד (קובץ PDF אחד משולב)."""
     try:
         if not target_email:
@@ -557,15 +577,27 @@ def send_all_guides_to_single_email(year: int, month: int, target_email: str) ->
             if not settings:
                 return {"success": False, "error": "הגדרות מייל לא נמצאו"}
 
-            guides = conn.execute("""
-                SELECT DISTINCT p.id, p.name
-                FROM people p
-                JOIN time_reports tr ON tr.person_id = p.id
-                WHERE p.is_active = TRUE
-                AND EXTRACT(YEAR FROM tr.date) = %s
-                AND EXTRACT(MONTH FROM tr.date) = %s
-                ORDER BY p.name
-            """, (year, month)).fetchall()
+            if housing_array_id is not None:
+                guides = conn.execute("""
+                    SELECT DISTINCT p.id, p.name
+                    FROM people p
+                    JOIN time_reports tr ON tr.person_id = p.id
+                    WHERE p.is_active = TRUE
+                    AND p.housing_array_id = %s
+                    AND EXTRACT(YEAR FROM tr.date) = %s
+                    AND EXTRACT(MONTH FROM tr.date) = %s
+                    ORDER BY p.name
+                """, (housing_array_id, year, month)).fetchall()
+            else:
+                guides = conn.execute("""
+                    SELECT DISTINCT p.id, p.name
+                    FROM people p
+                    JOIN time_reports tr ON tr.person_id = p.id
+                    WHERE p.is_active = TRUE
+                    AND EXTRACT(YEAR FROM tr.date) = %s
+                    AND EXTRACT(MONTH FROM tr.date) = %s
+                    ORDER BY p.name
+                """, (year, month)).fetchall()
 
         if not guides:
             return {"success": False, "error": "לא נמצאו מדריכים עם משמרות בחודש זה"}
@@ -611,7 +643,12 @@ def send_all_guides_to_single_email(year: int, month: int, target_email: str) ->
         return {"success": False, "error": str(e)}
 
 
-def send_selected_guides_email(guide_ids: list, year: int, month: int) -> Dict[str, Any]:
+def send_selected_guides_email(
+    guide_ids: list,
+    year: int,
+    month: int,
+    housing_array_id: Optional[int] = None,
+) -> Dict[str, Any]:
     """שליחת דוחות למדריכים נבחרים בלבד (לפי רשימת מזהים)."""
     try:
         logger.info(f"=== התחלת שליחת מיילים ל-{len(guide_ids)} מדריכים - {month:02d}/{year} ===")
@@ -628,13 +665,24 @@ def send_selected_guides_email(guide_ids: list, year: int, month: int) -> Dict[s
                 return {"success": False, "error": "הגדרות מייל לא נמצאו"}
 
             placeholders = ",".join(["%s"] * len(guide_ids))
-            guides = conn.execute(f"""
-                SELECT id, name, email
-                FROM people
-                WHERE id IN ({placeholders})
-                AND email IS NOT NULL
-                AND email != ''
-            """, tuple(guide_ids)).fetchall()
+            if housing_array_id is not None:
+                params = tuple(guide_ids) + (housing_array_id,)
+                guides = conn.execute(f"""
+                    SELECT id, name, email
+                    FROM people
+                    WHERE id IN ({placeholders})
+                    AND housing_array_id = %s
+                    AND email IS NOT NULL
+                    AND email != ''
+                """, params).fetchall()
+            else:
+                guides = conn.execute(f"""
+                    SELECT id, name, email
+                    FROM people
+                    WHERE id IN ({placeholders})
+                    AND email IS NOT NULL
+                    AND email != ''
+                """, tuple(guide_ids)).fetchall()
 
         if not guides:
             logger.warning("לא נמצאו מדריכים עם מייל ברשימה")
@@ -686,7 +734,13 @@ def send_selected_guides_email(guide_ids: list, year: int, month: int) -> Dict[s
         return {"success": False, "error": str(e)}
 
 
-def send_selected_guides_to_single_email(guide_ids: list, year: int, month: int, target_email: str) -> Dict[str, Any]:
+def send_selected_guides_to_single_email(
+    guide_ids: list,
+    year: int,
+    month: int,
+    target_email: str,
+    housing_array_id: Optional[int] = None,
+) -> Dict[str, Any]:
     """שליחת דוחות מדריכים נבחרים למייל אחד (קובץ PDF משולב)."""
     try:
         if not target_email:
@@ -702,12 +756,22 @@ def send_selected_guides_to_single_email(guide_ids: list, year: int, month: int,
                 return {"success": False, "error": "הגדרות מייל לא נמצאו"}
 
             placeholders = ",".join(["%s"] * len(guide_ids))
-            guides = conn.execute(f"""
-                SELECT id, name
-                FROM people
-                WHERE id IN ({placeholders})
-                ORDER BY name
-            """, tuple(guide_ids)).fetchall()
+            if housing_array_id is not None:
+                params = tuple(guide_ids) + (housing_array_id,)
+                guides = conn.execute(f"""
+                    SELECT id, name
+                    FROM people
+                    WHERE id IN ({placeholders})
+                    AND housing_array_id = %s
+                    ORDER BY name
+                """, params).fetchall()
+            else:
+                guides = conn.execute(f"""
+                    SELECT id, name
+                    FROM people
+                    WHERE id IN ({placeholders})
+                    ORDER BY name
+                """, tuple(guide_ids)).fetchall()
 
         if not guides:
             return {"success": False, "error": "לא נמצאו מדריכים ברשימה"}

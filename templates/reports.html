@@ -8,12 +8,17 @@
 
   <form method="get" class="controls" style="margin: 12px 0; flex-wrap: wrap; gap: 8px;">
     <label for="housing_array_id">מערך דיור:</label>
+    {% if reports_array_locked and housing_arrays %}
+    <span class="muted" style="font-weight: 600;">{{ housing_arrays[0].name }}</span>
+    <input type="hidden" name="housing_array_id" value="{{ housing_arrays[0].id }}">
+    {% else %}
     <select id="housing_array_id" name="housing_array_id">
       <option value="">כל המערכים</option>
       {% for ha in housing_arrays %}
         <option value="{{ ha.id }}" {% if ha.id == selected_housing_array %}selected{% endif %}>{{ ha.name }}</option>
       {% endfor %}
     </select>
+    {% endif %}
     <label for="month">חודש:</label>
     <select id="month" name="month">
       {% for m in months %}

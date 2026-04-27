@@ -84,6 +84,8 @@ from routes.stats import (
     get_housing_arrays_list,
     get_apartments_list,
     get_guides_list,
+    get_overtime_by_housing_array,
+    send_overtime_email_route,
 )
 from routes.auth import login_page, login_submit, logout
 from core.auth import validate_session_token, SESSION_COOKIE_NAME, is_framework_manager, is_super_admin
@@ -569,10 +571,10 @@ def stats_all_route(year: int, month: int):
 
 
 @app.get("/api/stats/compare-arrays")
-def stats_compare_arrays_route(year: int, month: int, array_ids: str):
+def stats_compare_arrays_route(request: Request, year: int, month: int, array_ids: str):
     """Compare 2-5 housing arrays."""
     ids = [int(x) for x in array_ids.split(",") if x.strip()]
-    return get_compare_housing_arrays(year, month, ids)
+    return get_compare_housing_arrays(request, year, month, ids)
 
 
 @app.get("/api/stats/top-apartments")
@@ -621,6 +623,18 @@ def stats_apartments_route(housing_array_id: int = None):
 def stats_guides_route():
     """Get list of active guides."""
     return get_guides_list()
+
+
+@app.get("/api/stats/overtime")
+def stats_overtime_route(year: int, month: int):
+    """שעות נוספות לפי מערך דיור עם פירוט מדריכים."""
+    return get_overtime_by_housing_array(year, month)
+
+
+@app.post("/api/stats/send-overtime-email")
+async def stats_send_overtime_email_route(request: Request, year: int, month: int):
+    """שליחת דוח שעות נוספות לרכז מערך דיור."""
+    return await send_overtime_email_route(request, year, month)
 
 
 # Email routes
