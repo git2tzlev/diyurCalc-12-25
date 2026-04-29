@@ -45,6 +45,7 @@ class PremiumWindow:
         standby_mode: מדיניות כוננות — 'shabbat' (תעריף כוננות שבת) או 'none' (רגיל).
         source_id: FK לרשומת המקור (shabbat_times אין id נפרד, special_days.id).
         city_filter: רק ערים אלה (NULL = כולם). להחלה ב-filter_windows_by_city.
+        name: שם היום המיוחד לתצוגה (למשל "פורים תשפ״ז", "יום העצמאות").
     """
     start_date: date
     start_min: int
@@ -55,6 +56,7 @@ class PremiumWindow:
     standby_mode: str
     source_id: Optional[int]
     city_filter: Optional[tuple] = None
+    name: Optional[str] = None
 
 
 # =============================================================================
@@ -215,6 +217,7 @@ def _load_special_day_windows(
             standby_mode=row["standby_mode"],
             source_id=row["id"],
             city_filter=tuple(row["city_filter"]) if row["city_filter"] else None,
+            name=row["name"],
         ))
 
     return windows

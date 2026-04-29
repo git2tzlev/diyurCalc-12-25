@@ -706,12 +706,14 @@ class TestSeniorityFilter(unittest.TestCase):
         self.assertFalse(_has_sufficient_seniority(date(2024, 11, 2), 2025, 1))
 
     def test_new_guide_no_holiday_payment(self):
-        """מדריך חדש (פחות מ-3 חודשים) לא מקבל תשלום חג."""
+        """מדריך חדש (פחות מ-3 חודשים) בדירת ASD לא מקבל תשלום חג."""
         holiday = date(2025, 10, 2)
         cache = _make_shabbat_cache_with_holiday([holiday])
 
         reports = [
-            _make_report(1, 100, date(2025, 10, 5)),
+            _make_report(1, 100, date(2025, 10, 5),
+                         housing_array_id=ASD_HOUSING_ARRAY_ID,
+                         apartment_type_id=HIGH_FUNCTIONING_APT_TYPE),
         ]
         person_types = {1: PERMANENT_EMPLOYEE_TYPE}
         # התחיל באוגוסט — פחות מ-3 חודשים לפני אוקטובר
@@ -743,13 +745,17 @@ class TestSeniorityFilter(unittest.TestCase):
         self.assertAlmostEqual(_get_amount(result, 1), self.full_shift_pay)
 
     def test_mixed_seniority_two_guides(self):
-        """2 קבועים: ותיק + חדש — ותיק מקבל חצי, חדש לא מקבל."""
+        """2 קבועים בדירת ASD: ותיק + חדש — ותיק מקבל שלמה (ASD), חדש לא מקבל."""
         holiday = date(2025, 10, 2)
         cache = _make_shabbat_cache_with_holiday([holiday])
 
         reports = [
-            _make_report(1, 100, date(2025, 10, 5)),
-            _make_report(2, 100, date(2025, 10, 6)),
+            _make_report(1, 100, date(2025, 10, 5),
+                         housing_array_id=ASD_HOUSING_ARRAY_ID,
+                         apartment_type_id=HIGH_FUNCTIONING_APT_TYPE),
+            _make_report(2, 100, date(2025, 10, 6),
+                         housing_array_id=ASD_HOUSING_ARRAY_ID,
+                         apartment_type_id=HIGH_FUNCTIONING_APT_TYPE),
         ]
         person_types = {1: PERMANENT_EMPLOYEE_TYPE, 2: PERMANENT_EMPLOYEE_TYPE}
         person_start_dates = {
@@ -762,19 +768,23 @@ class TestSeniorityFilter(unittest.TestCase):
             all_reports=reports, person_types=person_types,
             person_start_dates=person_start_dates,
         )
-        # ותיק: חצי (2 קבועים בדירה)
-        self.assertAlmostEqual(_get_amount(result, 1), self.half_shift_pay)
-        # חדש: לא מקבל
+        # ASD → משמרת שלמה לוותיק
+        self.assertAlmostEqual(_get_amount(result, 1), self.full_shift_pay)
+        # חדש: לא מקבל (אין ותק ב-ASD)
         self.assertEqual(_get_amount(result, 2), 0)
 
     def test_new_guide_still_counted_for_num_permanent(self):
-        """מדריך חדש נספר כקבוע לעניין full/half — ותיק מקבל חצי, לא שלמה."""
+        """ASD: מדריך חדש נספר כקבוע — ותיק מקבל שלמה (ASD), חדש לא (אין ותק)."""
         holiday = date(2025, 10, 2)
         cache = _make_shabbat_cache_with_holiday([holiday])
 
         reports = [
-            _make_report(1, 100, date(2025, 10, 5)),
-            _make_report(2, 100, date(2025, 10, 6)),
+            _make_report(1, 100, date(2025, 10, 5),
+                         housing_array_id=ASD_HOUSING_ARRAY_ID,
+                         apartment_type_id=HIGH_FUNCTIONING_APT_TYPE),
+            _make_report(2, 100, date(2025, 10, 6),
+                         housing_array_id=ASD_HOUSING_ARRAY_ID,
+                         apartment_type_id=HIGH_FUNCTIONING_APT_TYPE),
         ]
         person_types = {1: PERMANENT_EMPLOYEE_TYPE, 2: PERMANENT_EMPLOYEE_TYPE}
         person_start_dates = {
@@ -787,18 +797,22 @@ class TestSeniorityFilter(unittest.TestCase):
             all_reports=reports, person_types=person_types,
             person_start_dates=person_start_dates,
         )
-        # 2 קבועים בדירה → ותיק מקבל חצי (לא שלמה!)
-        self.assertAlmostEqual(_get_amount(result, 1), self.half_shift_pay)
+        # ASD → ותיק מקבל שלמה
+        self.assertAlmostEqual(_get_amount(result, 1), self.full_shift_pay)
 
 
     def test_both_new_guides_no_payment(self):
-        """2 קבועים חדשים באותה דירה — אף אחד לא מקבל תשלום חג."""
+        """2 קבועים חדשים בדירת ASD — אף אחד לא מקבל תשלום חג."""
         holiday = date(2025, 10, 2)
         cache = _make_shabbat_cache_with_holiday([holiday])
 
         reports = [
-            _make_report(1, 100, date(2025, 10, 5)),
-            _make_report(2, 100, date(2025, 10, 6)),
+            _make_report(1, 100, date(2025, 10, 5),
+                         housing_array_id=ASD_HOUSING_ARRAY_ID,
+                         apartment_type_id=HIGH_FUNCTIONING_APT_TYPE),
+            _make_report(2, 100, date(2025, 10, 6),
+                         housing_array_id=ASD_HOUSING_ARRAY_ID,
+                         apartment_type_id=HIGH_FUNCTIONING_APT_TYPE),
         ]
         person_types = {1: PERMANENT_EMPLOYEE_TYPE, 2: PERMANENT_EMPLOYEE_TYPE}
         person_start_dates = {
@@ -870,15 +884,21 @@ class TestSeniorityFilter(unittest.TestCase):
         self.assertAlmostEqual(_get_amount(result, 1), self.full_shift_pay)
         self.assertEqual(_get_amount(result, 2), 0)
 
-    def test_new_guide_worked_holiday_veteran_gets_half(self):
-        """חדש עבד בחג, ותיק לא — ותיק מקבל חצי (2 קבועים בדירה)."""
+    def test_new_guide_worked_holiday_veteran_gets_full_asd(self):
+        """ASD: חדש עבד בחג, ותיק לא — ותיק מקבל שלמה (ASD תמיד שלמה)."""
         holiday = date(2025, 10, 2)
         cache = _make_shabbat_cache_with_holiday([holiday])
 
         reports = [
-            _make_report(1, 100, date(2025, 10, 5)),
-            _make_report(2, 100, holiday),
-            _make_report(2, 100, date(2025, 10, 6)),
+            _make_report(1, 100, date(2025, 10, 5),
+                         housing_array_id=ASD_HOUSING_ARRAY_ID,
+                         apartment_type_id=HIGH_FUNCTIONING_APT_TYPE),
+            _make_report(2, 100, holiday,
+                         housing_array_id=ASD_HOUSING_ARRAY_ID,
+                         apartment_type_id=HIGH_FUNCTIONING_APT_TYPE),
+            _make_report(2, 100, date(2025, 10, 6),
+                         housing_array_id=ASD_HOUSING_ARRAY_ID,
+                         apartment_type_id=HIGH_FUNCTIONING_APT_TYPE),
         ]
         person_types = {1: PERMANENT_EMPLOYEE_TYPE, 2: PERMANENT_EMPLOYEE_TYPE}
         person_start_dates = {
@@ -891,8 +911,8 @@ class TestSeniorityFilter(unittest.TestCase):
             all_reports=reports, person_types=person_types,
             person_start_dates=person_start_dates,
         )
-        # ותיק eligible (לא עבד בחג), 2 קבועים → חצי
-        self.assertAlmostEqual(_get_amount(result, 1), self.half_shift_pay)
+        # ASD → ותיק eligible (לא עבד בחג), משמרת שלמה
+        self.assertAlmostEqual(_get_amount(result, 1), self.full_shift_pay)
         # חדש עבד בחג → לא eligible בכלל (וגם אין ותק)
         self.assertEqual(_get_amount(result, 2), 0)
 
@@ -906,13 +926,15 @@ class TestSeniorityFilter(unittest.TestCase):
             _has_sufficient_seniority(datetime(2025, 8, 1, 0, 0), 2025, 10)
         )
 
-    def test_empty_start_dates_dict_blocks_all(self):
-        """person_start_dates ריק → אף מדריך לא מקבל חג."""
+    def test_empty_start_dates_dict_blocks_all_asd(self):
+        """ASD: person_start_dates ריק → אף מדריך לא מקבל חג."""
         holiday = date(2025, 10, 2)
         cache = _make_shabbat_cache_with_holiday([holiday])
 
         reports = [
-            _make_report(1, 100, date(2025, 10, 5)),
+            _make_report(1, 100, date(2025, 10, 5),
+                         housing_array_id=ASD_HOUSING_ARRAY_ID,
+                         apartment_type_id=HIGH_FUNCTIONING_APT_TYPE),
         ]
         person_types = {1: PERMANENT_EMPLOYEE_TYPE}
 
@@ -931,14 +953,20 @@ class TestSeniorityFilter(unittest.TestCase):
         self.assertTrue(_has_sufficient_seniority(date(2024, 10, 1), 2025, 1))
 
     def test_three_guides_two_veteran_one_new(self):
-        """3 קבועים: 2 ותיקים + 1 חדש — ותיקים מקבלים חצי, חדש לא."""
+        """ASD: 3 קבועים: 2 ותיקים + 1 חדש — ותיקים מקבלים שלמה, חדש לא."""
         holiday = date(2025, 10, 2)
         cache = _make_shabbat_cache_with_holiday([holiday])
 
         reports = [
-            _make_report(1, 100, date(2025, 10, 5)),
-            _make_report(2, 100, date(2025, 10, 6)),
-            _make_report(3, 100, date(2025, 10, 7)),
+            _make_report(1, 100, date(2025, 10, 5),
+                         housing_array_id=ASD_HOUSING_ARRAY_ID,
+                         apartment_type_id=HIGH_FUNCTIONING_APT_TYPE),
+            _make_report(2, 100, date(2025, 10, 6),
+                         housing_array_id=ASD_HOUSING_ARRAY_ID,
+                         apartment_type_id=HIGH_FUNCTIONING_APT_TYPE),
+            _make_report(3, 100, date(2025, 10, 7),
+                         housing_array_id=ASD_HOUSING_ARRAY_ID,
+                         apartment_type_id=HIGH_FUNCTIONING_APT_TYPE),
         ]
         person_types = {
             1: PERMANENT_EMPLOYEE_TYPE,
@@ -956,9 +984,9 @@ class TestSeniorityFilter(unittest.TestCase):
             all_reports=reports, person_types=person_types,
             person_start_dates=person_start_dates,
         )
-        # 3 קבועים → חצי משמרת לכולם, אבל חדש לא מקבל
-        self.assertAlmostEqual(_get_amount(result, 1), self.half_shift_pay)
-        self.assertAlmostEqual(_get_amount(result, 2), self.half_shift_pay)
+        # ASD: 3 קבועים → שלמה לוותיקים, חדש לא מקבל
+        self.assertAlmostEqual(_get_amount(result, 1), self.full_shift_pay)
+        self.assertAlmostEqual(_get_amount(result, 2), self.full_shift_pay)
         self.assertEqual(_get_amount(result, 3), 0)
 
 

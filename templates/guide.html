@@ -585,6 +585,26 @@
             </div>
           </div>
         </div>
+        {% if guide_notes %}
+        <!-- התראת שימת לב כשיש הערות לחודש -->
+        <div id="guideNotesAttentionModal" class="no-print" role="dialog" aria-labelledby="guideNotesAttentionTitle" aria-modal="true"
+          onclick="if (event.target === this) this.style.display='none'"
+          style="display:flex; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.45); z-index:1001; justify-content:center; align-items:center;">
+          <div onclick="event.stopPropagation()" style="background:#fff; border-radius:10px; padding:22px 24px; max-width:420px; margin:12px; direction:rtl; box-shadow:0 4px 24px rgba(0,0,0,0.25); border:2px solid #facc15;">
+            <div style="font-size:40px; text-align:center; line-height:1; margin-bottom:6px;">&#9888;</div>
+            <h3 id="guideNotesAttentionTitle" style="margin:0 0 10px; font-size:17px; text-align:center; color:#854d0e;">שימו לב: יש הערות למדריך</h3>
+            <p style="margin:0 0 18px; font-size:14px; color:#475569; text-align:center; line-height:1.45;">
+              קיימת לפחות הערה אחת עבור <strong>{{ "%02d"|format(selected_month) }}/{{ selected_year }}</strong>. מומלץ לצפות בטאב "הערות".
+            </p>
+            <div style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">
+              <button type="button" onclick="document.getElementById('guideNotesAttentionModal').style.display='none'"
+                style="padding:10px 18px; border:1px solid #cbd5e1; background:#fff; border-radius:6px; cursor:pointer; font-size:14px;">סגור</button>
+              <button type="button" onclick="(function(){ var t=document.getElementById('tab-notes'); if(t)t.checked=true; document.getElementById('guideNotesAttentionModal').style.display='none'; })()"
+                style="padding:10px 18px; background:#ca8a04; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:14px; font-weight:600;">מעבר להערות</button>
+            </div>
+          </div>
+        </div>
+        {% endif %}
         {% if daily_segments %}
         <div class="table-container">
           {% for day in daily_segments %}
@@ -1098,7 +1118,7 @@
         <div style="margin-top: 16px;">
           <div class="day-header"
             style="margin-bottom: 4px; font-size: 12pt; color: #7c3aed; font-weight: bold; border-bottom: 2px solid #7c3aed;">
-            סיכום שעות בתעריף משתנה
+            {% if monthly_report.is_asd_multi_rate %}פירוט שעות לפי תעריף בסיס{% else %}סיכום שעות בתעריף משתנה{% endif %}
           </div>
           <div class="table-container">
             <table class="summary-table" style="width: auto; margin-right: 0; max-width: 600px;">
@@ -1125,7 +1145,7 @@
                 {% set total_var_hours = monthly_report.variable_shifts | sum(attribute='hours') %}
                 {% set total_var_payment = monthly_report.variable_shifts | sum(attribute='payment') %}
                 <tr style="background-color: #e9d5ff; font-weight: bold; border-top: 2px solid #7c3aed;">
-                  <td style="text-align: right; padding: 6px 8px;">סה"כ תעריף משתנה:</td>
+                  <td style="text-align: right; padding: 6px 8px;">{% if monthly_report.is_asd_multi_rate %}סה"כ:{% else %}סה"כ תעריף משתנה:{% endif %}</td>
                   <td style="text-align: center; padding: 6px 8px;">{{ total_var_hours | round(2) }}</td>
                   <td style="text-align: center; padding: 6px 8px;">-</td>
                   <td style="text-align: center; padding: 6px 8px;">-</td>
@@ -1962,15 +1982,14 @@
     }
   }
 
-  // Auto-print if 'print=1' is in URL
+  // Auto-print if 'print=1' is in URL; אל תציג מודאל הערות בעת הדפסה
   window.onload = function () {
     const urlParams = new URLSearchParams(window.location.search);
+    const noteModal = document.getElementById('guideNotesAttentionModal');
     if (urlParams.get('print') === '1') {
-      // Small delay to ensure styles and tables are fully rendered
+      if (noteModal) noteModal.style.display = 'none';
       setTimeout(() => {
         window.print();
-        // Optional: close the window after print dialog is closed
-        // window.onafterprint = () => window.close();
       }, 500);
     }
   }

@@ -478,7 +478,8 @@ def guide_view(
             # זה מחליף את calculate_person_monthly_totals והדריסות הידניות
             totals_start = time.time()
             monthly_totals = aggregate_daily_segments_to_monthly(
-                conn, daily_segments, person_id, selected_year, selected_month, MINIMUM_WAGE
+                conn, daily_segments, person_id, selected_year, selected_month, MINIMUM_WAGE,
+                housing_filter=housing_filter,
             )
             logger.info(f"aggregate_daily_segments_to_monthly took: {time.time() - totals_start:.4f}s")
 
@@ -877,7 +878,8 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
         conn, person_id, year, month, shabbat_cache, MINIMUM_WAGE
     )
     monthly_totals = aggregate_daily_segments_to_monthly(
-        conn, daily_segments, person_id, year, month, MINIMUM_WAGE
+        conn, daily_segments, person_id, year, month, MINIMUM_WAGE,
+        housing_filter=housing_filter,
     )
     _inject_holiday_payment(
         conn, monthly_totals, person_id,
@@ -895,7 +897,19 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
         total_additions += monthly_totals["holiday_payment"]
         total_additions_no_travel += monthly_totals["holiday_payment"]
 
+    # ASD: פירוט לפי תעריפי בסיס שונים (רק אם יש יותר מתעריף אחד)
+    is_asd = housing_filter is not None and is_asd_housing_array(housing_filter)
     variable_by_shift = {}
+    if is_asd:
+        asd_distinct_rates: set[float] = set()
+        for day in daily_segments:
+            for chain in day.get("chains", []):
+                if chain.get("type", "work") == "work":
+                    asd_distinct_rates.add(round(chain.get("effective_rate", MINIMUM_WAGE), 2))
+        show_asd_breakdown = len(asd_distinct_rates) > 1
+    else:
+        show_asd_breakdown = False
+
     for day in daily_segments:
         for chain in day.get("chains", []):
             chain_shift_name = chain.get("shift_name", "") or ""
@@ -904,9 +918,12 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
             if not chain_shift_name:
                 continue
 
-            is_special_hourly = chain.get("is_special_hourly", False)
-            supplement = float(chain.get("hourly_wage_supplement", 0)) / 100
-            is_variable_rate = is_special_hourly or abs(chain_rate - MINIMUM_WAGE - supplement) > 0.01
+            if is_asd:
+                is_variable_rate = show_asd_breakdown and chain.get("type", "work") == "work"
+            else:
+                is_special_hourly = chain.get("is_special_hourly", False)
+                supplement = float(chain.get("hourly_wage_supplement", 0)) / 100
+                is_variable_rate = is_special_hourly or abs(chain_rate - MINIMUM_WAGE - supplement) > 0.01
 
             if is_variable_rate:
                 calc100 = chain.get("calc100", 0) or 0
@@ -1011,6 +1028,7 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
         "generation_time": generation_time,
         "variable_shifts": variable_shifts,
         "variable_rate_total": variable_rate_total,
+        "is_asd_multi_rate": is_asd and show_asd_breakdown,
     }
 
 
@@ -1275,11 +1293,14 @@ def _prepare_chains_pdf_data(conn, person_id: int, year: int, month: int) -> Opt
     MINIMUM_WAGE = get_minimum_wage_for_month(conn.conn, year, month)
     shabbat_cache = get_shabbat_times_cache(conn.conn)
     daily_segments, _ = get_daily_segments_data(conn, person_id, year, month, shabbat_cache, MINIMUM_WAGE)
-    monthly_totals = aggregate_daily_segments_to_monthly(conn, daily_segments, person_id, year, month, MINIMUM_WAGE)
+    hf = get_housing_array_filter()
+    monthly_totals = aggregate_daily_segments_to_monthly(
+        conn, daily_segments, person_id, year, month, MINIMUM_WAGE, housing_filter=hf
+    )
     _inject_holiday_payment(
         conn, monthly_totals, person_id,
         year, month, shabbat_cache,
-        MINIMUM_WAGE, get_housing_array_filter(),
+        MINIMUM_WAGE, hf,
     )
     daily_segments = _prepare_daily_segments_for_display(daily_segments)
 

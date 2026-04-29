@@ -121,6 +121,9 @@ def get_holiday_dates_in_month(
         day_info = shabbat_cache.get(day_str)
 
         if day_info and day_info.get("holiday"):
+            # שבת חול המועד - לא יו"ט, לא זכאי לתשלום חג
+            if d.weekday() == 5 and "חול המועד" in day_info["holiday"]:
+                continue
             holidays.append(d)
 
     return holidays
@@ -254,7 +257,7 @@ def calculate_holiday_payments(
             pay = full_shift_pay if num_permanent == 1 or is_asd else half_shift_pay
 
             for person_id in eligible:
-                if not _has_sufficient_seniority(
+                if is_asd and not _has_sufficient_seniority(
                     person_start_dates.get(person_id), year, month,
                 ):
                     continue
@@ -301,12 +304,13 @@ def _load_reports_and_types(
     person_start_dates: Dict[int, date] = {}
     if person_ids:
         cursor.execute("""
-            SELECT id, type, start_date FROM people WHERE id = ANY(%s)
+            SELECT id, type, work_start_date FROM people WHERE id = ANY(%s)
         """, (person_ids,))
         for row in cursor.fetchall():
             person_types[row["id"]] = row["type"]
-            if row["start_date"]:
-                person_start_dates[row["id"]] = row["start_date"]
+            if row["work_start_date"]:
+                person_start_dates[row["id"]] = row["work_start_date"]
+
 
     cursor.close()
     return reports, person_types, person_start_dates

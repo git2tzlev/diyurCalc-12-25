@@ -1067,7 +1067,8 @@ def get_guide_yearly(person_id: int, year: int) -> JSONResponse:
                 )
                 monthly_totals = aggregate_daily_segments_to_monthly(
                     conn_wrapper, daily_segments, person_id,
-                    target_year, target_month, minimum_wage
+                    target_year, target_month, minimum_wage,
+                    housing_filter=hf,
                 )
 
                 salary = monthly_totals.get("total_payment", 0)

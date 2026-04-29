@@ -537,7 +537,7 @@ def _calculate_chain_wages(
     # Start from offset if this chain continues from previous day
     minutes_processed = minutes_offset
 
-    _PREMIUM_LABEL = "פרימיום"
+    _PREMIUM_FALLBACK = "פרימיום"
 
     for seg_start, seg_end, seg_actual_date in flat_segments:
         seg_duration = seg_end - seg_start
@@ -579,7 +579,11 @@ def _calculate_chain_wages(
             block_size = min(minutes_until_tier_change, minutes_left_in_seg)
 
             # חיתוך בגבולות חלון פרימיום — כל בלוק יהיה כולו בתוך חלון אחד או כולו מחוץ לכולם
-            days_over = current_abs_minute // MINUTES_PER_DAY
+            # seg_actual_date כבר מכיל את התאריך הפיזי של הסגמנט, ו-seg_start
+            # על הציר המורחב (0-1920) כבר מקודד את ימי חציית-חצות.
+            # לכן מחשבים רק ימים *נוספים* מעבר למה ש-seg_start כבר מייצג.
+            seg_base_days = seg_start // MINUTES_PER_DAY
+            days_over = current_abs_minute // MINUTES_PER_DAY - seg_base_days
             physical_date = seg_actual_date + timedelta(days=days_over)
             physical_min = current_abs_minute % MINUTES_PER_DAY
             current_premium = get_window_at(windows, physical_date, physical_min) if windows else None
@@ -597,6 +601,7 @@ def _calculate_chain_wages(
                 # נמצאים בחלון פרימיום (יום מיוחד)
                 block_abs_start = current_abs_minute
                 block_abs_end = current_abs_minute + block_size
+                premium_label = current_premium.name or _PREMIUM_FALLBACK
 
                 if current_premium.rate_pct == 150:
                     # 150% — tier stacking כמו שבת: 150%/175%/200% לפי שעת הרצף
@@ -606,18 +611,18 @@ def _calculate_chain_wages(
                         result["calc150_shabbat_100"] += block_size
                         result["calc150_shabbat_50"] += block_size
                         result["calc150_premium"] += block_size
-                        add_segment_detail(block_abs_start, block_abs_end, f"150% {_PREMIUM_LABEL}", True)
+                        add_segment_detail(block_abs_start, block_abs_end, f"150% {premium_label}", True)
                     elif shabbat_rate == "175%":
                         result["calc175"] += block_size
                         result["calc175_premium"] += block_size
-                        add_segment_detail(block_abs_start, block_abs_end, f"175% {_PREMIUM_LABEL}", True)
+                        add_segment_detail(block_abs_start, block_abs_end, f"175% {premium_label}", True)
                     else:
                         result["calc200"] += block_size
                         result["calc200_premium"] += block_size
-                        add_segment_detail(block_abs_start, block_abs_end, f"200% {_PREMIUM_LABEL}", True)
+                        add_segment_detail(block_abs_start, block_abs_end, f"200% {premium_label}", True)
                 else:
                     # Flat rate (למשל 200%) — ללא tier stacking
-                    rate_label = f"{current_premium.rate_pct}% {_PREMIUM_LABEL}"
+                    rate_label = f"{current_premium.rate_pct}% {premium_label}"
                     if current_premium.rate_pct >= 200:
                         result["calc200"] += block_size
                         result["calc200_premium"] += block_size
@@ -1635,11 +1640,11 @@ def get_daily_segments_data(
     # תוספת ותק ASD: +3₪ למדריך קבוע עם שנה+ ותק
     employee_type = historical_person.get("employee_type")
     person_start_date_row = conn.execute(
-        "SELECT start_date FROM people WHERE id = %s", (person_id,)
+        "SELECT work_start_date FROM people WHERE id = %s", (person_id,)
     ).fetchone()
     asd_seniority_bonus = _get_asd_seniority_supplement(
         employee_type,
-        person_start_date_row["start_date"] if person_start_date_row else None,
+        person_start_date_row["work_start_date"] if person_start_date_row else None,
         year, month,
     )
 
@@ -1703,7 +1708,7 @@ def get_daily_segments_data(
             dummy_report = {
                 "shift_type_id": WORK_HOUR_SHIFT_ID,
                 "housing_array_id": ha_id,
-                "is_married": True,
+                "is_married": historical_is_married if historical_is_married is not None else False,
                 "hourly_wage_supplement": 0
             }
             weekday_rate = get_effective_hourly_rate(
@@ -3641,7 +3646,8 @@ def aggregate_daily_segments_to_monthly(
     month: int,
     minimum_wage: float,
     preloaded_payment_comps: Optional[List] = None,
-    person_start_date: Optional[Any] = None
+    person_start_date: Optional[Any] = None,
+    housing_filter: Optional[int] = None
 ) -> Dict[str, Any]:
     """
     מאחד את כל הנתונים מ-daily_segments למילון monthly_totals.
@@ -3727,6 +3733,18 @@ def aggregate_daily_segments_to_monthly(
         "regular_rate_x_minutes_sum": 0.0,
     }
 
+    # ASD: סריקה מקדימה לבדיקה אם יש יותר מתעריף בסיס אחד
+    is_asd = housing_filter is not None and is_asd_housing_array(housing_filter)
+    asd_has_multiple_rates = False
+    if is_asd:
+        asd_distinct_rates: set[float] = set()
+        for day in daily_segments:
+            for chain in day.get("chains", []):
+                if chain.get("type", "work") == "work":
+                    rate = round(chain.get("effective_rate", minimum_wage), 2)
+                    asd_distinct_rates.add(rate)
+        asd_has_multiple_rates = len(asd_distinct_rates) > 1
+
     # ספירת ימי עבודה, חופשה ומחלה
     work_days_set = set()
     vacation_days_set = set()
@@ -3750,11 +3768,15 @@ def aggregate_daily_segments_to_monthly(
             chain_type = chain.get("type", "work")
             effective_rate = chain.get("effective_rate", minimum_wage)
 
-            # תעריף משתנה = משמרת עם תעריף שעתי מיוחד (is_special_hourly),
-            # או תעריף שונה משכר מינימום + תוספת סוג דירה
+            # תעריף משתנה:
+            # ASD: כל המשמרות נחשבות "תעריף משתנה" רק אם יש יותר מתעריף בסיס אחד
+            # אחרת: משמרת עם תעריף שעתי מיוחד, או תעריף שונה משכר מינימום + תוספת
             is_special_hourly = chain.get("is_special_hourly", False)
             supplement = float(chain.get("hourly_wage_supplement", 0)) / 100
-            is_variable_rate = is_special_hourly or abs(effective_rate - minimum_wage - supplement) > 0.01
+            if is_asd:
+                is_variable_rate = asd_has_multiple_rates
+            else:
+                is_variable_rate = is_special_hourly or abs(effective_rate - minimum_wage - supplement) > 0.01
 
             if chain_type == "work":
                 # אתחול מילון לתעריף משתנה אם צריך
