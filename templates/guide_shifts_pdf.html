@@ -64,6 +64,17 @@
     .travel-row td {
       font-weight: 500;
     }
+    .completion-separator td {
+      background: #e3f2fd !important;
+      font-weight: bold;
+      color: #1e3a5f;
+      font-size: 12px;
+      padding: 8px 6px;
+      border-bottom: 2px solid #90caf9;
+    }
+    .completion-row {
+      background: #f5f9ff !important;
+    }
     /* הסרת הקו המפריד בין שורות תגבור */
     .tagbor-group:not(.tagbor-last) td {
       border-bottom: none;
@@ -127,33 +138,8 @@
       </tr>
     </thead>
     <tbody>
-      {% for shift in shifts_data %}
-      <tr class="{% if shift.tagbor_group %}tagbor-group{% endif %}{% if shift.tagbor_first %} tagbor-first{% endif %}{% if shift.tagbor_last %} tagbor-last{% endif %}">
-        <td>{{ shift.date }}</td>
-        <td>{{ shift.day }}</td>
-        <td>{{ shift.apartment }}</td>
-        <td>{{ shift.shift_type }}</td>
-        <td>{{ shift.start_time }}</td>
-        <td>{{ shift.end_time }}</td>
-        <td>{{ "%.2f"|format(shift.work_hours) }}</td>
-        <td>{{ "%.2f"|format(shift.standby_hours) }}</td>
-        <td>{% if shift.note is defined and shift.note %}<span style="font-weight:600;">{{ shift.note }}</span>{% endif %}</td>
-      </tr>
-      {% endfor %}
-
-      {% for payment in payments_data %}
-      <tr class="travel-row">
-        <td>-</td>
-        <td>-</td>
-        <td>{{ payment.description }}</td>
-        <td>-</td>
-        <td>-</td>
-        <td>-</td>
-        <td>{{ "%.2f"|format(payment.amount) }} &#8362;</td>
-        <td>-</td>
-        <td></td>
-      </tr>
-      {% endfor %}
+      {% from '_shifts_table_body.html' import render as render_shifts_body %}
+      {{ render_shifts_body(shifts_data, payments_data, completion_payments_data) }}
     </tbody>
   </table>
 

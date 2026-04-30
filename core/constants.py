@@ -61,6 +61,9 @@ HIGH_FUNCTIONING_APT_TYPE = 6   # תפקוד גבוה
 LOW_FUNCTIONING_APT_TYPE = 7    # תפקוד נמוך
 ASD_APT_TYPES = {HIGH_FUNCTIONING_APT_TYPE, LOW_FUNCTIONING_APT_TYPE}
 
+# דירות השלמות - זיהוי לפי ID (לתצוגה בלבד, לא לחישוב שכר)
+COMPLETION_APARTMENT_IDS: Set[int] = {29, 37}
+
 # מערך דיור ASD - כל הדירות במערך זה מקבלות תעריפי ASD
 ASD_HOUSING_ARRAY_ID = 2
 

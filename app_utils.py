@@ -3708,6 +3708,8 @@ def aggregate_daily_segments_to_monthly(
         "vacation": 0,
         "vacation_days_taken": 0,
         "sick_minutes": 0,
+        "effective_sick_minutes": 0,
+        "non_effective_sick_minutes": 0,
         "sick_payment": 0.0,
         "sick_days_taken": 0,
         "sick_days_accrued": 0.0,
@@ -3902,14 +3904,18 @@ def aggregate_daily_segments_to_monthly(
                 sick_days_set.add(day_date)
                 sick_mins = chain.get("total_minutes", 0) or 0
                 sick_pay = chain.get("payment", 0) or 0
+                sick_rate = chain.get("sick_rate_percent", 100) / 100
                 monthly_totals["sick_minutes"] += sick_mins
                 monthly_totals["sick_payment"] += sick_pay
+                monthly_totals["effective_sick_minutes"] += int(sick_mins * sick_rate)
+                monthly_totals["non_effective_sick_minutes"] += int(sick_mins * (1 - sick_rate))
 
-    # חישוב סך שעות עבודה (ללא כוננויות)
-    monthly_totals["total_hours"] = sum(
+    # חישוב סך שעות אפקטיביות (עבודה + חופשה + מחלה אפקטיבית, ללא כוננויות)
+    raw_total_minutes = sum(
         day.get("total_minutes_no_standby", 0) or 0
         for day in daily_segments
     )
+    monthly_totals["total_hours"] = raw_total_minutes - monthly_totals["non_effective_sick_minutes"]
 
     # ספירת כוננויות
     monthly_totals["standby"] = len(standby_days_set)

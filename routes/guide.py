@@ -31,6 +31,7 @@ from app_utils import get_daily_segments_data, aggregate_daily_segments_to_month
 from core.constants import (
     PERMANENT_EMPLOYEE_TYPE,
     HIGH_FUNCTIONING_APT_TYPE, LOW_FUNCTIONING_APT_TYPE,
+    COMPLETION_APARTMENT_IDS,
     is_asd_housing_array,
 )
 from core.holiday_payment import calculate_holiday_payments
@@ -44,6 +45,17 @@ templates.env.filters["human_date"] = human_date
 templates.env.globals["app_version"] = config.VERSION
 
 COMPLETION_APARTMENT_NAME = "השלמות"
+
+
+def _is_completion_apartment(apartment_id: Optional[int] = None, apartment_name: Optional[str] = None) -> bool:
+    """האם הדירה היא דירת השלמות - זיהוי לפי ID."""
+    if apartment_id is not None:
+        return apartment_id in COMPLETION_APARTMENT_IDS
+    if not apartment_name:
+        return False
+    normalized = " ".join(str(apartment_name).split())
+    base_name = normalized.split("(", 1)[0].strip()
+    return base_name == COMPLETION_APARTMENT_NAME
 
 
 def _validate_guide_access(person_id: int, housing_filter: Optional[int]) -> None:
@@ -94,13 +106,6 @@ def _inject_holiday_payment(
         monthly_totals["rounded_total"] = monthly_totals.get("rounded_total", 0) + hp_rounded
 
 
-def _is_completion_apartment(apartment_name: Optional[str]) -> bool:
-    """האם שם הדירה מייצג את דירת ההשלמות."""
-    if not apartment_name:
-        return False
-    normalized = " ".join(str(apartment_name).split())
-    base_name = normalized.split("(", 1)[0].strip()
-    return base_name == COMPLETION_APARTMENT_NAME
 
 
 def _sort_shift_rows_for_display(shifts_data: list[dict]) -> list[dict]:
@@ -108,7 +113,7 @@ def _sort_shift_rows_for_display(shifts_data: list[dict]) -> list[dict]:
     ordered_rows: list[dict] = []
     for idx, shift in enumerate(shifts_data):
         row = dict(shift)
-        row["is_completion_apartment"] = _is_completion_apartment(row.get("apartment"))
+        row["is_completion_apartment"] = _is_completion_apartment(apartment_id=row.get("apartment_id"))
         row["_display_order"] = idx
         if row["is_completion_apartment"]:
             row["date"] = ""
@@ -190,7 +195,7 @@ def _prepare_daily_segments_for_display(daily_segments: list[dict]) -> list[dict
         day_token = day.get("date_obj").isoformat() if day.get("date_obj") else day.get("day", "")
 
         for chain in day.get("chains", []):
-            if chain.get("type") == "work" and _is_completion_apartment(chain.get("apartment_name")):
+            if chain.get("type") == "work" and _is_completion_apartment(apartment_name=chain.get("apartment_name")):
                 moved_chain = dict(chain)
                 moved_chain["display_group_token"] = day_token
                 moved_chain["is_completion_apartment"] = True
@@ -512,6 +517,7 @@ def guide_view(
                 },
                 "shifts_data": [],
                 "payments_data": [],
+                "completion_payments_data": [],
                 "total_work_hours": 0.0,
                 "standby_count": 0,
                 "total_additions": 0.0,
@@ -655,6 +661,7 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
         reports = conn.execute("""
             SELECT
                 tr.id, tr.date, tr.start_time, tr.end_time, tr.shift_type_id,
+                tr.apartment_id,
                 tr.rate_apartment_type_id, tr.asd_night_marking,
                 tr.description,
                 a.apartment_type_id,
@@ -675,6 +682,7 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
         reports = conn.execute("""
             SELECT
                 tr.id, tr.date, tr.start_time, tr.end_time, tr.shift_type_id,
+                tr.apartment_id,
                 tr.rate_apartment_type_id, tr.asd_night_marking,
                 tr.description,
                 a.apartment_type_id,
@@ -778,6 +786,7 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
                     "date": r_date.strftime("%d/%m/%y") if seg_data["is_first"] else "",
                     "day": _get_hebrew_day_name(r_date) if seg_data["is_first"] else "",
                     "apartment": _build_apartment_display_simple(r) if seg_data["is_first"] else "",
+                    "apartment_id": r.get("apartment_id"),
                     "shift_type": shift_name if seg_data["is_first"] else "",
                     "start_time": seg_data["display_start"],
                     "end_time": seg_data["display_end"],
@@ -808,6 +817,7 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
                 "date": r_date.strftime("%d/%m/%y"),
                 "day": _get_hebrew_day_name(r_date),
                 "apartment": _build_apartment_display_simple(r),
+                "apartment_id": r.get("apartment_id"),
                 "shift_type": shift_name,
                 "start_time": r["start_time"][:5] if r["start_time"] else "",
                 "end_time": r["end_time"][:5] if r["end_time"] else "",
@@ -821,6 +831,7 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
         payment_comps = conn.execute("""
             SELECT
                 pc.quantity, pc.rate, pc.description,
+                pc.apartment_id,
                 pct.name AS component_type_name
             FROM payment_components pc
             LEFT JOIN payment_component_types pct ON pc.component_type_id = pct.id
@@ -834,6 +845,7 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
         payment_comps = conn.execute("""
             SELECT
                 pc.quantity, pc.rate, pc.description,
+                pc.apartment_id,
                 pct.name AS component_type_name
             FROM payment_components pc
             LEFT JOIN payment_component_types pct ON pc.component_type_id = pct.id
@@ -843,6 +855,7 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
         """, (person_id, start_date, end_date)).fetchall()
 
     payments_by_type: Dict[str, float] = {}
+    completion_payments_by_type: Dict[str, float] = {}
     total_additions = 0.0
     total_additions_no_travel = 0.0
     for pc in payment_comps:
@@ -860,7 +873,9 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
             key = f"{type_name} - {pc['description']}"
         else:
             key = type_name
-        payments_by_type[key] = payments_by_type.get(key, 0) + amount
+        # פיצול תשלומים: השלמות לחוד, רגילים לחוד
+        target = completion_payments_by_type if _is_completion_apartment(apartment_id=pc.get("apartment_id")) else payments_by_type
+        target[key] = target.get(key, 0) + amount
         # חישוב תוספות ללא נסיעות
         if not is_travel:
             total_additions_no_travel += amount
@@ -868,6 +883,10 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
     payments_data = [
         {"description": desc, "amount": round(amt, 2)}
         for desc, amt in payments_by_type.items()
+    ]
+    completion_payments_data = [
+        {"description": desc, "amount": round(amt, 2)}
+        for desc, amt in completion_payments_by_type.items()
     ]
 
     # חישוב תעריפים משתנים מ-daily_segments
@@ -1018,6 +1037,7 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
         "person": dict(person),
         "shifts_data": shifts_data,
         "payments_data": payments_data,
+        "completion_payments_data": completion_payments_data,
         "total_work_hours": round(total_work_hours, 2),
         "standby_count": standby_count,
         "total_additions": round(total_additions, 2),

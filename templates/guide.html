@@ -381,6 +381,19 @@
     font-weight: 500;
   }
 
+  .monthly-guide-report .completion-separator td {
+    background: #e3f2fd !important;
+    font-weight: bold;
+    color: #1e3a5f;
+    font-size: 12px;
+    padding: 8px 6px;
+    border-bottom: 2px solid #90caf9;
+  }
+
+  .monthly-guide-report .completion-row {
+    background: #f5f9ff !important;
+  }
+
   .monthly-guide-report .tagbor-group:not(.tagbor-last) td {
     border-bottom: none;
   }
@@ -1027,13 +1040,13 @@
                     <strong>ימי חופשה:</strong>
                   </td>
                   <td style="text-align: center; padding: 6px 8px;">
-                    {{ ((monthly_totals.vacation_minutes or 0) / 60) | round(2) }}
+                    {{ vacation_hours }}
                   </td>
                   <td style="text-align: center; padding: 6px 8px; font-weight: bold;">
                     {{ "%.2f"|format(row_payment_vacation) }}
                   </td>
                   <td colspan="6" style="text-align: center; padding: 6px 8px; font-size: 0.85em;">
-                    {{ monthly_totals.vacation_days_taken or 0 }} ימים
+                    {{ monthly_totals.vacation_days_taken or 0 }} ימים (100%)
                   </td>
                 </tr>
                 {% endif %}
@@ -1044,18 +1057,21 @@
                 {% set sick_paid_hours = (sick_raw / minimum_wage) | round(2) if minimum_wage > 0 and sick_raw > 0 else 0 %}
                 {% set row_payment_sick = (sick_paid_hours * ((minimum_wage * 1.0) | round(2))) | round(2) %}
                 {% set display_total.sum = display_total.sum + row_payment_sick %}
+                {% set sick_raw_hours = ((monthly_totals.sick_minutes or 0) / 60) | round(2) %}
+                {% set sick_effective_hours = ((monthly_totals.effective_sick_minutes or 0) / 60) | round(2) %}
                 <tr style="background-color: #ffebee; font-weight: bold; border-top: 1px solid #ccc;">
                   <td style="text-align: right; padding: 6px 8px;">
                     <strong>ימי מחלה:</strong>
                   </td>
                   <td style="text-align: center; padding: 6px 8px;">
-                    {{ ((monthly_totals.sick_minutes or 0) / 60) | round(2) }}
+                    {{ sick_effective_hours }}
                   </td>
                   <td style="text-align: center; padding: 6px 8px; font-weight: bold;">
                     {{ "%.2f"|format(row_payment_sick) }}
                   </td>
                   <td colspan="6" style="text-align: center; padding: 6px 8px; font-size: 0.85em;">
                     {{ monthly_totals.sick_days_taken or 0 }} ימים (תשלום מדורג)
+                    &nbsp;|&nbsp; גולמי: {{ sick_raw_hours }} &rarr; אפקטיבי: {{ sick_effective_hours }}
                   </td>
                 </tr>
                 {% endif %}
@@ -1082,8 +1098,21 @@
                 </tr>
                 {% endif %}
 
-                {# שורה סיכום כללי - סכום השורות המוצגות (מה שהעובד רואה) #}
-                <tr style="background-color: #e0e0e0; font-weight: bold; border-top: 2px solid #000;">
+                {# שורה סה"כ לתלוש - שעות עבודה בלבד ללא מחלה וחופשה #}
+                {% set payslip_hours = (monthly_totals.total_hours | float - (monthly_totals.effective_sick_minutes or 0) | float - (monthly_totals.vacation_minutes or 0) | float) / 60 %}
+                <tr style="background-color: #d4e6f1; font-weight: bold; border-top: 2px solid #000;">
+                  <td style="text-align: right; padding: 6px 8px;">
+                    <strong>סה"כ לתלוש:</strong>
+                    <span style="font-size: 0.75em; font-weight: normal; color: #666;">(ללא מחלה/חופשה)</span>
+                  </td>
+                  <td style="text-align: center; padding: 6px 8px;">
+                    {{ payslip_hours | round(2) }}
+                  </td>
+                  <td colspan="7"></td>
+                </tr>
+
+                {# שורה סיכום כללי - כולל מחלה וחופשה אפקטיביות #}
+                <tr style="background-color: #e0e0e0; font-weight: bold; border-top: 1px solid #666;">
                   <td style="text-align: right; padding: 6px 8px;">
                     <strong>סיכום כללי:</strong>
                   </td>
@@ -1097,16 +1126,7 @@
                   <td style="text-align: center; padding: 6px 8px; font-size: 0.85em;">
                     {{ "%.2f"|format(monthly_totals.standby_payment or 0) }}
                   </td>
-                  <td style="text-align: center; padding: 6px 8px;">{{ (monthly_totals.calc100 | float / 60) | round(2)
-                    }}</td>
-                  <td style="text-align: center; padding: 6px 8px;">{{ (monthly_totals.calc125 | float / 60) | round(2)
-                    }}</td>
-                  <td style="text-align: center; padding: 6px 8px;">{{ (monthly_totals.calc150 | float / 60) | round(2)
-                    }}</td>
-                  <td style="text-align: center; padding: 6px 8px;">{{ (monthly_totals.calc175 | float / 60) | round(2)
-                    }}</td>
-                  <td style="text-align: center; padding: 6px 8px;">{{ (monthly_totals.calc200 | float / 60) | round(2)
-                    }}</td>
+                  <td colspan="5"></td>
                 </tr>
               </tbody>
             </table>
@@ -1223,33 +1243,8 @@
               </tr>
               {% endif %}
 
-              {% for shift in monthly_report.shifts_data %}
-              <tr class="{% if shift.tagbor_group %}tagbor-group{% endif %}{% if shift.tagbor_first %} tagbor-first{% endif %}{% if shift.tagbor_last %} tagbor-last{% endif %}">
-                <td>{{ shift.date }}</td>
-                <td>{{ shift.day }}</td>
-                <td>{{ shift.apartment }}</td>
-                <td>{{ shift.shift_type }}</td>
-                <td>{{ shift.start_time }}</td>
-                <td>{{ shift.end_time }}</td>
-                <td>{{ "%.2f"|format(shift.work_hours) }}</td>
-                <td>{{ "%.2f"|format(shift.standby_hours) }}</td>
-                <td>{% if shift.note is defined and shift.note %}<span style="font-weight:600;">{{ shift.note }}</span>{% endif %}</td>
-              </tr>
-              {% endfor %}
-
-              {% for payment in monthly_report.payments_data %}
-              <tr class="travel-row">
-                <td>-</td>
-                <td>-</td>
-                <td>{{ payment.description }}</td>
-                <td>-</td>
-                <td>-</td>
-                <td>-</td>
-                <td>{{ "%.2f"|format(payment.amount) }} &#8362;</td>
-                <td>-</td>
-                <td></td>
-              </tr>
-              {% endfor %}
+              {% from '_shifts_table_body.html' import render as render_shifts_body %}
+              {{ render_shifts_body(monthly_report.shifts_data, monthly_report.payments_data, monthly_report.completion_payments_data) }}
             </tbody>
           </table>
 
