@@ -320,6 +320,61 @@ class TestCalculateHolidayPayments(unittest.TestCase):
         )
         self.assertEqual(_get_amount(result, 1), 0)
 
+    def test_no_payment_second_slot_makes_single_guide_half_shift(self):
+        """מדריך אחד + משבצת ללא תשלום חג → המדריך מקבל חצי חג."""
+        holiday = date(2025, 10, 2)
+        cache = _make_shabbat_cache_with_holiday([holiday])
+        reports = [
+            _make_report(1, 100, date(2025, 10, 5), housing_array_id=1),
+        ]
+        person_types = {1: PERMANENT_EMPLOYEE_TYPE}
+
+        with patch("core.holiday_payment._load_saved_assignments", return_value={
+            100: {
+                "apartment_id": 100,
+                "guide_1_id": 1,
+                "guide_2_id": None,
+                "guide_2_no_holiday_payment": True,
+            }
+        }), patch("core.holiday_payment._get_relevant_apartments", return_value=[
+            {"id": 100, "name": "דירה", "housing_array_id": None}
+        ]):
+            result = calculate_holiday_payments(
+                self.conn, 2025, 10, cache, self.minimum_wage,
+                all_reports=reports, person_types=person_types,
+                person_start_dates=_start_dates(1),
+            )
+
+        self.assertAlmostEqual(_get_amount(result, 1), self.half_shift_pay)
+
+    def test_no_payment_second_slot_keeps_seniority_filter(self):
+        """גם עם משבצת ללא תשלום חג, מדריך בלי ותק לא מקבל."""
+        holiday = date(2025, 10, 2)
+        cache = _make_shabbat_cache_with_holiday([holiday])
+        reports = [
+            _make_report(1, 100, date(2025, 10, 5), housing_array_id=1),
+        ]
+        person_types = {1: PERMANENT_EMPLOYEE_TYPE}
+        person_start_dates = {1: date(2025, 8, 15)}
+
+        with patch("core.holiday_payment._load_saved_assignments", return_value={
+            100: {
+                "apartment_id": 100,
+                "guide_1_id": 1,
+                "guide_2_id": None,
+                "guide_2_no_holiday_payment": True,
+            }
+        }), patch("core.holiday_payment._get_relevant_apartments", return_value=[
+            {"id": 100, "name": "דירה", "housing_array_id": None}
+        ]):
+            result = calculate_holiday_payments(
+                self.conn, 2025, 10, cache, self.minimum_wage,
+                all_reports=reports, person_types=person_types,
+                person_start_dates=person_start_dates,
+            )
+
+        self.assertEqual(_get_amount(result, 1), 0)
+
     def test_two_permanent_neither_worked_get_half(self):
         """2 קבועים, אף אחד לא עבד בחג → כל אחד חצי משמרת."""
         holiday = date(2025, 10, 2)

@@ -45,11 +45,16 @@ def ensure_holiday_payment_assignments_table(conn) -> None:
             apartment_id INTEGER NOT NULL REFERENCES apartments(id),
             guide_1_id INTEGER NULL REFERENCES people(id),
             guide_2_id INTEGER NULL REFERENCES people(id),
+            guide_2_no_holiday_payment BOOLEAN NOT NULL DEFAULT false,
             created_at TIMESTAMP NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
             UNIQUE (year, month, apartment_id),
             CHECK (guide_1_id IS NULL OR guide_2_id IS NULL OR guide_1_id <> guide_2_id)
         )
+    """)
+    cursor.execute("""
+        ALTER TABLE holiday_payment_apartment_guides
+        ADD COLUMN IF NOT EXISTS guide_2_no_holiday_payment BOOLEAN NOT NULL DEFAULT false
     """)
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_holiday_payment_apartment_guides_period
@@ -108,14 +113,15 @@ def _load_saved_assignments(
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     if housing_filter is not None:
         cursor.execute("""
-            SELECT hpag.apartment_id, hpag.guide_1_id, hpag.guide_2_id
+            SELECT hpag.apartment_id, hpag.guide_1_id, hpag.guide_2_id,
+                   hpag.guide_2_no_holiday_payment
             FROM holiday_payment_apartment_guides hpag
             JOIN apartments ap ON ap.id = hpag.apartment_id
             WHERE hpag.year = %s AND hpag.month = %s AND ap.housing_array_id = %s
         """, (year, month, housing_filter))
     else:
         cursor.execute("""
-            SELECT apartment_id, guide_1_id, guide_2_id
+            SELECT apartment_id, guide_1_id, guide_2_id, guide_2_no_holiday_payment
             FROM holiday_payment_apartment_guides
             WHERE year = %s AND month = %s
         """, (year, month))
@@ -225,6 +231,7 @@ def get_holiday_payment_setup(
             "housing_array_id": apt.get("housing_array_id"),
             "guide_1_id": row["guide_1_id"] if row else default_guide_1,
             "guide_2_id": row["guide_2_id"] if row else default_guide_2,
+            "guide_2_no_holiday_payment": bool(row.get("guide_2_no_holiday_payment")) if row else False,
             "is_saved": row is not None,
             "suggestions": suggested[:4],
         })
@@ -285,22 +292,27 @@ def save_holiday_payment_setup(
             continue
         guide_1_id = row.get("guide_1_id") or None
         guide_2_id = row.get("guide_2_id") or None
+        guide_2_no_holiday_payment = bool(row.get("guide_2_no_holiday_payment"))
         guide_1_id = int(guide_1_id) if guide_1_id else None
         guide_2_id = int(guide_2_id) if guide_2_id else None
         if guide_1_id is None:
             guide_2_id = None
+            guide_2_no_holiday_payment = False
+        if guide_2_id is not None:
+            guide_2_no_holiday_payment = False
         if guide_1_id is not None and guide_1_id == guide_2_id:
             raise ValueError("לא ניתן לבחור אותו מדריך פעמיים באותה דירה")
         cursor.execute("""
             INSERT INTO holiday_payment_apartment_guides
-                (year, month, apartment_id, guide_1_id, guide_2_id)
-            VALUES (%s, %s, %s, %s, %s)
+                (year, month, apartment_id, guide_1_id, guide_2_id, guide_2_no_holiday_payment)
+            VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (year, month, apartment_id)
             DO UPDATE SET
                 guide_1_id = EXCLUDED.guide_1_id,
                 guide_2_id = EXCLUDED.guide_2_id,
+                guide_2_no_holiday_payment = EXCLUDED.guide_2_no_holiday_payment,
                 updated_at = NOW()
-        """, (year, month, apartment_id, guide_1_id, guide_2_id))
+        """, (year, month, apartment_id, guide_1_id, guide_2_id, guide_2_no_holiday_payment))
     conn.commit()
     cursor.close()
 
@@ -679,6 +691,7 @@ def calculate_holiday_payments(
                 key = (apartment_id, holiday_date)
                 apt_holiday_workers.setdefault(key, set()).add(person_id)
 
+    unpaid_slot_by_apartment: Dict[int, bool] = {}
     if saved_assignments:
         assigned_guides: Dict[int, Set[int]] = {}
         assigned_person_ids: Set[int] = set()
@@ -688,6 +701,9 @@ def calculate_holiday_payments(
                 if gid
             }
             assigned_guides[apartment_id] = set(guide_ids)
+            unpaid_slot_by_apartment[apartment_id] = bool(
+                row.get("guide_1_id") and row.get("guide_2_no_holiday_payment")
+            )
             assigned_person_ids.update(guide_ids)
 
         missing_people = [
@@ -746,7 +762,7 @@ def calculate_holiday_payments(
     result: Dict[int, dict] = {}
 
     for apartment_id, permanent_guides in apt_permanent_guides.items():
-        num_permanent = len(permanent_guides)
+        num_permanent = len(permanent_guides) + (1 if unpaid_slot_by_apartment.get(apartment_id) else 0)
         if num_permanent == 0:
             continue
 

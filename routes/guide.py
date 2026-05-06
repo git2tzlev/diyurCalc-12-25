@@ -215,7 +215,7 @@ def _build_holiday_payment_chain_summary(
         })
 
     saved_rows = conn.execute("""
-        SELECT apartment_id, guide_1_id, guide_2_id
+        SELECT apartment_id, guide_1_id, guide_2_id, guide_2_no_holiday_payment
         FROM holiday_payment_apartment_guides
         WHERE year = %s AND month = %s
           AND (%s IN (guide_1_id, guide_2_id))

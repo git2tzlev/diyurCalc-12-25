@@ -189,7 +189,10 @@
     if (modal) modal.style.display = 'none';
   }
 
-  function buildHolidayGuideSelect(guides, selectedId) {
+  const HOLIDAY_NO_PAYMENT_VALUE = '__NO_HOLIDAY_PAYMENT__';
+
+  function buildHolidayGuideSelect(guides, selectedId, options) {
+    options = options || {};
     const select = document.createElement('select');
     select.style.width = '100%';
     select.style.padding = '7px 8px';
@@ -202,6 +205,14 @@
     empty.value = '';
     empty.textContent = 'ללא';
     select.appendChild(empty);
+
+    if (options.allowNoPayment) {
+      const noPayment = document.createElement('option');
+      noPayment.value = HOLIDAY_NO_PAYMENT_VALUE;
+      noPayment.textContent = 'מדריך ללא תשלום חג';
+      if (options.noPaymentSelected) noPayment.selected = true;
+      select.appendChild(noPayment);
+    }
 
     guides.forEach(guide => {
       const option = document.createElement('option');
@@ -242,7 +253,10 @@
 
       const guide2Cell = document.createElement('td');
       guide2Cell.style.cssText = 'padding:8px; border:1px solid #e2e8f0;';
-      const guide2Select = buildHolidayGuideSelect(data.guides, row.guide_2_id);
+      const guide2Select = buildHolidayGuideSelect(data.guides, row.guide_2_id, {
+        allowNoPayment: true,
+        noPaymentSelected: row.guide_2_no_holiday_payment
+      });
       guide2Select.className = 'holiday-guide-2';
       guide2Cell.appendChild(guide2Select);
       tr.appendChild(guide2Cell);
@@ -278,11 +292,14 @@
     const saveBtn = document.getElementById('holidayPaymentSaveBtn');
     document.querySelectorAll('#holidayPaymentRows tr').forEach(tr => {
       const guide1 = tr.querySelector('.holiday-guide-1')?.value || null;
-      const guide2 = tr.querySelector('.holiday-guide-2')?.value || null;
+      const rawGuide2 = tr.querySelector('.holiday-guide-2')?.value || null;
+      const guide2NoHolidayPayment = rawGuide2 === HOLIDAY_NO_PAYMENT_VALUE;
+      const guide2 = guide2NoHolidayPayment ? null : rawGuide2;
       rows.push({
         apartment_id: Number(tr.dataset.apartmentId),
         guide_1_id: guide1,
-        guide_2_id: guide1 ? guide2 : null
+        guide_2_id: guide1 ? guide2 : null,
+        guide_2_no_holiday_payment: Boolean(guide1 && guide2NoHolidayPayment)
       });
     });
 
