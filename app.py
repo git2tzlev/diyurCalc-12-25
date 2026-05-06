@@ -42,6 +42,7 @@ from routes.admin import (
     demo_sync_page, sync_demo_database, demo_sync_status,
     get_month_lock_status, lock_month_api, unlock_month_api,
     manage_special_days, add_special_day, toggle_special_day, delete_special_day,
+    business_rules_page,
 )
 from routes.summary import general_summary
 from routes.export import (
@@ -417,6 +418,12 @@ def redirect_admin_to_home():
 def manage_payment_codes_route(request: Request):
     """Payment codes management page."""
     return manage_payment_codes(request)
+
+
+@app.get("/admin/business-rules", response_class=HTMLResponse)
+def business_rules_route(request: Request):
+    """Business rules catalog page."""
+    return business_rules_page(request)
 
 
 @app.post("/admin/payment-codes/update")

@@ -1,0 +1,254 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+  .rules-page {
+    max-width: 1180px;
+    margin: 0 auto;
+  }
+
+  .rules-hero {
+    display: flex;
+    justify-content: space-between;
+    gap: 20px;
+    align-items: flex-start;
+    margin-bottom: 18px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid #e2e8f0;
+  }
+
+  .rules-hero h2 {
+    margin: 0;
+    color: #0f172a;
+    font-size: 24px;
+  }
+
+  .rules-hero p {
+    margin: 6px 0 0;
+    color: #64748b;
+    font-size: 14px;
+    max-width: 760px;
+  }
+
+  .rules-count {
+    min-width: 120px;
+    padding: 10px 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    text-align: center;
+    background: #f8fafc;
+  }
+
+  .rules-count strong {
+    display: block;
+    color: #0f766e;
+    font-size: 24px;
+  }
+
+  .rules-layout {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    gap: 18px;
+    align-items: start;
+  }
+
+  .rules-sidebar {
+    position: sticky;
+    top: 84px;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background: #fff;
+    padding: 8px;
+  }
+
+  .rules-sidebar a {
+    display: block;
+    padding: 8px 10px;
+    border-radius: 6px;
+    text-decoration: none;
+    color: #334155;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .rules-sidebar a:hover {
+    background: #f1f5f9;
+    color: #0f172a;
+  }
+
+  .rules-section {
+    margin-bottom: 22px;
+  }
+
+  .rules-section-header {
+    margin-bottom: 10px;
+    padding: 12px 0 8px;
+    border-bottom: 2px solid #1d4ed8;
+  }
+
+  .rules-section-header h3 {
+    margin: 0;
+    color: #1e3a8a;
+    font-size: 19px;
+  }
+
+  .rules-section-header p {
+    margin: 4px 0 0;
+    color: #64748b;
+    font-size: 13px;
+  }
+
+  .rule-card {
+    border: 1px solid #dbe3ef;
+    border-radius: 8px;
+    background: #fff;
+    margin-bottom: 10px;
+    overflow: hidden;
+  }
+
+  .rule-main {
+    padding: 12px 14px;
+  }
+
+  .rule-title-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: flex-start;
+    margin-bottom: 6px;
+  }
+
+  .rule-title {
+    margin: 0;
+    color: #0f172a;
+    font-size: 16px;
+  }
+
+  .rule-status {
+    white-space: nowrap;
+    border: 1px solid #bae6fd;
+    background: #e0f2fe;
+    color: #075985;
+    border-radius: 999px;
+    padding: 3px 8px;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .rule-summary {
+    margin: 0;
+    color: #334155;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  .rule-details {
+    margin: 8px 0 0;
+    padding-right: 18px;
+    color: #475569;
+    font-size: 13px;
+    line-height: 1.7;
+  }
+
+  .rule-meta {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+  }
+
+  .rule-tag {
+    background: #f1f5f9;
+    color: #475569;
+    border: 1px solid #e2e8f0;
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 12px;
+  }
+
+  .rule-source {
+    border-top: 1px solid #edf2f7;
+    background: #f8fafc;
+    padding: 8px 14px;
+    color: #64748b;
+    font-size: 12px;
+    direction: ltr;
+    text-align: left;
+  }
+
+  @media (max-width: 900px) {
+    .rules-layout {
+      grid-template-columns: 1fr;
+    }
+
+    .rules-sidebar {
+      position: static;
+    }
+  }
+</style>
+
+<div class="card rules-page">
+  <div class="rules-hero">
+    <div>
+      <h2>כללים עסקיים</h2>
+      <p>
+        מיפוי ראשוני של הכללים העסקיים כפי שהם ממומשים בקוד בפועל. העמוד הזה נועד להיות
+        שכבת תיעוד חיה: כל שינוי כלל בקוד צריך לעדכן גם את הקטלוג.
+      </p>
+    </div>
+    <div class="rules-count">
+      <strong>{{ total_rules }}</strong>
+      <span>כללים ממופים</span>
+    </div>
+  </div>
+
+  <div class="rules-layout">
+    <aside class="rules-sidebar">
+      {% for section in sections %}
+      <a href="#{{ section.key }}">{{ section.title }}</a>
+      {% endfor %}
+    </aside>
+
+    <main>
+      {% for section in sections %}
+      <section class="rules-section" id="{{ section.key }}">
+        <div class="rules-section-header">
+          <h3>{{ section.title }}</h3>
+          <p>{{ section.description }}</p>
+        </div>
+
+        {% for rule in section.rules %}
+        <article class="rule-card">
+          <div class="rule-main">
+            <div class="rule-title-row">
+              <h4 class="rule-title">{{ rule.title }}</h4>
+              <span class="rule-status">{{ rule.status }}</span>
+            </div>
+            <p class="rule-summary">{{ rule.summary }}</p>
+            {% if rule.details %}
+            <ul class="rule-details">
+              {% for detail in rule.details %}
+              <li>{{ detail }}</li>
+              {% endfor %}
+            </ul>
+            {% endif %}
+            <div class="rule-meta">
+              {% if rule.effective_from %}
+              <span class="rule-tag">תחולה: {{ rule.effective_from }}</span>
+              {% endif %}
+              {% for tag in rule.tags %}
+              <span class="rule-tag">{{ tag }}</span>
+              {% endfor %}
+            </div>
+          </div>
+          {% if rule.source %}
+          <div class="rule-source">{{ rule.source | join(' · ') }}</div>
+          {% endif %}
+        </article>
+        {% endfor %}
+      </section>
+      {% endfor %}
+    </main>
+  </div>
+</div>
+{% endblock %}

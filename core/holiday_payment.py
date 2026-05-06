@@ -10,7 +10,7 @@
 
 import logging
 from calendar import monthrange
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any, Dict, List, Set, Tuple
 
 import psycopg2.extras
@@ -507,15 +507,31 @@ def _get_special_holiday_payment_windows(conn, year: int, month: int) -> dict[da
     20:00-20:00) תאריך הזכאות הוא end_date, אך עבודה בכל אחד מתאריכי החלון מונעת
     תשלום חג כפול.
     """
+    windows: dict[date, Set[date]] = {}
+    for pay_date, details in _get_special_holiday_payment_window_details(conn, year, month).items():
+        for row in details:
+            start_date = row["start_date"]
+            end_date = row["end_date"]
+            work_dates = {
+                start_date + timedelta(days=offset)
+                for offset in range((end_date - start_date).days + 1)
+            }
+            windows.setdefault(pay_date, set()).update(work_dates)
+
+    return windows
+
+
+def _get_special_holiday_payment_window_details(conn, year: int, month: int) -> dict[date, list[dict[str, Any]]]:
+    """חלונות special_days שנספרים לתשלום חג, כולל שעות התחלה וסיום."""
     start_month = date(year, month, 1)
     end_month = date(year, month, monthrange(year, month)[1])
-    windows: dict[date, Set[date]] = {}
+    windows: dict[date, list[dict[str, Any]]] = {}
 
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     try:
         try:
             cursor.execute("""
-                SELECT start_date, end_date
+                SELECT start_date, start_time, end_date, end_time
                 FROM special_days
                 WHERE is_active = true
                   AND counts_as_holiday_payment = true
@@ -529,26 +545,132 @@ def _get_special_holiday_payment_windows(conn, year: int, month: int) -> dict[da
         for row in cursor.fetchall():
             start_date = row.get("start_date") if hasattr(row, "get") else row["start_date"]
             end_date = row.get("end_date") if hasattr(row, "get") else row["end_date"]
+            start_time = row.get("start_time") if hasattr(row, "get") else row["start_time"]
+            end_time = row.get("end_time") if hasattr(row, "get") else row["end_time"]
             if hasattr(start_date, "date"):
                 start_date = start_date.date()
             if hasattr(end_date, "date"):
                 end_date = end_date.date()
             if not isinstance(start_date, date) or not isinstance(end_date, date):
                 continue
+            if start_time is None:
+                start_time = time.min
+            if end_time is None:
+                end_time = time.max
 
             pay_date = end_date if start_date != end_date else start_date
             if pay_date.year != year or pay_date.month != month:
                 continue
 
-            work_dates = {
-                start_date + timedelta(days=offset)
-                for offset in range((end_date - start_date).days + 1)
-            }
-            windows.setdefault(pay_date, set()).update(work_dates)
+            windows.setdefault(pay_date, []).append({
+                "start_date": start_date,
+                "start_time": start_time,
+                "end_date": end_date,
+                "end_time": end_time,
+            })
     finally:
         cursor.close()
 
     return windows
+
+
+def _normal_date(value: Any) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return None
+
+
+def _parse_report_time(value: Any) -> time | None:
+    if value is None:
+        return None
+    if isinstance(value, time):
+        return value
+    if isinstance(value, str):
+        try:
+            hour, minute = value.split(":", 1)
+            return time(int(hour), int(minute[:2]))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _shift_defined_end_minutes(conn, shift_type_id: int | None, report_start: str | None) -> int | None:
+    """סוף המשמרת המוגדר לפי מקטעי המשמרת, מנורמל לציר הדיווח."""
+    if not shift_type_id or not report_start:
+        return None
+    segments = _get_shift_segments(conn, shift_type_id)
+    if not segments:
+        return None
+
+    report_start_min, _ = span_minutes(report_start, report_start)
+    last_end = None
+    for seg in segments:
+        seg_start, seg_end = span_minutes(seg["start_time"], seg["end_time"])
+        if seg_start < report_start_min and report_start_min >= 12 * 60 and seg_start < 8 * 60:
+            seg_start += 24 * 60
+            seg_end += 24 * 60
+        if last_end is not None:
+            while seg_start < last_end:
+                seg_start += 24 * 60
+                seg_end += 24 * 60
+        last_end = seg_end if last_end is None else max(last_end, seg_end)
+    return last_end
+
+
+def _previous_day_carryover_within_defined_shift(conn, report: dict, pay_date: date, window_start: datetime) -> bool:
+    """עבודה מהיום שלפני החג לא מבטלת חג אם היא רק המשך רגיל של המשמרת."""
+    report_date = _normal_date(report.get("date"))
+    start_time = report.get("start_time")
+    end_time = report.get("end_time")
+    if report_date is None or report_date >= pay_date or not start_time or not end_time:
+        return False
+
+    start_obj = _parse_report_time(start_time)
+    if start_obj is None:
+        return False
+    report_start_dt = datetime.combine(report_date, start_obj)
+    if report_start_dt >= window_start:
+        return False
+
+    report_start_min, report_end_min = span_minutes(start_time, end_time)
+    defined_end = _shift_defined_end_minutes(conn, report.get("shift_type_id"), start_time)
+    if defined_end is None:
+        return False
+    return report_end_min <= defined_end
+
+
+def _report_overlaps_special_holiday_window(conn, report: dict, pay_date: date, window: dict[str, Any]) -> bool:
+    """האם דיווח עבודה אמור לבטל תשלום חג מיוחד לפי חפיפה שעותית."""
+    report_date = _normal_date(report.get("date"))
+    start_obj = _parse_report_time(report.get("start_time"))
+    end_obj = _parse_report_time(report.get("end_time"))
+    if report_date is None or start_obj is None or end_obj is None:
+        return report_date in {
+            window["start_date"] + timedelta(days=offset)
+            for offset in range((window["end_date"] - window["start_date"]).days + 1)
+        }
+
+    report_start = datetime.combine(report_date, start_obj)
+    report_end = datetime.combine(report_date, end_obj)
+    if report_end <= report_start:
+        report_end += timedelta(days=1)
+
+    window_start = datetime.combine(window["start_date"], window["start_time"])
+    window_end = datetime.combine(window["end_date"], window["end_time"])
+    if window_end <= window_start:
+        window_end += timedelta(days=1)
+
+    if report_start >= window_end or report_end <= window_start:
+        return False
+
+    if _previous_day_carryover_within_defined_shift(conn, report, pay_date, window_start):
+        return False
+
+    return True
 
 
 def get_holiday_payment_dates_in_month(
@@ -627,6 +749,8 @@ def calculate_holiday_payments(
     holiday_dates, holiday_work_dates = get_holiday_payment_dates_in_month(conn, year, month, shabbat_cache)
     if not holiday_dates:
         return {}
+    regular_holiday_dates = set(get_holiday_dates_in_month(year, month, shabbat_cache))
+    special_holiday_windows = _get_special_holiday_payment_window_details(conn, year, month)
 
     # שליפת דיווחים ונתוני מדריכים אם לא סופקו
     if all_reports is None or person_types is None or person_start_dates is None:
@@ -639,12 +763,6 @@ def calculate_holiday_payments(
     saved_assignments: dict[int, dict] = {}
     try:
         saved_assignments = _load_saved_assignments(conn, year, month, housing_filter)
-        if saved_assignments:
-            relevant_apartment_ids = {
-                row["id"] for row in _get_relevant_apartments(conn, year, month, housing_filter)
-            }
-            if not relevant_apartment_ids or not relevant_apartment_ids.issubset(saved_assignments.keys()):
-                saved_assignments = {}
     except Exception as exc:
         logger.debug("Could not load holiday payment assignments: %s", exc)
 
@@ -687,7 +805,18 @@ def calculate_holiday_payments(
 
         # מיפוי: מי עבד ביום חג
         for holiday_date in holiday_dates_set:
-            if report_date in holiday_work_dates.get(holiday_date, {holiday_date}):
+            worked_on_regular_holiday = (
+                holiday_date in regular_holiday_dates and report_date == holiday_date
+            )
+            worked_in_special_window = any(
+                _report_overlaps_special_holiday_window(conn, r, holiday_date, window)
+                for window in special_holiday_windows.get(holiday_date, [])
+            )
+            worked_on_legacy_holiday_date = (
+                not special_holiday_windows.get(holiday_date)
+                and report_date in holiday_work_dates.get(holiday_date, {holiday_date})
+            )
+            if worked_on_regular_holiday or worked_in_special_window or worked_on_legacy_holiday_date:
                 key = (apartment_id, holiday_date)
                 apt_holiday_workers.setdefault(key, set()).add(person_id)
 
@@ -713,25 +842,25 @@ def calculate_holiday_payments(
         if missing_people:
             cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
             cursor.execute("""
-                SELECT id, type, work_start_date, is_married
+                SELECT id, type, start_date, is_married
                 FROM people
                 WHERE id = ANY(%s)
             """, (missing_people,))
             for row in cursor.fetchall():
                 person_types[row["id"]] = row["type"]
                 person_is_married[row["id"]] = bool(row["is_married"])
-                if row["work_start_date"]:
-                    person_start_dates[row["id"]] = row["work_start_date"]
+                if row["start_date"]:
+                    person_start_dates[row["id"]] = row["start_date"]
             cursor.close()
 
-        # כאשר נשמרה טבלת חודש, היא המקור הקובע. דירה עם שני שדות ריקים לא תשלם חג.
-        apt_permanent_guides = {
-            apartment_id: {
+        # הגדרה שמורה היא המקור הקובע רק לדירה הספציפית שלה.
+        # דירה בלי שורה שמורה ממשיכה להשתמש בזיהוי אוטומטי לפי דיווחים.
+        # דירה עם שורה שמורה ושני שדות ריקים לא תשלם חג.
+        for apartment_id, guide_ids in assigned_guides.items():
+            apt_permanent_guides[apartment_id] = {
                 pid for pid in guide_ids
                 if person_types.get(pid) == PERMANENT_EMPLOYEE_TYPE
             }
-            for apartment_id, guide_ids in assigned_guides.items()
-        }
 
         missing_apartment_ids = [
             apt_id for apt_id in apt_permanent_guides
@@ -823,6 +952,7 @@ def _load_reports_and_types(
     if housing_filter is not None:
         cursor.execute("""
             SELECT tr.person_id, tr.apartment_id, tr.date,
+                   tr.start_time, tr.end_time, tr.shift_type_id,
                    ap.housing_array_id, ap.apartment_type_id,
                    tr.rate_apartment_type_id
             FROM time_reports tr
@@ -833,6 +963,7 @@ def _load_reports_and_types(
     else:
         cursor.execute("""
             SELECT tr.person_id, tr.apartment_id, tr.date,
+                   tr.start_time, tr.end_time, tr.shift_type_id,
                    ap.housing_array_id, ap.apartment_type_id,
                    tr.rate_apartment_type_id
             FROM time_reports tr
@@ -848,13 +979,13 @@ def _load_reports_and_types(
     person_is_married: Dict[int, bool] = {}
     if person_ids:
         cursor.execute("""
-            SELECT id, type, work_start_date, is_married FROM people WHERE id = ANY(%s)
+            SELECT id, type, start_date, is_married FROM people WHERE id = ANY(%s)
         """, (person_ids,))
         for row in cursor.fetchall():
             person_types[row["id"]] = row["type"]
             person_is_married[row["id"]] = bool(row["is_married"])
-            if row["work_start_date"]:
-                person_start_dates[row["id"]] = row["work_start_date"]
+            if row["start_date"]:
+                person_start_dates[row["id"]] = row["start_date"]
 
 
     cursor.close()

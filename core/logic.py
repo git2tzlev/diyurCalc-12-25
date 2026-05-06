@@ -383,14 +383,14 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     if housing_filter is not None:
         cursor.execute("""
-            SELECT id, name, start_date, work_start_date, is_married, meirav_code, type
+            SELECT id, name, start_date, is_married, meirav_code, type
             FROM people
             WHERE is_active::integer = 1 AND housing_array_id = %s
             ORDER BY name
         """, (housing_filter,))
     else:
         cursor.execute("""
-            SELECT id, name, start_date, work_start_date, is_married, meirav_code, type
+            SELECT id, name, start_date, is_married, meirav_code, type
             FROM people
             WHERE is_active::integer = 1
             ORDER BY name
@@ -572,7 +572,6 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
 
     # Build person start_date map (already have this data from people query)
     person_start_dates = {p["id"]: p["start_date"] for p in people}
-    person_work_start_dates = {p["id"]: p["work_start_date"] for p in people}
 
     # ============================================================
     # END BULK LOADING - Now process each person with cached data
@@ -636,7 +635,7 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
         conn, year, month, shabbat_cache, minimum_wage,
         all_reports=all_reports,
         person_types=person_types,
-        person_start_dates=person_work_start_dates,
+        person_start_dates=person_start_dates,
         person_is_married=person_is_married,
         housing_filter=housing_filter,
     )

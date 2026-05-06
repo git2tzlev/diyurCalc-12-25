@@ -9,7 +9,7 @@
 import unittest
 import sys
 import os
-from datetime import date
+from datetime import date, time
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -303,6 +303,70 @@ class TestCalculateHolidayPayments(unittest.TestCase):
 
         self.assertEqual(_get_amount(result, 1), 0)
 
+    def test_special_holiday_previous_day_normal_carryover_does_not_block_payment(self):
+        """משמרת מהיום הקודם שנמשכת רגיל לתוך חג לא מבטלת תשלום חג."""
+        pay_date = date(2026, 4, 22)
+        report = _make_report(1, 100, date(2026, 4, 21))
+        report.update({"start_time": "15:00", "end_time": "08:00", "shift_type_id": 103})
+        reports = [report]
+        person_types = {1: PERMANENT_EMPLOYEE_TYPE}
+        window = {
+            pay_date: [{
+                "start_date": date(2026, 4, 21),
+                "start_time": time(20, 0),
+                "end_date": pay_date,
+                "end_time": time(20, 0),
+            }]
+        }
+        shift_segments = [
+            {"start_time": "15:00", "end_time": "22:00"},
+            {"start_time": "22:00", "end_time": "06:30"},
+            {"start_time": "06:30", "end_time": "08:00"},
+        ]
+
+        with patch("core.holiday_payment._get_special_holiday_payment_window_details", return_value=window), \
+             patch("core.holiday_payment._get_shift_segments", return_value=shift_segments), \
+             patch("core.holiday_payment._get_apartment_work_minutes", return_value={100: 480}):
+            result = calculate_holiday_payments(
+                self.conn, 2026, 4, {}, self.minimum_wage,
+                all_reports=reports, person_types=person_types,
+                person_start_dates=_start_dates(1),
+            )
+
+        self.assertAlmostEqual(_get_amount(result, 1), self.full_shift_pay)
+
+    def test_special_holiday_previous_day_extra_carryover_blocks_payment(self):
+        """אם המשמרת מהיום הקודם נמשכה מעבר לסוף המקטעים, היא כן מבטלת חג."""
+        pay_date = date(2026, 4, 22)
+        report = _make_report(1, 100, date(2026, 4, 21))
+        report.update({"start_time": "15:00", "end_time": "10:00", "shift_type_id": 103})
+        reports = [report]
+        person_types = {1: PERMANENT_EMPLOYEE_TYPE}
+        window = {
+            pay_date: [{
+                "start_date": date(2026, 4, 21),
+                "start_time": time(20, 0),
+                "end_date": pay_date,
+                "end_time": time(20, 0),
+            }]
+        }
+        shift_segments = [
+            {"start_time": "15:00", "end_time": "22:00"},
+            {"start_time": "22:00", "end_time": "06:30"},
+            {"start_time": "06:30", "end_time": "08:00"},
+        ]
+
+        with patch("core.holiday_payment._get_special_holiday_payment_window_details", return_value=window), \
+             patch("core.holiday_payment._get_shift_segments", return_value=shift_segments), \
+             patch("core.holiday_payment._get_apartment_work_minutes", return_value={100: 480}):
+            result = calculate_holiday_payments(
+                self.conn, 2026, 4, {}, self.minimum_wage,
+                all_reports=reports, person_types=person_types,
+                person_start_dates=_start_dates(1),
+            )
+
+        self.assertEqual(_get_amount(result, 1), 0)
+
     def test_single_permanent_worked_holiday_gets_nothing(self):
         """מדריך קבוע אחד, עבד בחג → לא מקבל תשלום."""
         holiday = date(2025, 10, 2)
@@ -374,6 +438,43 @@ class TestCalculateHolidayPayments(unittest.TestCase):
             )
 
         self.assertEqual(_get_amount(result, 1), 0)
+
+    def test_partial_saved_assignments_override_only_saved_apartments(self):
+        """שורה שמורה חלה רק על הדירה שלה; דירות בלי שורה נשארות אוטומטיות."""
+        holiday = date(2025, 10, 2)
+        cache = _make_shabbat_cache_with_holiday([holiday])
+        reports = [
+            _make_report(1, 100, date(2025, 10, 5), housing_array_id=1),
+            _make_report(1, 200, date(2025, 10, 6), housing_array_id=1),
+            _make_report(2, 300, date(2025, 10, 7), housing_array_id=1),
+        ]
+        person_types = {
+            1: PERMANENT_EMPLOYEE_TYPE,
+            2: PERMANENT_EMPLOYEE_TYPE,
+        }
+
+        with patch("core.holiday_payment._load_saved_assignments", return_value={
+            100: {
+                "apartment_id": 100,
+                "guide_1_id": 1,
+                "guide_2_id": None,
+                "guide_2_no_holiday_payment": False,
+            },
+            200: {
+                "apartment_id": 200,
+                "guide_1_id": None,
+                "guide_2_id": None,
+                "guide_2_no_holiday_payment": False,
+            },
+        }):
+            result = calculate_holiday_payments(
+                self.conn, 2025, 10, cache, self.minimum_wage,
+                all_reports=reports, person_types=person_types,
+                person_start_dates=_start_dates(1, 2),
+            )
+
+        self.assertAlmostEqual(_get_amount(result, 1), self.full_shift_pay)
+        self.assertAlmostEqual(_get_amount(result, 2), self.full_shift_pay)
 
     def test_two_permanent_neither_worked_get_half(self):
         """2 קבועים, אף אחד לא עבד בחג → כל אחד חצי משמרת."""

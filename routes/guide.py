@@ -39,7 +39,10 @@ from core.holiday_payment import (
     get_holiday_payment_setup,
     get_holiday_payment_dates_in_month,
     save_holiday_payment_setup,
+    get_holiday_dates_in_month,
     _has_sufficient_seniority,
+    _get_special_holiday_payment_window_details,
+    _report_overlaps_special_holiday_window,
 )
 from utils.utils import month_range_ts, format_currency, format_currency_total, human_date
 
@@ -151,7 +154,7 @@ def _build_holiday_payment_chain_summary(
         return summary
 
     person = conn.execute(
-        "SELECT id, type, work_start_date FROM people WHERE id = %s",
+        "SELECT id, type, start_date FROM people WHERE id = %s",
         (person_id,),
     ).fetchone()
     if not person or person.get("type") != PERMANENT_EMPLOYEE_TYPE:
@@ -159,7 +162,7 @@ def _build_holiday_payment_chain_summary(
         summary["notes"].append("לא שולם: העובד אינו מדריך קבוע.")
         return summary
 
-    start_date = _as_date(person.get("work_start_date"))
+    start_date = _as_date(person.get("start_date"))
     has_seniority = _has_sufficient_seniority(start_date, year, month)
 
     hp_map = calculate_holiday_payments(
@@ -185,7 +188,8 @@ def _build_holiday_payment_chain_summary(
     start_dt, end_dt = month_range_ts(year, month)
     if housing_filter is not None:
         reports = conn.execute("""
-            SELECT tr.apartment_id, tr.date, ap.name AS apartment_name
+            SELECT tr.apartment_id, tr.date, tr.start_time, tr.end_time, tr.shift_type_id,
+                   ap.name AS apartment_name
             FROM time_reports tr
             JOIN apartments ap ON ap.id = tr.apartment_id
             WHERE tr.person_id = %s
@@ -194,7 +198,8 @@ def _build_holiday_payment_chain_summary(
         """, (person_id, start_dt.date(), end_dt.date(), housing_filter)).fetchall()
     else:
         reports = conn.execute("""
-            SELECT tr.apartment_id, tr.date, ap.name AS apartment_name
+            SELECT tr.apartment_id, tr.date, tr.start_time, tr.end_time, tr.shift_type_id,
+                   ap.name AS apartment_name
             FROM time_reports tr
             LEFT JOIN apartments ap ON ap.id = tr.apartment_id
             WHERE tr.person_id = %s
@@ -211,6 +216,9 @@ def _build_holiday_payment_chain_summary(
         month_apartments.add(apt_id)
         reports_by_apartment.setdefault(apt_id, []).append({
             "date": report_date,
+            "start_time": report.get("start_time"),
+            "end_time": report.get("end_time"),
+            "shift_type_id": report.get("shift_type_id"),
             "apartment_name": report.get("apartment_name") or "",
         })
 
@@ -231,12 +239,29 @@ def _build_holiday_payment_chain_summary(
     if not candidate_apartments:
         summary["notes"].append("לא שולם: המדריך לא משויך כמדריך קבוע לדירה בחודש זה.")
 
+    regular_holiday_dates = set(get_holiday_dates_in_month(year, month, shabbat_cache))
+    special_holiday_windows = _get_special_holiday_payment_window_details(conn.conn, year, month)
+
     for holiday_date in holiday_dates:
         work_dates = work_dates_by_holiday.get(holiday_date, {holiday_date})
         worked_apartments = []
         for apt_id in candidate_apartments:
             for report in reports_by_apartment.get(apt_id, []):
-                if report["date"] in work_dates:
+                worked_on_regular_holiday = (
+                    holiday_date in regular_holiday_dates
+                    and report["date"] == holiday_date
+                )
+                worked_in_special_window = any(
+                    _report_overlaps_special_holiday_window(
+                        conn.conn, report, holiday_date, window
+                    )
+                    for window in special_holiday_windows.get(holiday_date, [])
+                )
+                worked_on_legacy_holiday_date = (
+                    not special_holiday_windows.get(holiday_date)
+                    and report["date"] in work_dates
+                )
+                if worked_on_regular_holiday or worked_in_special_window or worked_on_legacy_holiday_date:
                     worked_apartments.append(report["apartment_name"] or f"דירה {apt_id}")
                     break
         if worked_apartments:

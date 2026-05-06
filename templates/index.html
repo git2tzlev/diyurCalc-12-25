@@ -228,9 +228,26 @@
     const tbody = document.getElementById('holidayPaymentRows');
     if (!tbody) return;
     tbody.innerHTML = '';
-    data.rows.forEach(row => {
+    const unsavedRows = (data.rows || []).filter(row => !row.is_saved);
+    const savedRows = (data.rows || []).filter(row => row.is_saved);
+
+    function appendGroupHeader(title, count) {
+      if (!count) return;
+      const tr = document.createElement('tr');
+      tr.className = 'holiday-payment-group-row';
+      const td = document.createElement('td');
+      td.colSpan = 4;
+      td.style.cssText = 'padding:10px 12px; border:1px solid #cbd5e1; background:#eef6ff; color:#1e3a8a; font-weight:800; font-size:13px;';
+      td.textContent = `${title} (${count})`;
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+    }
+
+    function appendRow(row) {
       const tr = document.createElement('tr');
       tr.dataset.apartmentId = row.apartment_id;
+      tr.dataset.isSaved = row.is_saved ? '1' : '0';
+      tr.style.background = row.is_saved ? '#fff' : '#fffaf0';
 
       const apartmentCell = document.createElement('td');
       apartmentCell.style.cssText = 'padding:8px; border:1px solid #e2e8f0; font-weight:600;';
@@ -262,7 +279,12 @@
       tr.appendChild(guide2Cell);
 
       tbody.appendChild(tr);
-    });
+    }
+
+    appendGroupHeader('דירות שעדיין אין להן הגדרה', unsavedRows.length);
+    unsavedRows.forEach(appendRow);
+    appendGroupHeader('דירות עם הגדרה קיימת לעדכון', savedRows.length);
+    savedRows.forEach(appendRow);
   }
 
   async function openHolidayPaymentModal() {
@@ -290,7 +312,7 @@
     const rows = [];
     const status = document.getElementById('holidayPaymentStatus');
     const saveBtn = document.getElementById('holidayPaymentSaveBtn');
-    document.querySelectorAll('#holidayPaymentRows tr').forEach(tr => {
+    document.querySelectorAll('#holidayPaymentRows tr[data-apartment-id]').forEach(tr => {
       const guide1 = tr.querySelector('.holiday-guide-1')?.value || null;
       const rawGuide2 = tr.querySelector('.holiday-guide-2')?.value || null;
       const guide2NoHolidayPayment = rawGuide2 === HOLIDAY_NO_PAYMENT_VALUE;
