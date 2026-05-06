@@ -376,6 +376,87 @@ class TestStandby(unittest.TestCase):
         self.assertAlmostEqual(total_payment, 270.40, places=2)
 
 
+class TestNightFirstWorkOverlap(unittest.TestCase):
+    """בדיקות חפיפה בין שעתיים ראשונות של משמרת לילה לבין עבודה אחרת."""
+
+    def _seg(self, start, end, shift_id=107, marker="__night_first_work__"):
+        return (
+            start, end, "work", "work", shift_id, marker,
+            1, False, "דירה", None, 1, None, 1,
+            "רגילה", "מערך", "רגילה", "", 1, ""
+        )
+
+    def _ranges(self, segments):
+        return [(s[0], s[1]) for s in segments]
+
+    def test_full_overlap_removes_night_first_hours(self):
+        from app_utils import _trim_night_first_work_overlaps
+
+        segments = [
+            self._seg(22 * 60, 24 * 60),
+            self._seg(22 * 60, 27 * 60, shift_id=149, marker=None),
+        ]
+
+        result = _trim_night_first_work_overlaps(segments)
+        self.assertEqual(self._ranges(result), [(22 * 60, 27 * 60)])
+
+    def test_partial_overlap_removes_only_covered_hour(self):
+        from app_utils import _trim_night_first_work_overlaps
+
+        segments = [
+            self._seg(22 * 60, 24 * 60),
+            self._seg(23 * 60, 27 * 60, shift_id=149, marker=None),
+        ]
+
+        result = _trim_night_first_work_overlaps(segments)
+        self.assertEqual(self._ranges(result), [(22 * 60, 23 * 60), (23 * 60, 27 * 60)])
+
+    def test_middle_overlap_splits_night_first_hours(self):
+        from app_utils import _trim_night_first_work_overlaps
+
+        segments = [
+            self._seg(22 * 60, 24 * 60),
+            self._seg(23 * 60, 23 * 60 + 30, shift_id=149, marker=None),
+        ]
+
+        result = _trim_night_first_work_overlaps(segments)
+        self.assertEqual(
+            self._ranges(result),
+            [(22 * 60, 23 * 60), (23 * 60 + 30, 24 * 60), (23 * 60, 23 * 60 + 30)]
+        )
+
+    def test_adjacent_work_does_not_trim(self):
+        from app_utils import _trim_night_first_work_overlaps
+
+        segments = [
+            self._seg(22 * 60, 24 * 60),
+            self._seg(24 * 60, 27 * 60, shift_id=149, marker=None),
+        ]
+
+        result = _trim_night_first_work_overlaps(segments)
+        self.assertEqual(self._ranges(result), [(22 * 60, 24 * 60), (24 * 60, 27 * 60)])
+
+    def test_multiple_overlaps_leave_only_uncovered_parts(self):
+        from app_utils import _trim_night_first_work_overlaps
+
+        segments = [
+            self._seg(22 * 60, 24 * 60),
+            self._seg(22 * 60 + 30, 23 * 60, shift_id=149, marker=None),
+            self._seg(23 * 60 + 30, 24 * 60, shift_id=138, marker=None),
+        ]
+
+        result = _trim_night_first_work_overlaps(segments)
+        self.assertEqual(
+            self._ranges(result),
+            [
+                (22 * 60, 22 * 60 + 30),
+                (23 * 60, 23 * 60 + 30),
+                (22 * 60 + 30, 23 * 60),
+                (23 * 60 + 30, 24 * 60),
+            ]
+        )
+
+
 class TestFullSalaryCalculation(unittest.TestCase):
     """בדיקות מקיפות לחישוב שכר מלא"""
 

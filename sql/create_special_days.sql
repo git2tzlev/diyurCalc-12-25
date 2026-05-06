@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS special_days (
     rate_pct        INTEGER     NOT NULL CHECK (rate_pct > 100 AND rate_pct <= 300),
     standby_mode    VARCHAR(16) NOT NULL DEFAULT 'none'
                       CHECK (standby_mode IN ('shabbat', 'none')),
+    counts_as_holiday_payment BOOLEAN NOT NULL DEFAULT false, -- האם נספר כרכיב 254 למי שלא עבד
     city_filter     TEXT[],                                 -- רק ערים אלה (NULL = כל הערים)
     is_active       BOOLEAN     NOT NULL DEFAULT true,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),

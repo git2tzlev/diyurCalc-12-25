@@ -170,6 +170,15 @@
         gap: 4px;
         cursor: pointer;
     }
+
+    .inline-check {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 31px;
+        font-size: 13px;
+        color: #2d3748;
+    }
 </style>
 
 <div class="card sd-card">
@@ -227,6 +236,13 @@
                         {% endfor %}
                     </select>
                 </div>
+                <div class="form-group">
+                    <label>תשלום חג</label>
+                    <label class="inline-check">
+                        <input type="checkbox" name="counts_as_holiday_payment">
+                        נספר לרכיב 254
+                    </label>
+                </div>
                 <div class="form-group city-select-group">
                     <label>סינון ערים</label>
                     <select name="city_mode" id="cityMode" class="city-mode-select" onchange="updateCityMode()" style="width: 160px;">
@@ -257,6 +273,7 @@
                 <th>שעות</th>
                 <th>תעריף</th>
                 <th>כוננות</th>
+                <th>תשלום חג</th>
                 <th>ערים</th>
                 <th>מצב</th>
                 <th>פעולות</th>
@@ -270,6 +287,13 @@
                 <td style="direction: ltr; text-align: right;">{{ d.start_time_str }}-{{ d.end_time_str }}</td>
                 <td>{{ d.rate_pct }}%</td>
                 <td>{{ d.standby_mode_label }}</td>
+                <td>
+                    {% if d.counts_as_holiday_payment %}
+                        <span class="badge badge-active">כן</span>
+                    {% else %}
+                        <span style="color: #a0aec0;">לא</span>
+                    {% endif %}
+                </td>
                 <td>
                     {% if d.city_filter %}
                         <span style="color: #2b6cb0;">{{ d.city_filter | join(', ') }}</span>

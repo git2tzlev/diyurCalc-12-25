@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from core.holiday_payment import (
     get_holiday_dates_in_month,
+    get_holiday_payment_dates_in_month,
     calculate_holiday_payments,
 )
 from core.constants import (
@@ -81,6 +82,91 @@ class TestGetHolidayDatesInMonth(unittest.TestCase):
         cache = {}
         result = get_holiday_dates_in_month(2025, 3, cache)
         self.assertEqual(result, [])
+
+
+class TestSpecialHolidayPaymentDates(unittest.TestCase):
+    """בדיקות לימים מיוחדים שנספרים כתשלום חג."""
+
+    def _conn_with_special_days(self, rows):
+        conn = MagicMock()
+        cursor = MagicMock()
+        cursor.fetchall.return_value = rows
+        conn.cursor.return_value = cursor
+        return conn
+
+    def test_independence_counts_as_single_holiday_payment_day(self):
+        """חלון עצמאות 20:00-20:00 נספר כיום תשלום אחד בתאריך הסיום."""
+        conn = self._conn_with_special_days([
+            {
+                "start_date": date(2026, 4, 21),
+                "end_date": date(2026, 4, 22),
+            }
+        ])
+
+        holiday_dates, work_dates = get_holiday_payment_dates_in_month(conn, 2026, 4, {})
+
+        self.assertEqual(holiday_dates, [date(2026, 4, 22)])
+        self.assertEqual(work_dates[date(2026, 4, 22)], {date(2026, 4, 21), date(2026, 4, 22)})
+
+    def test_special_holiday_merges_with_regular_holidays(self):
+        """חגים רגילים וימים מיוחדים מסומנים חוזרים יחד, בלי כפילויות."""
+        regular_holiday = date(2026, 4, 2)
+        conn = self._conn_with_special_days([
+            {
+                "start_date": date(2026, 4, 21),
+                "end_date": date(2026, 4, 22),
+            }
+        ])
+
+        holiday_dates, _work_dates = get_holiday_payment_dates_in_month(
+            conn, 2026, 4, _make_shabbat_cache_with_holiday([regular_holiday])
+        )
+
+        self.assertEqual(holiday_dates, [regular_holiday, date(2026, 4, 22)])
+
+    def test_special_holiday_same_date_as_regular_holiday_not_duplicated(self):
+        """אם יום מיוחד מסומן באותו תאריך של חג רגיל, הוא לא יוצר יום תשלום כפול."""
+        same_day = date(2026, 4, 22)
+        conn = self._conn_with_special_days([
+            {
+                "start_date": date(2026, 4, 21),
+                "end_date": same_day,
+            }
+        ])
+
+        holiday_dates, work_dates = get_holiday_payment_dates_in_month(
+            conn, 2026, 4, _make_shabbat_cache_with_holiday([same_day])
+        )
+
+        self.assertEqual(holiday_dates, [same_day])
+        self.assertEqual(work_dates[same_day], {date(2026, 4, 21), same_day})
+
+    def test_special_holiday_crosses_from_previous_month(self):
+        """חלון שמתחיל בחודש קודם ויום הזכאות בחודש הנוכחי נספר בחודש הנכון."""
+        conn = self._conn_with_special_days([
+            {
+                "start_date": date(2026, 3, 31),
+                "end_date": date(2026, 4, 1),
+            }
+        ])
+
+        holiday_dates, work_dates = get_holiday_payment_dates_in_month(conn, 2026, 4, {})
+
+        self.assertEqual(holiday_dates, [date(2026, 4, 1)])
+        self.assertEqual(work_dates[date(2026, 4, 1)], {date(2026, 3, 31), date(2026, 4, 1)})
+
+    def test_special_holiday_ending_next_month_not_counted_in_current_month(self):
+        """חלון שמסתיים בחודש הבא לא נספר כתשלום חג בחודש הנוכחי."""
+        conn = self._conn_with_special_days([
+            {
+                "start_date": date(2026, 4, 30),
+                "end_date": date(2026, 5, 1),
+            }
+        ])
+
+        holiday_dates, _work_dates = get_holiday_payment_dates_in_month(conn, 2026, 4, {})
+
+        self.assertEqual(holiday_dates, [])
 
     def test_single_holiday(self):
         """חג יחיד בחודש."""
@@ -155,6 +241,67 @@ class TestCalculateHolidayPayments(unittest.TestCase):
         self.assertAlmostEqual(_get_amount(result, 1), self.full_shift_pay)
         self.assertEqual(result[1]["count"], 1)
         self.assertAlmostEqual(result[1]["rate"], self.full_shift_pay)
+
+    def test_special_holiday_not_worked_gets_full_shift(self):
+        """יום פרימיום שמסומן לתשלום חג משלם 254 למדריך קבוע שלא עבד בו."""
+        pay_date = date(2026, 4, 22)
+        reports = [
+            _make_report(1, 100, date(2026, 4, 5)),
+        ]
+        person_types = {1: PERMANENT_EMPLOYEE_TYPE}
+
+        with patch(
+            "core.holiday_payment._get_special_holiday_payment_windows",
+            return_value={pay_date: {date(2026, 4, 21), pay_date}},
+        ), patch("core.holiday_payment._get_apartment_work_minutes", return_value={100: 480}):
+            result = calculate_holiday_payments(
+                self.conn, 2026, 4, {}, self.minimum_wage,
+                all_reports=reports, person_types=person_types,
+                person_start_dates=_start_dates(1),
+            )
+
+        self.assertAlmostEqual(_get_amount(result, 1), self.full_shift_pay)
+        self.assertEqual(result[1]["count"], 1)
+
+    def test_special_holiday_worked_on_eve_blocks_payment(self):
+        """עבודה בערב יום העצמאות בתוך החלון מונעת תשלום חג לאותו יום."""
+        pay_date = date(2026, 4, 22)
+        reports = [
+            _make_report(1, 100, date(2026, 4, 21)),
+        ]
+        person_types = {1: PERMANENT_EMPLOYEE_TYPE}
+
+        with patch(
+            "core.holiday_payment._get_special_holiday_payment_windows",
+            return_value={pay_date: {date(2026, 4, 21), pay_date}},
+        ), patch("core.holiday_payment._get_apartment_work_minutes", return_value={100: 480}):
+            result = calculate_holiday_payments(
+                self.conn, 2026, 4, {}, self.minimum_wage,
+                all_reports=reports, person_types=person_types,
+                person_start_dates=_start_dates(1),
+            )
+
+        self.assertEqual(_get_amount(result, 1), 0)
+
+    def test_special_holiday_worked_on_pay_date_blocks_payment(self):
+        """עבודה ביום העצמאות עצמו מונעת תשלום חג לאותו יום."""
+        pay_date = date(2026, 4, 22)
+        reports = [
+            _make_report(1, 100, pay_date),
+        ]
+        person_types = {1: PERMANENT_EMPLOYEE_TYPE}
+
+        with patch(
+            "core.holiday_payment._get_special_holiday_payment_windows",
+            return_value={pay_date: {date(2026, 4, 21), pay_date}},
+        ), patch("core.holiday_payment._get_apartment_work_minutes", return_value={100: 480}):
+            result = calculate_holiday_payments(
+                self.conn, 2026, 4, {}, self.minimum_wage,
+                all_reports=reports, person_types=person_types,
+                person_start_dates=_start_dates(1),
+            )
+
+        self.assertEqual(_get_amount(result, 1), 0)
 
     def test_single_permanent_worked_holiday_gets_nothing(self):
         """מדריך קבוע אחד, עבד בחג → לא מקבל תשלום."""
@@ -743,6 +890,24 @@ class TestSeniorityFilter(unittest.TestCase):
             person_start_dates=person_start_dates,
         )
         self.assertAlmostEqual(_get_amount(result, 1), self.full_shift_pay)
+
+    def test_new_regular_housing_guide_no_holiday_payment(self):
+        """מדריך חדש במערך רגיל לא מקבל תשלום חג."""
+        holiday = date(2025, 10, 2)
+        cache = _make_shabbat_cache_with_holiday([holiday])
+
+        reports = [
+            _make_report(1, 100, date(2025, 10, 5), housing_array_id=1),
+        ]
+        person_types = {1: PERMANENT_EMPLOYEE_TYPE}
+        person_start_dates = {1: date(2025, 8, 15)}
+
+        result = calculate_holiday_payments(
+            self.conn, 2025, 10, cache, self.minimum_wage,
+            all_reports=reports, person_types=person_types,
+            person_start_dates=person_start_dates,
+        )
+        self.assertEqual(_get_amount(result, 1), 0)
 
     def test_mixed_seniority_two_guides(self):
         """2 קבועים בדירת ASD: ותיק + חדש — ותיק מקבל שלמה (ASD), חדש לא מקבל."""

@@ -35,6 +35,7 @@ from routes.guide import (
     simple_summary_view, guide_view,
     shifts_report_pdf, shifts_report_preview, shifts_report_email, chains_report_email,
     get_guide_notes, add_guide_note, delete_guide_note,
+    get_holiday_payment_setup_api, save_holiday_payment_setup_api,
 )
 from routes.admin import (
     manage_payment_codes, update_payment_codes,
@@ -391,6 +392,18 @@ async def add_guide_note_route(request: Request, person_id: int):
 async def delete_guide_note_route(request: Request, note_id: int):
     """מחיקת הערה."""
     return await delete_guide_note(request, note_id)
+
+
+@app.get("/api/holiday-payment-setup")
+def holiday_payment_setup_route(request: Request, year: int, month: int):
+    """נתוני ניהול תשלום חג."""
+    return get_holiday_payment_setup_api(request, year, month)
+
+
+@app.post("/api/holiday-payment-setup")
+async def save_holiday_payment_setup_route(request: Request):
+    """שמירת ניהול תשלום חג."""
+    return await save_holiday_payment_setup_api(request)
 
 
 @app.get("/admin", include_in_schema=False)
@@ -857,12 +870,18 @@ async def set_selected_period_api(request: Request):
 async def startup_event():
     """Handle application startup - ensure database has required codes."""
     from core.logic import ensure_sick_payment_code, ensure_professional_support_code, ensure_holiday_payment_code
+    from core.holiday_payment import (
+        ensure_holiday_payment_assignments_table,
+        ensure_special_days_holiday_payment_column,
+    )
     from core.database import get_conn, set_demo_mode
     try:
         with get_conn() as conn:
             ensure_sick_payment_code(conn.conn)
             ensure_professional_support_code(conn.conn)
             ensure_holiday_payment_code(conn.conn)
+            ensure_holiday_payment_assignments_table(conn.conn)
+            ensure_special_days_holiday_payment_column(conn.conn)
     except Exception as e:
         logger.warning(f"Could not ensure payment codes on startup: {e}")
 
@@ -873,6 +892,8 @@ async def startup_event():
             ensure_sick_payment_code(conn.conn)
             ensure_professional_support_code(conn.conn)
             ensure_holiday_payment_code(conn.conn)
+            ensure_holiday_payment_assignments_table(conn.conn)
+            ensure_special_days_holiday_payment_column(conn.conn)
     except Exception as e:
         logger.debug(f"Could not ensure payment codes in demo DB: {e}")
     finally:

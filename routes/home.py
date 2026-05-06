@@ -14,6 +14,8 @@ from fastapi.templating import Jinja2Templates
 from core.config import config
 from core.database import get_conn, get_housing_array_filter, get_default_period, get_multi_housing_guides
 from core.logic import get_active_guides
+from core.time_utils import get_shabbat_times_cache
+from core.holiday_payment import get_holiday_payment_setup
 from utils.utils import month_range_ts, available_months_from_db, format_currency, human_date
 
 logger = logging.getLogger(__name__)
@@ -65,6 +67,7 @@ def home(
     notes_counts: dict[int, int] = {}
     has_payment_components: set[int] = set()
     multi_housing: dict[int, list[str]] = {}
+    holiday_payment_setup: dict | None = None
     if selected_year and selected_month:
         start_dt, end_dt = month_range_ts(selected_year, selected_month)
         # Convert datetime to date for PostgreSQL date column
@@ -135,6 +138,10 @@ def home(
                 notes_counts[row["person_id"]] = row["cnt"]
 
             multi_housing = get_multi_housing_guides(conn, start_date, end_date)
+            shabbat_cache = get_shabbat_times_cache(conn.conn)
+            holiday_payment_setup = get_holiday_payment_setup(
+                conn.conn, selected_year, selected_month, shabbat_cache, housing_filter,
+            )
         logger.info(f"Counts query took: {time.time() - counts_start:.4f}s")
 
     # Calculate seniority years for each guide
@@ -195,6 +202,7 @@ def home(
             "notes_counts": notes_counts,
             "multi_housing": multi_housing,
             "q": q or "",
+            "holiday_payment_setup": holiday_payment_setup,
         },
     )
     render_time = time.time() - render_start

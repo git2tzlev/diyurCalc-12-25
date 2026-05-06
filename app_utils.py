@@ -46,8 +46,11 @@ from core.constants import (
     # Apartment types
     REGULAR_APT_TYPE,
     THERAPEUTIC_APT_TYPE,
+    BERESHIT_APT_TYPE,
+    KALANIYOT_APT_TYPE,
     HIGH_FUNCTIONING_APT_TYPE,
     LOW_FUNCTIONING_APT_TYPE,
+    SPECIAL_ABSENCE_PAYMENT_APT_TYPES,
     APT_TYPE_NAMES,
     ASD_SENIORITY_SUPPLEMENT,
     ASD_SENIORITY_YEARS_THRESHOLD,
@@ -87,6 +90,65 @@ from core.constants import (
 )
 
 logger = logging.getLogger(__name__)
+
+_NIGHT_FIRST_WORK_SEGMENT_MARKER = "__night_first_work__"
+
+
+def _subtract_intervals_from_range(
+    start: int,
+    end: int,
+    blockers: List[Tuple[int, int]],
+) -> List[Tuple[int, int]]:
+    """Return the pieces of start-end that are not covered by blocker intervals."""
+    remaining = [(start, end)]
+    for block_start, block_end in merge_intervals(blockers):
+        new_remaining = []
+        for part_start, part_end in remaining:
+            overlap_start = max(part_start, block_start)
+            overlap_end = min(part_end, block_end)
+            if overlap_start < overlap_end:
+                if part_start < overlap_start:
+                    new_remaining.append((part_start, overlap_start))
+                if overlap_end < part_end:
+                    new_remaining.append((overlap_end, part_end))
+            else:
+                new_remaining.append((part_start, part_end))
+        remaining = new_remaining
+        if not remaining:
+            break
+    return remaining
+
+
+def _trim_night_first_work_overlaps(segments: List[Tuple]) -> List[Tuple]:
+    """
+    Remove overlap between the first two paid hours of a night shift and other work reports.
+
+    Night-shift first hours are a fallback payment. If another work report covers part of
+    that window, only the uncovered part remains payable as night-shift work.
+    """
+    other_work_intervals = [
+        (seg[0], seg[1])
+        for seg in segments
+        if len(seg) > 5
+        and seg[2] == "work"
+        and seg[5] != _NIGHT_FIRST_WORK_SEGMENT_MARKER
+        and seg[1] > seg[0]
+    ]
+    if not other_work_intervals:
+        return segments
+
+    trimmed: List[Tuple] = []
+    for seg in segments:
+        if len(seg) <= 5 or seg[2] != "work" or seg[5] != _NIGHT_FIRST_WORK_SEGMENT_MARKER:
+            trimmed.append(seg)
+            continue
+
+        remaining_parts = _subtract_intervals_from_range(seg[0], seg[1], other_work_intervals)
+        for part_start, part_end in remaining_parts:
+            if part_end > part_start:
+                trimmed.append((part_start, part_end, *seg[2:]))
+
+    return trimmed
 
 
 # =============================================================================
@@ -250,6 +312,62 @@ def _round_pay(value: float, decimals: int = 1) -> float:
 def _mul_pay(hours: float, rate: float) -> float:
     """מכפלת שעות×תעריף ועיגול לעשרון בשיטת מירב (Decimal למניעת שגיאות float)."""
     return float((Decimal(str(hours)) * Decimal(str(rate))).quantize(Decimal('0.1'), rounding=ROUND_HALF_UP))
+
+
+def _absence_payment_shift_id(apartment_type_id: int | None) -> int | None:
+    """משמרת מקור לתשלום חג/חופשה/מחלה בסוגי דירה מיוחדים."""
+    if apartment_type_id == KALANIYOT_APT_TYPE:
+        return WEEKDAY_SHIFT_TYPE_ID
+    if apartment_type_id == BERESHIT_APT_TYPE:
+        return NIGHT_SHIFT_ID
+    return None
+
+
+def _calculate_special_absence_segment_payment(
+    conn,
+    *,
+    segment_type: str,
+    duration: int,
+    shift_type_id: int,
+    segment_id: int | None,
+    apartment_type_id: int | None,
+    housing_array_id: int | None,
+    is_married: bool,
+    minimum_wage: float,
+    year: int,
+    month: int,
+    housing_rates_cache: dict | None,
+) -> tuple[float, int, float]:
+    """
+    חישוב סגמנט חופשה/מחלה מיוחד: עבודה לפי תעריף משמרת, כוננות כתשלום כוננות פחות 70.
+
+    Returns:
+        (payment, paid_minutes, effective_rate)
+        paid_minutes הוא 0 בסגמנט כוננות כדי שהכוננות לא תיספר כשעות עבודה/חופשה/מחלה.
+    """
+    if duration <= 0:
+        return 0.0, 0, minimum_wage
+
+    if segment_type == "standby":
+        standby_rate = (
+            get_standby_rate(conn, segment_id or 0, apartment_type_id, is_married, year, month)
+            if segment_id else DEFAULT_STANDBY_RATE
+        )
+        return _round_pay(max(0.0, standby_rate - MAX_CANCELLED_STANDBY_DEDUCTION)), 0, standby_rate
+
+    report = {
+        "shift_type_id": shift_type_id,
+        "housing_array_id": housing_array_id,
+        "is_married": is_married,
+        "hourly_wage_supplement": 0,
+    }
+    rate = get_effective_hourly_rate(
+        report,
+        minimum_wage,
+        is_shabbat=False,
+        housing_rates_cache=housing_rates_cache,
+    )
+    return _mul_pay(round(duration / 60, 2), round(rate, 2)), duration, rate
 
 
 def _display_base_hourly(
@@ -1810,10 +1928,20 @@ def get_daily_segments_data(
         # כולל: משמרות תגבור, יום חופשה, יום מחלה
         is_fixed_segments_shift = is_tagbur_shift(shift_type_id) or is_vacation_report or is_sick_report
 
+        special_absence_shift_id = None
+
         # חופשה/מחלה: החלפת seg_list בסגמנטי עבודה לפי override של משמרת חול לדירה
         if (is_sick_report or is_vacation_report):
             apt_id = r.get("apartment_id")
-            if apt_id and apt_id in weekday_work_overrides:
+            special_absence_shift_id = _absence_payment_shift_id(r.get("apartment_type_id"))
+            if special_absence_shift_id:
+                if special_absence_shift_id == WEEKDAY_SHIFT_TYPE_ID and apt_id and apt_id in weekday_shift_overrides:
+                    seg_list = [dict(seg) for seg in weekday_shift_overrides[apt_id]]
+                else:
+                    seg_list = [dict(seg) for seg in segments_by_shift.get(special_absence_shift_id, [])]
+                for seg in seg_list:
+                    seg["source_shift_type_id"] = special_absence_shift_id
+            elif apt_id and apt_id in weekday_work_overrides:
                 seg_list = weekday_work_overrides[apt_id]
 
         # משמרת לילה - סגמנטים דינמיים לפי זמן הכניסה בפועל
@@ -1856,7 +1984,7 @@ def get_daily_segments_data(
                     "start_time": f"{(work1_start // 60) % 24:02d}:{work1_start % 60:02d}",
                     "end_time": f"{(work1_end // 60) % 24:02d}:{work1_end % 60:02d}",
                     "segment_type": "work",
-                    "id": None
+                    "id": _NIGHT_FIRST_WORK_SEGMENT_MARKER
                 })
 
             # סגמנט 2: כוננות מסוף 2 שעות עבודה עד 06:30
@@ -1967,6 +2095,10 @@ def get_daily_segments_data(
                 entry["asd_night_high_func"] = True
             if r["shift_name"]:
                 entry["shifts"].add(r["shift_name"])
+            if is_sick_report:
+                entry["special_absence_type"] = "sick" if special_absence_shift_id else None
+            elif is_vacation_report:
+                entry["special_absence_type"] = "vacation" if special_absence_shift_id else None
 
             # חישוב זמני התחלה וסיום של הסגמנטים המוגדרים
             first_seg_start, _ = span_minutes(seg_list[0]["start_time"], seg_list[0]["end_time"])
@@ -2031,9 +2163,9 @@ def get_daily_segments_data(
 
                 # קביעת סוג אפקטיבי
                 if is_sick_report:
-                    effective_seg_type = "sick"
+                    effective_seg_type = "standby" if special_absence_shift_id and seg.get("segment_type") == "standby" else "sick"
                 elif is_vacation_report:
-                    effective_seg_type = "vacation"
+                    effective_seg_type = "standby" if special_absence_shift_id and seg.get("segment_type") == "standby" else "vacation"
                 else:
                     effective_seg_type = seg["segment_type"]
                     # ASD + תפקוד נמוך: כוננות הופכת לשעות עבודה
@@ -2051,11 +2183,12 @@ def get_daily_segments_data(
                     label = "work"
 
                 segment_id = seg.get("id")
+                segment_shift_type_id = seg.get("source_shift_type_id") or r["shift_type_id"]
 
                 # For fixed segment shifts (tagbur/vacation/sick), standby_defined_end = seg_end (full standby)
                 standby_defined_end = seg_end if effective_seg_type == "standby" else None
                 apartment_city = r.get("apartment_city", "")
-                entry["segments"].append((seg_start, seg_end, effective_seg_type, label, r["shift_type_id"], segment_id, apartment_type_id, is_married, apartment_name, actual_seg_date, actual_apartment_type_id, standby_defined_end, housing_array_id, apartment_type_name, housing_array_name, rate_apartment_type_name, apartment_type_change_date, rate_apartment_type_id, apartment_city))
+                entry["segments"].append((seg_start, seg_end, effective_seg_type, label, segment_shift_type_id, segment_id, apartment_type_id, is_married, apartment_name, actual_seg_date, actual_apartment_type_id, standby_defined_end, housing_array_id, apartment_type_name, housing_array_name, rate_apartment_type_name, apartment_type_change_date, rate_apartment_type_id, apartment_city))
 
             # שעות לא מכוסות אחרי סיום המשמרת
             # חופשה/מחלה: אין שעות לא מכוסות כלל
@@ -2393,6 +2526,9 @@ def get_daily_segments_data(
         prev_day_date = first_of_month - timedelta(days=1)
 
     for day, entry in sorted(daily_map.items()):
+        if (year, month) >= (2026, 3):
+            entry["segments"] = _trim_night_first_work_overlaps(entry.get("segments", []))
+
         shift_names = sorted(entry["shifts"])
         day_shift_ids = entry.get("day_shift_types", set())  # IDs של המשמרות ביום הזה
         is_fixed_segments = entry.get("is_fixed_segments", False)
@@ -2469,9 +2605,9 @@ def get_daily_segments_data(
                 # Include apt_city for Purim standby rate calculation
                 standby_segments.append((s_start, s_end, seg_id, apt_type, married, actual_date, sid, actual_apt_type, standby_defined_end, apt_city))
             elif s_type == "vacation":
-                vacation_segments.append((s_start, s_end, actual_date, apt_name, apt_type_name, ha_name, rate_apt_type_name))
+                vacation_segments.append((s_start, s_end, actual_date, apt_name, apt_type_name, ha_name, rate_apt_type_name, sid, seg_id, apt_type, married, housing_array_id, actual_apt_type))
             elif s_type == "sick":
-                sick_segments.append((s_start, s_end, actual_date, apt_name, apt_type_name, ha_name, rate_apt_type_name))
+                sick_segments.append((s_start, s_end, actual_date, apt_name, apt_type_name, ha_name, rate_apt_type_name, sid, seg_id, apt_type, married, housing_array_id, actual_apt_type))
             else:
                 work_segments.append((s_start, s_end, label, sid, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date, apt_city))
                 
@@ -2657,10 +2793,28 @@ def get_daily_segments_data(
         # עיבוד חופשה/מחלה/כוננויות רק אם זה יום קבוע לגמרי (אין משמרות עבודה)
         if is_fully_fixed:
             # עיבוד סגמנטי חופשה
-            for s, e, actual_date, v_apt_name, v_apt_type_name, v_ha_name, v_rate_apt_type_name in vacation_segments:
+            for s, e, actual_date, v_apt_name, v_apt_type_name, v_ha_name, v_rate_apt_type_name, sid, seg_id, apt_type, married, housing_array_id, actual_apt_type in vacation_segments:
                 duration = e - s
-                pay = _mul_pay(round(duration / 60, 2), round(minimum_wage, 2))  # חופשה = שעות ותעריף מעוגלים (שיטת מירב)
-                d_calc100 += duration
+                if apt_type in SPECIAL_ABSENCE_PAYMENT_APT_TYPES:
+                    pay, paid_minutes, effective_rate = _calculate_special_absence_segment_payment(
+                        conn,
+                        segment_type="work",
+                        duration=duration,
+                        shift_type_id=sid,
+                        segment_id=seg_id,
+                        apartment_type_id=apt_type,
+                        housing_array_id=housing_array_id,
+                        is_married=bool(married),
+                        minimum_wage=minimum_wage,
+                        year=year,
+                        month=month,
+                        housing_rates_cache=housing_rates_cache,
+                    )
+                else:
+                    pay = _mul_pay(round(duration / 60, 2), round(minimum_wage, 2))  # חופשה = שעות ותעריף מעוגלים (שיטת מירב)
+                    paid_minutes = duration
+                    effective_rate = minimum_wage
+                d_calc100 += paid_minutes
                 d_payment += pay
 
                 start_str = f"{s // 60 % 24:02d}:{s % 60:02d}"
@@ -2669,9 +2823,9 @@ def get_daily_segments_data(
                 chains.append({
                     "start_time": start_str,
                     "end_time": end_str,
-                    "total_minutes": duration,
+                    "total_minutes": paid_minutes,
                     "payment": pay,
-                    "calc100": duration,
+                    "calc100": paid_minutes,
                     "calc125": 0, "calc150": 0, "calc175": 0, "calc200": 0,
                     "type": "vacation",
                     "apartment_name": v_apt_name or "",
@@ -2683,11 +2837,11 @@ def get_daily_segments_data(
                     "segments": [(start_str, end_str, "חופשה")],
                     "break_reason": "",
                     "from_prev_day": False,
-                    "effective_rate": minimum_wage,
+                    "effective_rate": effective_rate,
                 })
 
             # עיבוד סגמנטי מחלה - עם אחוזי תשלום מדורגים לפי חוק דמי מחלה
-            for s, e, actual_date, sk_apt_name, sk_apt_type_name, sk_ha_name, sk_rate_apt_type_name in sick_segments:
+            for s, e, actual_date, sk_apt_name, sk_apt_type_name, sk_ha_name, sk_rate_apt_type_name, sid, seg_id, apt_type, married, housing_array_id, actual_apt_type in sick_segments:
                 duration = e - s
 
                 # קביעת מספר יום המחלה ברצף ואחוז התשלום
@@ -2696,8 +2850,27 @@ def get_daily_segments_data(
                 sick_rate = get_sick_payment_rate(sick_day_num)
 
                 # חישוב תשלום לפי האחוז המדורג - שעות ותעריף מעוגלים (שיטת מירב)
-                pay = _mul_pay(round(duration / 60, 2), round(minimum_wage, 2) * sick_rate)
-                d_calc100 += duration
+                if apt_type in SPECIAL_ABSENCE_PAYMENT_APT_TYPES:
+                    base_pay, paid_minutes, effective_rate = _calculate_special_absence_segment_payment(
+                        conn,
+                        segment_type="work",
+                        duration=duration,
+                        shift_type_id=sid,
+                        segment_id=seg_id,
+                        apartment_type_id=apt_type,
+                        housing_array_id=housing_array_id,
+                        is_married=bool(married),
+                        minimum_wage=minimum_wage,
+                        year=year,
+                        month=month,
+                        housing_rates_cache=housing_rates_cache,
+                    )
+                    pay = _round_pay(base_pay * sick_rate)
+                else:
+                    pay = _mul_pay(round(duration / 60, 2), round(minimum_wage, 2) * sick_rate)
+                    paid_minutes = duration
+                    effective_rate = minimum_wage
+                d_calc100 += paid_minutes
                 d_payment += pay
 
                 start_str = f"{s // 60 % 24:02d}:{s % 60:02d}"
@@ -2706,9 +2879,9 @@ def get_daily_segments_data(
                 chains.append({
                     "start_time": start_str,
                     "end_time": end_str,
-                    "total_minutes": duration,
+                    "total_minutes": paid_minutes,
                     "payment": pay,
-                    "calc100": duration,
+                    "calc100": paid_minutes,
                     "calc125": 0, "calc150": 0, "calc175": 0, "calc200": 0,
                     "type": "sick",
                     "apartment_name": sk_apt_name or "",
@@ -2720,14 +2893,66 @@ def get_daily_segments_data(
                     "segments": [(start_str, end_str, "מחלה")],
                     "break_reason": "",
                     "from_prev_day": False,
-                    "effective_rate": minimum_wage,
+                    "effective_rate": effective_rate,
                     "sick_day_number": sick_day_num,
                     "sick_rate_percent": int(sick_rate * 100),
                 })
 
+            special_absence_type = entry.get("special_absence_type")
+            if special_absence_type and standby_segments:
+                label = "חופשה" if special_absence_type == "vacation" else "מחלה"
+                for sb_start, sb_end, seg_id, apt_type, married, actual_date, shift_type_id, actual_apt_type, _standby_defined_end, _sb_apt_city in standby_segments:
+                    duration = sb_end - sb_start
+                    pay, paid_minutes, effective_rate = _calculate_special_absence_segment_payment(
+                        conn,
+                        segment_type="standby",
+                        duration=duration,
+                        shift_type_id=shift_type_id,
+                        segment_id=seg_id,
+                        apartment_type_id=apt_type,
+                        housing_array_id=entry.get("housing_array_id"),
+                        is_married=bool(married),
+                        minimum_wage=minimum_wage,
+                        year=year,
+                        month=month,
+                        housing_rates_cache=housing_rates_cache,
+                    )
+                    sick_day_num = None
+                    sick_rate_percent = None
+                    if special_absence_type == "sick":
+                        sick_date = actual_date.date() if isinstance(actual_date, datetime) else actual_date
+                        sick_day_num = sick_day_sequence.get(sick_date, 1)
+                        sick_rate = get_sick_payment_rate(sick_day_num)
+                        sick_rate_percent = int(sick_rate * 100)
+                        pay = _round_pay(pay * sick_rate)
+                    d_payment += pay
+                    start_str = f"{sb_start // 60 % 24:02d}:{sb_start % 60:02d}"
+                    end_str = f"{sb_end // 60 % 24:02d}:{sb_end % 60:02d}"
+                    chains.append({
+                        "start_time": start_str,
+                        "end_time": end_str,
+                        "total_minutes": paid_minutes,
+                        "payment": pay,
+                        "calc100": 0,
+                        "calc125": 0, "calc150": 0, "calc175": 0, "calc200": 0,
+                        "type": special_absence_type,
+                        "apartment_name": "",
+                        "apartment_type_name": "",
+                        "rate_apartment_type_name": "",
+                        "housing_array_name": "",
+                        "shift_name": f"{label} - כוננות",
+                        "shift_type": label,
+                        "segments": [(start_str, end_str, "כוננות")],
+                        "break_reason": "קיזוז כוננות 70₪",
+                        "from_prev_day": False,
+                        "effective_rate": effective_rate,
+                        "sick_day_number": sick_day_num,
+                        "sick_rate_percent": sick_rate_percent,
+                    })
+
             # עיבוד כוננויות רק למשמרות תגבור (לא לחופשה/מחלה)
             is_tagbur = bool(day_shift_ids & TAGBUR_SHIFT_IDS)  # בדיקה לפי ID
-            if is_tagbur and standby_segments:
+            if is_tagbur and standby_segments and not special_absence_type:
                 for sb_start, sb_end, seg_id, apt_type, married, actual_date, _shift_type_id, actual_apt_type, _standby_defined_end, _sb_apt_city in standby_segments:
                     duration = sb_end - sb_start
                     if duration <= 0:
@@ -2861,9 +3086,9 @@ def get_daily_segments_data(
             all_events.append({"start": s, "end": e, "type": "work", "label": l, "shift_id": sid, "apartment_name": apt_name or "", "apartment_type_id": actual_apt_type, "rate_apt_type": rate_apt_type, "actual_date": actual_date or day_date, "housing_array_id": housing_array_id, "apartment_type_name": apt_type_name or "", "housing_array_name": ha_name or "", "rate_apt_type_name": rate_apt_type_name or "", "apt_type_change_date": apt_type_change_date or ""})
         for s, e, seg_id, apt, married, actual_date, _shift_type_id, actual_apt_type, _standby_defined_end, sb_apt_city in standby_segments:
             all_events.append({"start": s, "end": e, "type": "standby", "label": "כוננות", "seg_id": seg_id, "apt": apt, "actual_apt_type": actual_apt_type, "married": married, "actual_date": actual_date or day_date, "apt_city": sb_apt_city or ""})
-        for s, e, actual_date, v_apt_name, v_apt_type_name, v_ha_name, v_rate_apt_type_name in vacation_segments:
+        for s, e, actual_date, v_apt_name, v_apt_type_name, v_ha_name, v_rate_apt_type_name, *_ in vacation_segments:
             all_events.append({"start": s, "end": e, "type": "vacation", "label": "חופשה", "actual_date": actual_date or day_date, "apartment_name": v_apt_name or "", "apartment_type_name": v_apt_type_name or "", "housing_array_name": v_ha_name or "", "rate_apt_type_name": v_rate_apt_type_name or ""})
-        for s, e, actual_date, sk_apt_name, sk_apt_type_name, sk_ha_name, sk_rate_apt_type_name in sick_segments:
+        for s, e, actual_date, sk_apt_name, sk_apt_type_name, sk_ha_name, sk_rate_apt_type_name, *_ in sick_segments:
             all_events.append({"start": s, "end": e, "type": "sick", "label": "מחלה", "actual_date": actual_date or day_date, "apartment_name": sk_apt_name or "", "apartment_type_name": sk_apt_type_name or "", "housing_array_name": sk_ha_name or "", "rate_apt_type_name": sk_rate_apt_type_name or ""})
 
         all_events.sort(key=lambda x: x["start"])
@@ -3898,7 +4123,9 @@ def aggregate_daily_segments_to_monthly(
             elif chain_type == "vacation":
                 vacation_days_set.add(day_date)
                 vacation_mins = chain.get("total_minutes", 0) or 0
+                vacation_pay = chain.get("payment", 0) or 0
                 monthly_totals["vacation_minutes"] += vacation_mins
+                monthly_totals["vacation_payment"] += vacation_pay
 
             elif chain_type == "sick":
                 sick_days_set.add(day_date)
@@ -3926,8 +4153,9 @@ def aggregate_daily_segments_to_monthly(
     # ימי חופשה שנוצלו
     monthly_totals["vacation_days_taken"] = len(vacation_days_set)
 
-    # תשלום חופשה - שעות ותעריף מעוגלים (שיטת מירב)
-    monthly_totals["vacation_payment"] = _mul_pay(round(monthly_totals["vacation_minutes"] / 60, 2), round(minimum_wage, 2))
+    # תשלום חופשה - בדרך כלל מגיע מסיכום הרצפים; fallback לשכר מינימום אם אין פירוט תשלום
+    if monthly_totals["vacation_minutes"] > 0 and monthly_totals["vacation_payment"] == 0:
+        monthly_totals["vacation_payment"] = _mul_pay(round(monthly_totals["vacation_minutes"] / 60, 2), round(minimum_wage, 2))
     monthly_totals["vacation"] = monthly_totals["vacation_minutes"]
 
     # ימי מחלה שנוצלו (התשלום כבר חושב בלולאה עם האחוזים המדורגים)

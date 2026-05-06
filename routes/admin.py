@@ -457,6 +457,11 @@ def manage_special_days(request: Request) -> HTMLResponse:
         cursor = conn.conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         try:
             cursor.execute("""
+                ALTER TABLE special_days
+                ADD COLUMN IF NOT EXISTS counts_as_holiday_payment BOOLEAN NOT NULL DEFAULT false
+            """)
+            conn.conn.commit()
+            cursor.execute("""
                 SELECT * FROM special_days
                 ORDER BY start_date DESC, id DESC
             """)
@@ -505,6 +510,7 @@ async def add_special_day(request: Request) -> RedirectResponse:
         end_time = form.get("end_time", "22:00")
         rate_pct = int(form.get("rate_pct", 150))
         standby_mode = form.get("standby_mode", "none")
+        counts_as_holiday_payment = form.get("counts_as_holiday_payment") == "on"
 
         if not start_date_str or not end_date_str or not name:
             raise ValueError("חובה למלא שם, תאריך התחלה ותאריך סיום")
@@ -518,12 +524,12 @@ async def add_special_day(request: Request) -> RedirectResponse:
             conn.execute("""
                 INSERT INTO special_days
                     (name, start_date, start_time, end_date, end_time,
-                     rate_pct, standby_mode, city_filter)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                     rate_pct, standby_mode, counts_as_holiday_payment, city_filter)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 name, start_date_str, start_time,
                 end_date_str, end_time, rate_pct, standby_mode,
-                city_filter,
+                counts_as_holiday_payment, city_filter,
             ))
             conn.commit()
 

@@ -631,11 +631,13 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
     from core.holiday_payment import calculate_holiday_payments
 
     person_types = {p["id"]: p["type"] for p in people}
+    person_is_married = {p["id"]: bool(p["is_married"]) for p in people}
     holiday_payments = calculate_holiday_payments(
         conn, year, month, shabbat_cache, minimum_wage,
         all_reports=all_reports,
         person_types=person_types,
         person_start_dates=person_work_start_dates,
+        person_is_married=person_is_married,
         housing_filter=housing_filter,
     )
 

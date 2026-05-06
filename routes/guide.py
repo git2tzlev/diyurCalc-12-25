@@ -7,7 +7,7 @@ from __future__ import annotations
 import calendar
 import time
 import logging
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional, Dict, List
 
 from fastapi import Request, HTTPException
@@ -34,7 +34,13 @@ from core.constants import (
     COMPLETION_APARTMENT_IDS,
     is_asd_housing_array,
 )
-from core.holiday_payment import calculate_holiday_payments
+from core.holiday_payment import (
+    calculate_holiday_payments,
+    get_holiday_payment_setup,
+    get_holiday_payment_dates_in_month,
+    save_holiday_payment_setup,
+    _has_sufficient_seniority,
+)
 from utils.utils import month_range_ts, format_currency, format_currency_total, human_date
 
 logger = logging.getLogger(__name__)
@@ -106,6 +112,154 @@ def _inject_holiday_payment(
         monthly_totals["rounded_total"] = monthly_totals.get("rounded_total", 0) + hp_rounded
 
 
+
+
+def _as_date(value) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return None
+
+
+def _build_holiday_payment_chain_summary(
+    conn,
+    person_id: int,
+    year: int,
+    month: int,
+    shabbat_cache: dict,
+    minimum_wage: float,
+    housing_filter: int | None,
+) -> dict:
+    """פירוט תשלום חג לתצוגה בתחתית דוח הרצפים."""
+    holiday_dates, work_dates_by_holiday = get_holiday_payment_dates_in_month(
+        conn.conn, year, month, shabbat_cache
+    )
+    summary = {
+        "has_holiday_dates": bool(holiday_dates),
+        "holiday_dates": [d.strftime("%d/%m/%Y") for d in holiday_dates],
+        "amount": 0.0,
+        "count": 0,
+        "rate": 0.0,
+        "status": "none",
+        "calculation": "",
+        "notes": [],
+    }
+    if not holiday_dates:
+        return summary
+
+    person = conn.execute(
+        "SELECT id, type, work_start_date FROM people WHERE id = %s",
+        (person_id,),
+    ).fetchone()
+    if not person or person.get("type") != PERMANENT_EMPLOYEE_TYPE:
+        summary["status"] = "cancelled"
+        summary["notes"].append("לא שולם: העובד אינו מדריך קבוע.")
+        return summary
+
+    start_date = _as_date(person.get("work_start_date"))
+    has_seniority = _has_sufficient_seniority(start_date, year, month)
+
+    hp_map = calculate_holiday_payments(
+        conn.conn, year, month, shabbat_cache, minimum_wage,
+        housing_filter=housing_filter,
+    )
+    hp_data = hp_map.get(person_id)
+    if hp_data:
+        summary["amount"] = round(float(hp_data.get("amount") or 0), 2)
+        summary["count"] = int(hp_data.get("count") or 0)
+        summary["rate"] = round(float(hp_data.get("rate") or 0), 2)
+    if summary["amount"] > 0:
+        summary["status"] = "paid"
+        summary["calculation"] = (
+            f"{summary['count']} ימי חג × {summary['rate']:.2f} ₪ = {summary['amount']:.2f} ₪"
+        )
+    else:
+        summary["status"] = "cancelled"
+
+    if not has_seniority:
+        summary["notes"].append("לא שולם/בוטל: אין ותק של 3 חודשים בתחילת חודש הדיווח.")
+
+    start_dt, end_dt = month_range_ts(year, month)
+    if housing_filter is not None:
+        reports = conn.execute("""
+            SELECT tr.apartment_id, tr.date, ap.name AS apartment_name
+            FROM time_reports tr
+            JOIN apartments ap ON ap.id = tr.apartment_id
+            WHERE tr.person_id = %s
+              AND tr.date >= %s AND tr.date < %s
+              AND ap.housing_array_id = %s
+        """, (person_id, start_dt.date(), end_dt.date(), housing_filter)).fetchall()
+    else:
+        reports = conn.execute("""
+            SELECT tr.apartment_id, tr.date, ap.name AS apartment_name
+            FROM time_reports tr
+            LEFT JOIN apartments ap ON ap.id = tr.apartment_id
+            WHERE tr.person_id = %s
+              AND tr.date >= %s AND tr.date < %s
+        """, (person_id, start_dt.date(), end_dt.date())).fetchall()
+
+    reports_by_apartment: dict[int, list[dict]] = {}
+    month_apartments: set[int] = set()
+    for report in reports:
+        apt_id = report.get("apartment_id")
+        report_date = _as_date(report.get("date"))
+        if not apt_id or not report_date:
+            continue
+        month_apartments.add(apt_id)
+        reports_by_apartment.setdefault(apt_id, []).append({
+            "date": report_date,
+            "apartment_name": report.get("apartment_name") or "",
+        })
+
+    saved_rows = conn.execute("""
+        SELECT apartment_id, guide_1_id, guide_2_id
+        FROM holiday_payment_apartment_guides
+        WHERE year = %s AND month = %s
+          AND (%s IN (guide_1_id, guide_2_id))
+    """, (year, month, person_id)).fetchall()
+    saved_any = conn.execute("""
+        SELECT 1
+        FROM holiday_payment_apartment_guides
+        WHERE year = %s AND month = %s
+        LIMIT 1
+    """, (year, month)).fetchone()
+    candidate_apartments = {row["apartment_id"] for row in saved_rows} if saved_any else month_apartments
+
+    if not candidate_apartments:
+        summary["notes"].append("לא שולם: המדריך לא משויך כמדריך קבוע לדירה בחודש זה.")
+
+    for holiday_date in holiday_dates:
+        work_dates = work_dates_by_holiday.get(holiday_date, {holiday_date})
+        worked_apartments = []
+        for apt_id in candidate_apartments:
+            for report in reports_by_apartment.get(apt_id, []):
+                if report["date"] in work_dates:
+                    worked_apartments.append(report["apartment_name"] or f"דירה {apt_id}")
+                    break
+        if worked_apartments:
+            apt_text = ", ".join(sorted(set(worked_apartments)))
+            summary["notes"].append(
+                f"{holiday_date.strftime('%d/%m/%Y')}: לא שולם עבור {apt_text} כי יש דיווח עבודה ביום/חלון החג."
+            )
+        elif has_seniority and summary["amount"] <= 0 and candidate_apartments:
+            summary["notes"].append(
+                f"{holiday_date.strftime('%d/%m/%Y')}: לא שולם לפי ניהול תשלום חג לחודש זה."
+            )
+
+    if summary["amount"] <= 0 and not summary["calculation"]:
+        summary["calculation"] = "0 ימי חג לתשלום = 0.00 ₪"
+
+    seen = set()
+    unique_notes = []
+    for note in summary["notes"]:
+        if note not in seen:
+            seen.add(note)
+            unique_notes.append(note)
+    summary["notes"] = unique_notes
+    return summary
 
 
 def _sort_shift_rows_for_display(shifts_data: list[dict]) -> list[dict]:
@@ -428,6 +582,7 @@ def guide_view(
         # Prepare months options for template
         months_options = [{"year": y, "month": m, "label": f"{m:02d}/{y}"} for y, m in months]
 
+        shabbat_cache = None
         if not months:
             selected_year, selected_month = year or datetime.now().year, month or datetime.now().month
             # שליפת שכר מינימום לפי החודש הנבחר
@@ -531,6 +686,15 @@ def guide_view(
             }
 
         guide_notes = _fetch_notes(conn, person_id, selected_year, selected_month)
+        if shabbat_cache is None:
+            shabbat_cache = get_shabbat_times_cache(conn.conn)
+        holiday_payment_setup = get_holiday_payment_setup(
+            conn.conn, selected_year, selected_month, shabbat_cache, housing_filter,
+        )
+        holiday_payment_chain_summary = _build_holiday_payment_chain_summary(
+            conn, person_id, selected_year, selected_month, shabbat_cache,
+            MINIMUM_WAGE, housing_filter,
+        )
 
         # בדיקת מדריך במספר מערכי דיור
         other_housing_arrays: list[str] = []
@@ -564,6 +728,8 @@ def guide_view(
             "total_standby_count": total_standby_count,
             "guide_notes": guide_notes,
             "other_housing_arrays": other_housing_arrays,
+            "holiday_payment_setup": holiday_payment_setup,
+            "holiday_payment_chain_summary": holiday_payment_chain_summary,
         },
     )
     render_time = time.time() - render_start
@@ -1322,14 +1488,21 @@ def _prepare_chains_pdf_data(conn, person_id: int, year: int, month: int) -> Opt
         year, month, shabbat_cache,
         MINIMUM_WAGE, hf,
     )
+    holiday_payment_chain_summary = _build_holiday_payment_chain_summary(
+        conn, person_id, year, month, shabbat_cache, MINIMUM_WAGE, hf,
+    )
     daily_segments = _prepare_daily_segments_for_display(daily_segments)
+    monthly_report = prepare_guide_pdf_data(conn, person_id, year, month, hf)
 
     return {
         "person": person,
         "daily_segments": daily_segments,
         "monthly_totals": monthly_totals,
+        "monthly_report": monthly_report,
+        "minimum_wage": MINIMUM_WAGE,
         "selected_month": month,
         "selected_year": year,
+        "holiday_payment_chain_summary": holiday_payment_chain_summary,
         "generation_time": datetime.now().strftime("%d/%m/%Y %H:%M"),
     }
 
@@ -1595,3 +1768,35 @@ async def delete_guide_note(request: Request, note_id: int) -> JSONResponse:
         conn.conn.commit()
 
     return JSONResponse({"success": True})
+
+
+def get_holiday_payment_setup_api(request: Request, year: int, month: int) -> JSONResponse:
+    """API: נתוני ניהול תשלום חג לחודש."""
+    housing_filter = get_housing_array_filter()
+    with get_conn() as conn:
+        shabbat_cache = get_shabbat_times_cache(conn.conn)
+        setup = get_holiday_payment_setup(conn.conn, year, month, shabbat_cache, housing_filter)
+    return JSONResponse(setup)
+
+
+async def save_holiday_payment_setup_api(request: Request) -> JSONResponse:
+    """API: שמירת ניהול תשלום חג לחודש."""
+    data = await request.json()
+    year = int(data.get("year") or 0)
+    month = int(data.get("month") or 0)
+    rows = data.get("rows") or []
+    if year <= 0 or month < 1 or month > 12:
+        return JSONResponse({"success": False, "error": "חודש או שנה לא תקינים"}, status_code=400)
+    if not isinstance(rows, list):
+        return JSONResponse({"success": False, "error": "מבנה נתונים לא תקין"}, status_code=400)
+
+    housing_filter = get_housing_array_filter()
+    try:
+        with get_conn() as conn:
+            save_holiday_payment_setup(conn.conn, year, month, rows, housing_filter)
+        return JSONResponse({"success": True})
+    except ValueError as exc:
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=400)
+    except Exception as exc:
+        logger.error("Error saving holiday payment setup: %s", exc, exc_info=True)
+        return JSONResponse({"success": False, "error": "שגיאה בשמירת תשלום חג"}, status_code=500)

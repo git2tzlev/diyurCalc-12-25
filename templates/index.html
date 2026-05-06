@@ -25,7 +25,45 @@
     {% if selected_month and selected_year %}
       <span class="muted">חודש מוצג: {{ "%02d"|format(selected_month) }}/{{ selected_year }}</span>
     {% endif %}
+    {% if holiday_payment_setup and holiday_payment_setup.has_holidays %}
+      <button type="button" onclick="openHolidayPaymentModal()" style="margin-right:auto; background:#0f766e; color:#fff;">ניהול תשלום חג</button>
+    {% endif %}
   </form>
+
+  {% if holiday_payment_setup and holiday_payment_setup.has_holidays %}
+  <div id="holidayPaymentModal" role="dialog" aria-modal="true"
+    data-should-open="{{ '1' if not holiday_payment_setup.is_configured else '0' }}"
+    onclick="if (event.target === this) closeHolidayPaymentModal()"
+    style="display:none; position:fixed; inset:0; background:rgba(15,23,42,0.48); z-index:1100; justify-content:center; align-items:center; padding:18px;">
+    <div onclick="event.stopPropagation()" style="background:#fff; border-radius:8px; width:min(1120px, 96vw); max-height:88vh; overflow:hidden; direction:rtl; box-shadow:0 24px 60px rgba(15,23,42,0.28); display:flex; flex-direction:column;">
+      <div style="padding:16px 20px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; gap:12px;">
+        <div>
+          <h3 style="margin:0; font-size:18px; color:#0f172a;">ניהול תשלום חג - {{ "%02d"|format(selected_month) }}/{{ selected_year }}</h3>
+          <div style="font-size:12px; color:#64748b; margin-top:4px;">ימי חג: {{ holiday_payment_setup.holiday_dates | join(', ') }}</div>
+        </div>
+        <button type="button" onclick="closeHolidayPaymentModal()" style="border:1px solid #cbd5e1; background:#fff; border-radius:6px; padding:6px 10px; cursor:pointer;">סגור</button>
+      </div>
+      <div id="holidayPaymentStatus" style="display:none; margin:12px 20px 0; padding:10px 12px; border-radius:6px; font-size:13px;"></div>
+      <div style="overflow:auto; padding:14px 20px;">
+        <table style="width:100%; border-collapse:collapse; font-size:13px;">
+          <thead>
+            <tr style="background:#f1f5f9;">
+              <th style="padding:8px; text-align:right; border:1px solid #e2e8f0;">דירה</th>
+              <th style="padding:8px; text-align:right; border:1px solid #e2e8f0;">הצעה לפי דיווחים</th>
+              <th style="padding:8px; text-align:right; border:1px solid #e2e8f0;">מדריך 1</th>
+              <th style="padding:8px; text-align:right; border:1px solid #e2e8f0;">מדריך 2</th>
+            </tr>
+          </thead>
+          <tbody id="holidayPaymentRows"></tbody>
+        </table>
+      </div>
+      <div style="padding:14px 20px; border-top:1px solid #e2e8f0; display:flex; justify-content:flex-end; gap:10px; background:#f8fafc;">
+        <button type="button" onclick="closeHolidayPaymentModal()" style="padding:9px 16px; border:1px solid #cbd5e1; background:#fff; border-radius:6px; cursor:pointer;">ביטול</button>
+        <button type="button" id="holidayPaymentSaveBtn" onclick="saveHolidayPaymentSetup()" style="padding:9px 18px; border:none; background:#0f766e; color:#fff; border-radius:6px; cursor:pointer; font-weight:700;">שמור וחישוב מחדש</button>
+      </div>
+    </div>
+  </div>
+  {% endif %}
 
   <div style="display: flex; gap: 8px; margin-bottom: 15px; flex-wrap: wrap; align-items: center;">
     <a href="/summary?year={{ selected_year }}&month={{ selected_month }}" style="text-decoration: none; padding: 8px 16px; background: #28a745; color: white; border-radius: 6px; font-weight: 500;">סיכום שכר כללי</a>
@@ -144,6 +182,138 @@
 </style>
 
 <script>
+  let holidayPaymentSetupData = null;
+
+  function closeHolidayPaymentModal() {
+    const modal = document.getElementById('holidayPaymentModal');
+    if (modal) modal.style.display = 'none';
+  }
+
+  function buildHolidayGuideSelect(guides, selectedId) {
+    const select = document.createElement('select');
+    select.style.width = '100%';
+    select.style.padding = '7px 8px';
+    select.style.border = '1px solid #cbd5e1';
+    select.style.borderRadius = '6px';
+    select.style.background = '#fff';
+    select.style.fontSize = '13px';
+
+    const empty = document.createElement('option');
+    empty.value = '';
+    empty.textContent = 'ללא';
+    select.appendChild(empty);
+
+    guides.forEach(guide => {
+      const option = document.createElement('option');
+      option.value = guide.id;
+      option.textContent = guide.name;
+      if (String(guide.id) === String(selectedId || '')) option.selected = true;
+      select.appendChild(option);
+    });
+    return select;
+  }
+
+  function renderHolidayPaymentRows(data) {
+    const tbody = document.getElementById('holidayPaymentRows');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+    data.rows.forEach(row => {
+      const tr = document.createElement('tr');
+      tr.dataset.apartmentId = row.apartment_id;
+
+      const apartmentCell = document.createElement('td');
+      apartmentCell.style.cssText = 'padding:8px; border:1px solid #e2e8f0; font-weight:600;';
+      apartmentCell.textContent = row.apartment_name;
+      tr.appendChild(apartmentCell);
+
+      const suggestionCell = document.createElement('td');
+      suggestionCell.style.cssText = 'padding:8px; border:1px solid #e2e8f0; color:#475569;';
+      suggestionCell.textContent = row.suggestions && row.suggestions.length
+        ? row.suggestions.map(item => `${item.person_name} (${item.work_days} ימים)`).join(' | ')
+        : '-';
+      tr.appendChild(suggestionCell);
+
+      const guide1Cell = document.createElement('td');
+      guide1Cell.style.cssText = 'padding:8px; border:1px solid #e2e8f0;';
+      const guide1Select = buildHolidayGuideSelect(data.guides, row.guide_1_id);
+      guide1Select.className = 'holiday-guide-1';
+      guide1Cell.appendChild(guide1Select);
+      tr.appendChild(guide1Cell);
+
+      const guide2Cell = document.createElement('td');
+      guide2Cell.style.cssText = 'padding:8px; border:1px solid #e2e8f0;';
+      const guide2Select = buildHolidayGuideSelect(data.guides, row.guide_2_id);
+      guide2Select.className = 'holiday-guide-2';
+      guide2Cell.appendChild(guide2Select);
+      tr.appendChild(guide2Cell);
+
+      tbody.appendChild(tr);
+    });
+  }
+
+  async function openHolidayPaymentModal() {
+    const modal = document.getElementById('holidayPaymentModal');
+    const status = document.getElementById('holidayPaymentStatus');
+    if (!modal) return;
+    modal.style.display = 'flex';
+    if (status) status.style.display = 'none';
+
+    try {
+      const response = await fetch(`/api/holiday-payment-setup?year={{ selected_year }}&month={{ selected_month }}`);
+      holidayPaymentSetupData = await response.json();
+      renderHolidayPaymentRows(holidayPaymentSetupData);
+    } catch (err) {
+      if (status) {
+        status.style.display = 'block';
+        status.style.background = '#fef2f2';
+        status.style.color = '#991b1b';
+        status.textContent = 'שגיאה בטעינת ניהול תשלום חג: ' + err.message;
+      }
+    }
+  }
+
+  async function saveHolidayPaymentSetup() {
+    const rows = [];
+    const status = document.getElementById('holidayPaymentStatus');
+    const saveBtn = document.getElementById('holidayPaymentSaveBtn');
+    document.querySelectorAll('#holidayPaymentRows tr').forEach(tr => {
+      const guide1 = tr.querySelector('.holiday-guide-1')?.value || null;
+      const guide2 = tr.querySelector('.holiday-guide-2')?.value || null;
+      rows.push({
+        apartment_id: Number(tr.dataset.apartmentId),
+        guide_1_id: guide1,
+        guide_2_id: guide1 ? guide2 : null
+      });
+    });
+
+    if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'שומר...';
+    }
+    try {
+      const response = await fetch('/api/holiday-payment-setup', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({year: {{ selected_year or 0 }}, month: {{ selected_month or 0 }}, rows})
+      });
+      const data = await response.json();
+      if (!data.success) throw new Error(data.error || 'שגיאה בשמירה');
+      location.reload();
+    } catch (err) {
+      if (status) {
+        status.style.display = 'block';
+        status.style.background = '#fef2f2';
+        status.style.color = '#991b1b';
+        status.textContent = err.message;
+      }
+    } finally {
+      if (saveBtn) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'שמור וחישוב מחדש';
+      }
+    }
+  }
+
   function filterInstructors() {
     const searchInput = document.getElementById('q');
     const filterValue = searchInput.value.toLowerCase().trim();
@@ -195,6 +365,11 @@
   }
 
   document.addEventListener('DOMContentLoaded', function() {
+    const holidayModal = document.getElementById('holidayPaymentModal');
+    if (holidayModal && holidayModal.dataset.shouldOpen === '1') {
+      openHolidayPaymentModal();
+    }
+
     // Filter on page load if there's a search query
     const searchInput = document.getElementById('q');
     if (searchInput && searchInput.value) {
