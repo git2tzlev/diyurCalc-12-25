@@ -30,6 +30,13 @@
     max-width: 760px;
   }
 
+  .rules-stats {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
   .rules-count {
     min-width: 120px;
     padding: 10px 12px;
@@ -78,6 +85,65 @@
 
   .rules-section {
     margin-bottom: 22px;
+  }
+
+  .reference-table-card {
+    border: 1px solid #dbe3ef;
+    border-radius: 8px;
+    background: #fff;
+    margin-bottom: 14px;
+    overflow: hidden;
+  }
+
+  .reference-table-head {
+    padding: 12px 14px;
+    border-bottom: 1px solid #edf2f7;
+  }
+
+  .reference-table-head h4 {
+    margin: 0;
+    color: #0f172a;
+    font-size: 16px;
+  }
+
+  .reference-table-head p {
+    margin: 5px 0 0;
+    color: #64748b;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+
+  .reference-table-wrap {
+    overflow-x: auto;
+  }
+
+  .reference-table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 760px;
+    font-size: 13px;
+  }
+
+  .reference-table th {
+    background: #f1f5f9;
+    color: #0f172a;
+    font-weight: 800;
+    text-align: right;
+    border-bottom: 1px solid #dbe3ef;
+    padding: 9px 10px;
+    white-space: nowrap;
+  }
+
+  .reference-table td {
+    color: #334155;
+    border-bottom: 1px solid #edf2f7;
+    padding: 9px 10px;
+    vertical-align: top;
+    line-height: 1.55;
+  }
+
+  .reference-table tbody tr:nth-child(even) td {
+    background: #fbfdff;
   }
 
   .rules-section-header {
@@ -196,20 +262,70 @@
         שכבת תיעוד חיה: כל שינוי כלל בקוד צריך לעדכן גם את הקטלוג.
       </p>
     </div>
-    <div class="rules-count">
-      <strong>{{ total_rules }}</strong>
-      <span>כללים ממופים</span>
+    <div class="rules-stats">
+      <div class="rules-count">
+        <strong>{{ total_rules }}</strong>
+        <span>כללים ממופים</span>
+      </div>
+      <div class="rules-count">
+        <strong>{{ total_tables }}</strong>
+        <span>טבלאות ייחוס</span>
+      </div>
     </div>
   </div>
 
   <div class="rules-layout">
     <aside class="rules-sidebar">
+      {% if reference_tables %}
+      <a href="#reference-tables">טבלאות ייחוס</a>
+      {% endif %}
       {% for section in sections %}
       <a href="#{{ section.key }}">{{ section.title }}</a>
       {% endfor %}
     </aside>
 
     <main>
+      {% if reference_tables %}
+      <section class="rules-section" id="reference-tables">
+        <div class="rules-section-header">
+          <h3>טבלאות ייחוס</h3>
+          <p>סיכום מרוכז של סוגים, קודים וספים שהקוד משתמש בהם בפועל.</p>
+        </div>
+
+        {% for table in reference_tables %}
+        <article class="reference-table-card" id="table-{{ table.key }}">
+          <div class="reference-table-head">
+            <h4>{{ table.title }}</h4>
+            <p>{{ table.description }}</p>
+          </div>
+          <div class="reference-table-wrap">
+            <table class="reference-table">
+              <thead>
+                <tr>
+                  {% for column in table.columns %}
+                  <th>{{ column }}</th>
+                  {% endfor %}
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in table.rows %}
+                <tr>
+                  {% for cell in row %}
+                  <td>{{ cell }}</td>
+                  {% endfor %}
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% if table.source %}
+          <div class="rule-source">{{ table.source | join(' · ') }}</div>
+          {% endif %}
+        </article>
+        {% endfor %}
+      </section>
+      {% endif %}
+
       {% for section in sections %}
       <section class="rules-section" id="{{ section.key }}">
         <div class="rules-section-header">

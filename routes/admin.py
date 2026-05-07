@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from core.config import config
 from core.database import get_conn
-from core.business_rules_catalog import get_business_rule_sections
+from core.business_rules_catalog import get_business_rule_reference_tables, get_business_rule_sections
 from core.logic import get_payment_codes
 from core.auth import is_super_admin
 from scripts.db_sync import sync_database, check_demo_database_status
@@ -103,11 +103,14 @@ def business_rules_page(request: Request) -> HTMLResponse:
     """דף כללים עסקיים כפי שממופים מהקוד. רק למנהל על."""
     _require_super_admin(request)
     sections = get_business_rule_sections()
+    reference_tables = get_business_rule_reference_tables()
     total_rules = sum(len(section.rules) for section in sections)
     return templates.TemplateResponse("business_rules.html", {
         "request": request,
         "sections": sections,
+        "reference_tables": reference_tables,
         "total_rules": total_rules,
+        "total_tables": len(reference_tables),
     })
 
 
