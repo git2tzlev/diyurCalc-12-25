@@ -16,6 +16,7 @@ from fastapi.templating import Jinja2Templates
 from core.config import config
 from core.database import (
     get_conn,
+    get_default_period,
     get_housing_array_filter,
     get_multi_housing_guides,
     set_housing_array_filter,
@@ -44,6 +45,8 @@ from core.holiday_payment import (
     _get_special_holiday_payment_window_details,
     _report_overlaps_special_holiday_window,
 )
+from core.auth import enforce_housing_filter_guide_access
+from services.pdf_renderer import render_html_to_pdf_bytes
 from utils.utils import month_range_ts, format_currency, format_currency_total, human_date
 
 logger = logging.getLogger(__name__)
@@ -54,6 +57,7 @@ templates.env.filters["human_date"] = human_date
 templates.env.globals["app_version"] = config.VERSION
 
 COMPLETION_APARTMENT_NAME = "השלמות"
+GENERIC_ERROR = "שגיאת מערכת. נסי שוב מאוחר יותר"
 
 
 def _is_completion_apartment(apartment_id: Optional[int] = None, apartment_name: Optional[str] = None) -> bool:
@@ -68,22 +72,8 @@ def _is_completion_apartment(apartment_id: Optional[int] = None, apartment_name:
 
 
 def _validate_guide_access(person_id: int, housing_filter: Optional[int]) -> None:
-    """
-    בודק שלמשתמש יש הרשאה לצפות במדריך.
-    זורק HTTPException 403 אם אין הרשאה.
-    """
-    if housing_filter is None:
-        return  # מנהל על - יכול לראות הכל
-
-    # בדוק שהמדריך שייך למערך הדיור של המשתמש
-    with get_conn() as conn:
-        row = conn.execute(
-            "SELECT housing_array_id FROM people WHERE id = %s",
-            (person_id,)
-        ).fetchone()
-
-        if not row or row["housing_array_id"] != housing_filter:
-            raise HTTPException(status_code=403, detail="אין הרשאה לצפות במדריך זה")
+    """בדיקת הרשאת צפייה במדריך לפי פילטר מערך דיור."""
+    enforce_housing_filter_guide_access(person_id, housing_filter)
 
 
 def _inject_holiday_payment(
@@ -831,7 +821,7 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
         Dict עם כל הנתונים הנדרשים לתבנית guide_shifts_pdf.html, או None אם המדריך לא נמצא
     """
     import calendar
-    from core.time_utils import span_minutes, get_shabbat_times_cache
+    from core.time_utils import get_shabbat_times_cache
     from core.history import get_minimum_wage_for_month
 
     person = conn.execute(
@@ -1107,35 +1097,119 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
         total_additions += monthly_totals["holiday_payment"]
         total_additions_no_travel += monthly_totals["holiday_payment"]
 
-    # ASD: פירוט לפי תעריפי בסיס שונים (רק אם יש יותר מתעריף אחד)
+    # פירוט שורות תלוש/גשר שבהן יש פילוג תעריפים.
+    # ב-ASD מציגים רק רכיבי שכר שבהם אותה שורת תלוש מורכבת מיותר מתעריף בסיס אחד.
     is_asd = housing_filter is not None and is_asd_housing_array(housing_filter)
-    variable_by_shift = {}
+    variable_shifts = []
+    variable_rate_total_from_rows = 0.0  # סה"כ מחושב מהשורות המעוגלות
+    show_asd_breakdown = False
+
     if is_asd:
-        asd_distinct_rates: set[float] = set()
+        component_labels = {
+            "calc100": "שעות רגילות (100%)",
+            "calc125": "שעות נוספות (125%)",
+            "calc150_overtime": "שעות נוספות (150%)",
+            "calc150_shabbat_100": "שעות שבת - בסיס (100%)",
+            "calc150_shabbat_50": "שעות שבת - תוספת (50%)",
+            "calc175": "שעות שבת (175%)",
+            "calc200": "שעות שבת (200%)",
+        }
+        component_multipliers = {
+            "calc100": 1.0,
+            "calc125": 1.25,
+            "calc150_overtime": 1.5,
+            "calc150_shabbat_100": 1.0,
+            "calc150_shabbat_50": 0.5,
+            "calc175": 1.75,
+            "calc200": 2.0,
+        }
+        variable_by_component = {}
+
+        def add_component_breakdown(component_key: str, minutes: int | float, chain: dict, rate: float) -> None:
+            if minutes <= 0:
+                return
+            rounded_rate = round(rate, 2)
+            apartment_type_name = (chain.get("apartment_type_name") or "").replace("דירה ", "").strip()
+            supplement_parts = []
+            apartment_supplement = chain.get("apartment_hourly_supplement_nis", 0) or 0
+            if apartment_supplement > 0:
+                supplement_parts.append(f"+{apartment_supplement:.2f} סוג דירה")
+            asd_seniority_supplement = chain.get("asd_seniority_supplement_nis", 0) or 0
+            if asd_seniority_supplement > 0:
+                supplement_parts.append(f"+{asd_seniority_supplement:.2f} ותק ASD")
+            reason = " | ".join([part for part in [apartment_type_name, ", ".join(supplement_parts)] if part]) or "-"
+            group_key = (component_key, rounded_rate, reason)
+            if group_key not in variable_by_component:
+                variable_by_component[group_key] = {
+                    "component_key": component_key,
+                    "shift_name": component_labels[component_key],
+                    "minutes": 0,
+                    "payment": 0.0,
+                    "rate": rounded_rate,
+                    "multiplier": component_multipliers[component_key],
+                    "reason": reason,
+                }
+            hours = round(minutes / 60, 2)
+            variable_by_component[group_key]["minutes"] += minutes
+            variable_by_component[group_key]["payment"] += hours * round(
+                rounded_rate * component_multipliers[component_key], 2
+            )
+
         for day in daily_segments:
             for chain in day.get("chains", []):
-                if chain.get("type", "work") == "work":
-                    asd_distinct_rates.add(round(chain.get("effective_rate", MINIMUM_WAGE), 2))
-        show_asd_breakdown = len(asd_distinct_rates) > 1
-    else:
-        show_asd_breakdown = False
+                if chain.get("type", "work") != "work":
+                    continue
+                chain_rate = chain.get("effective_rate", MINIMUM_WAGE) or MINIMUM_WAGE
+                add_component_breakdown("calc100", chain.get("calc100", 0) or 0, chain, chain_rate)
+                add_component_breakdown("calc125", chain.get("calc125", 0) or 0, chain, chain_rate)
+                add_component_breakdown("calc150_overtime", chain.get("calc150_overtime", 0) or 0, chain, chain_rate)
+                shabbat_150_minutes = chain.get("calc150_shabbat", 0) or 0
+                add_component_breakdown("calc150_shabbat_100", shabbat_150_minutes, chain, chain_rate)
+                add_component_breakdown("calc150_shabbat_50", shabbat_150_minutes, chain, chain_rate)
+                add_component_breakdown("calc175", chain.get("calc175", 0) or 0, chain, chain_rate)
+                add_component_breakdown("calc200", chain.get("calc200", 0) or 0, chain, chain_rate)
 
-    for day in daily_segments:
-        for chain in day.get("chains", []):
-            chain_shift_name = chain.get("shift_name", "") or ""
-            chain_rate = chain.get("effective_rate", MINIMUM_WAGE) or MINIMUM_WAGE
+        component_rates = {}
+        for (component_key, rate, _reason) in variable_by_component.keys():
+            component_rates.setdefault(component_key, set()).add(rate)
+        component_keys_with_multiple_rates = {
+            component_key for component_key, rates in component_rates.items() if len(rates) > 1
+        }
+        show_asd_breakdown = bool(component_keys_with_multiple_rates)
 
-            if not chain_shift_name:
+        for data in variable_by_component.values():
+            if data["component_key"] not in component_keys_with_multiple_rates:
                 continue
+            hours = round(data["minutes"] / 60, 2)
+            payment = round(data["payment"], 1)
+            base_payment = round(hours * data["rate"], 2)
+            overtime_payment = round(payment - base_payment, 1)
+            variable_shifts.append({
+                "shift_name": data["shift_name"],
+                "hours": hours,
+                "rate": data["rate"],
+                "overtime_payment": overtime_payment,
+                "payment": payment,
+                "reason": data["reason"],
+            })
+            variable_rate_total_from_rows += payment
 
-            if is_asd:
-                is_variable_rate = show_asd_breakdown and chain.get("type", "work") == "work"
-            else:
+    else:
+        variable_by_shift = {}
+        for day in daily_segments:
+            for chain in day.get("chains", []):
+                chain_shift_name = chain.get("shift_name", "") or ""
+                chain_rate = chain.get("effective_rate", MINIMUM_WAGE) or MINIMUM_WAGE
+
+                if not chain_shift_name:
+                    continue
+
                 is_special_hourly = chain.get("is_special_hourly", False)
                 supplement = float(chain.get("hourly_wage_supplement", 0)) / 100
                 is_variable_rate = is_special_hourly or abs(chain_rate - MINIMUM_WAGE - supplement) > 0.01
+                if not is_variable_rate:
+                    continue
 
-            if is_variable_rate:
                 calc100 = chain.get("calc100", 0) or 0
                 calc125 = chain.get("calc125", 0) or 0
                 calc150 = chain.get("calc150", 0) or 0
@@ -1149,18 +1223,12 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
                     continue
 
                 rounded_rate = round(chain_rate, 2)
-                h100 = round(calc100 / 60, 2)
-                h125 = round(calc125 / 60, 2)
-                h150 = round(calc150 / 60, 2)
-                h175 = round(calc175 / 60, 2)
-                h200 = round(calc200 / 60, 2)
-
                 gesher_payment = (
-                    h100 * 1.0 * rounded_rate +
-                    h125 * 1.25 * rounded_rate +
-                    h150 * 1.5 * rounded_rate +
-                    h175 * 1.75 * rounded_rate +
-                    h200 * 2.0 * rounded_rate +
+                    round(calc100 / 60, 2) * 1.0 * rounded_rate +
+                    round(calc125 / 60, 2) * 1.25 * rounded_rate +
+                    round(calc150 / 60, 2) * 1.5 * rounded_rate +
+                    round(calc175 / 60, 2) * 1.75 * rounded_rate +
+                    round(calc200 / 60, 2) * 2.0 * rounded_rate +
                     (chain.get("escort_bonus_pay", 0) or 0)
                 )
 
@@ -1171,47 +1239,41 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
                         "minutes": 0,
                         "shabbat_minutes": 0,
                         "payment": 0,
-                        "rate": rounded_rate
+                        "rate": rounded_rate,
                     }
                 variable_by_shift[group_key]["minutes"] += total_minutes
                 variable_by_shift[group_key]["shabbat_minutes"] += shabbat_minutes
                 variable_by_shift[group_key]["payment"] += gesher_payment
 
-    # בדיקה אילו משמרות יש להן תעריפים שונים
-    shift_names_with_multiple_rates = set()
-    shift_name_rates = {}
-    for (shift_name, rate), data in variable_by_shift.items():
-        if shift_name not in shift_name_rates:
-            shift_name_rates[shift_name] = set()
-        shift_name_rates[shift_name].add(rate)
-    for shift_name, rates in shift_name_rates.items():
-        if len(rates) > 1:
-            shift_names_with_multiple_rates.add(shift_name)
+        shift_name_rates = {}
+        for (shift_name, rate), _data in variable_by_shift.items():
+            shift_name_rates.setdefault(shift_name, set()).add(rate)
+        shift_names_with_multiple_rates = {
+            shift_name for shift_name, rates in shift_name_rates.items() if len(rates) > 1
+        }
 
-    variable_shifts = []
-    variable_rate_total_from_rows = 0.0  # סה"כ מחושב מהשורות המעוגלות
-    for group_key, data in variable_by_shift.items():
-        hours = round(data["minutes"] / 60, 2)
-        payment = round(data["payment"], 1)
-        rate = data["rate"]
-        base_shift_name = data["shift_name"]
+        for data in variable_by_shift.values():
+            hours = round(data["minutes"] / 60, 2)
+            payment = round(data["payment"], 1)
+            rate = data["rate"]
+            base_shift_name = data["shift_name"]
+            if base_shift_name in shift_names_with_multiple_rates:
+                is_shabbat = data["shabbat_minutes"] > (data["minutes"] * 0.5)
+                display_name = f"{base_shift_name} (שבת)" if is_shabbat else f"{base_shift_name} (חול)"
+            else:
+                display_name = base_shift_name
 
-        if base_shift_name in shift_names_with_multiple_rates:
-            is_shabbat = data["shabbat_minutes"] > (data["minutes"] * 0.5)
-            display_name = f"{base_shift_name} (שבת)" if is_shabbat else f"{base_shift_name} (חול)"
-        else:
-            display_name = base_shift_name
-
-        base_payment = round(hours * rate, 2)
-        overtime_payment = round(payment - base_payment, 1)
-        variable_shifts.append({
-            "shift_name": display_name,
-            "hours": hours,
-            "rate": rate,
-            "overtime_payment": overtime_payment,
-            "payment": payment
-        })
-        variable_rate_total_from_rows += payment  # סכימת הערכים המעוגלים
+            base_payment = round(hours * rate, 2)
+            overtime_payment = round(payment - base_payment, 1)
+            variable_shifts.append({
+                "shift_name": display_name,
+                "hours": hours,
+                "rate": rate,
+                "overtime_payment": overtime_payment,
+                "payment": payment,
+                "reason": "-",
+            })
+            variable_rate_total_from_rows += payment
 
     # חישוב תאריכי תקופה
     last_day = calendar.monthrange(year, month)[1]
@@ -1281,14 +1343,7 @@ def _generate_shifts_pdf(person_id: int, year: int, month: int, session_token: O
         month: חודש
         session_token: לא בשימוש (נשמר לתאימות)
     """
-    import subprocess
-    import tempfile
-    import os
-    import time as time_module
     from jinja2 import Environment, FileSystemLoader
-
-    temp_html_path = None
-    temp_pdf_path = None
 
     try:
         logger.info(f"Generating shifts PDF for person_id={person_id}, {month}/{year}")
@@ -1307,82 +1362,11 @@ def _generate_shifts_pdf(person_id: int, year: int, month: int, session_token: O
         template = env.get_template("guide_shifts_pdf.html")
         html_content = template.render(**pdf_data)
 
-        # שמירה לקובץ זמני
-        fd, temp_html_path = tempfile.mkstemp(suffix='.html')
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            f.write(html_content)
-
-        fd_pdf, temp_pdf_path = tempfile.mkstemp(suffix='.pdf')
-        os.close(fd_pdf)
-
-        # חיפוש דפדפן
-        browser_paths = [
-            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
-        ]
-
-        browser_exe = None
-        for path in browser_paths:
-            if os.path.exists(path):
-                browser_exe = path
-                break
-
-        if not browser_exe:
-            logger.error("No suitable browser found for PDF generation")
-            return None
-
-        cmd = [
-            browser_exe,
-            "--headless",
-            "--disable-gpu",
-            "--run-all-compositor-stages-before-draw",
-            "--virtual-time-budget=10000",
-            "--no-pdf-header-footer",
-            f"--print-to-pdf={temp_pdf_path}",
-            temp_html_path
-        ]
-
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-        )
-
-        try:
-            stdout, stderr = process.communicate(timeout=45)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-            return None
-        finally:
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
-
-        time_module.sleep(2)
-
-        if os.path.exists(temp_pdf_path) and os.path.getsize(temp_pdf_path) > 0:
-            with open(temp_pdf_path, "rb") as f:
-                return f.read()
-        return None
+        return render_html_to_pdf_bytes(html_content)
 
     except Exception as e:
         logger.error(f"Error generating shifts PDF: {e}", exc_info=True)
         return None
-
-    finally:
-        from services.email_service import safe_delete_file
-        if temp_html_path:
-            safe_delete_file(temp_html_path, initial_wait=1.0)
-        if temp_pdf_path:
-            safe_delete_file(temp_pdf_path, initial_wait=1.0)
 
 
 async def shifts_report_email(
@@ -1406,14 +1390,14 @@ async def shifts_report_email(
         try:
             body = await request.json()
             custom_email = body.get('email')
-        except:
+        except Exception:
             pass
 
     except HTTPException as e:
         return JSONResponse({"success": False, "error": e.detail}, status_code=e.status_code)
     except Exception as e:
         logger.error(f"Error in shifts_report_email setup: {e}", exc_info=True)
-        return JSONResponse({"success": False, "error": f"שגיאה: {str(e)}"})
+        return JSONResponse({"success": False, "error": GENERIC_ERROR})
 
     array_filter_for_thread = housing_filter
 
@@ -1477,7 +1461,7 @@ async def shifts_report_email(
 
         except Exception as e:
             logger.error(f"Error sending shifts email: {e}")
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": GENERIC_ERROR}
         finally:
             set_housing_array_filter(None)
 
@@ -1486,7 +1470,7 @@ async def shifts_report_email(
         return JSONResponse(result)
     except Exception as e:
         logger.error(f"Error in shifts_report_email execution: {e}", exc_info=True)
-        return JSONResponse({"success": False, "error": f"שגיאה בשליחת המייל: {str(e)}"})
+        return JSONResponse({"success": False, "error": GENERIC_ERROR})
 
 
 def _prepare_chains_pdf_data(conn, person_id: int, year: int, month: int) -> Optional[dict]:
@@ -1534,14 +1518,7 @@ def _prepare_chains_pdf_data(conn, person_id: int, year: int, month: int) -> Opt
 
 def _generate_chains_pdf(person_id: int, year: int, month: int) -> Optional[bytes]:
     """יצירת PDF לדוח רצפים באמצעות Edge/Chrome headless."""
-    import subprocess
-    import tempfile
-    import os
-    import time as time_module
     from jinja2 import Environment, FileSystemLoader
-
-    temp_html_path = None
-    temp_pdf_path = None
 
     try:
         logger.info(f"Generating chains PDF for person_id={person_id}, {month}/{year}")
@@ -1557,80 +1534,11 @@ def _generate_chains_pdf(person_id: int, year: int, month: int) -> Optional[byte
         template = env.get_template("guide_chains_pdf.html")
         html_content = template.render(**pdf_data)
 
-        fd, temp_html_path = tempfile.mkstemp(suffix='.html')
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            f.write(html_content)
-
-        fd_pdf, temp_pdf_path = tempfile.mkstemp(suffix='.pdf')
-        os.close(fd_pdf)
-
-        browser_paths = [
-            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
-        ]
-
-        browser_exe = None
-        for path in browser_paths:
-            if os.path.exists(path):
-                browser_exe = path
-                break
-
-        if not browser_exe:
-            logger.error("No suitable browser found for PDF generation")
-            return None
-
-        cmd = [
-            browser_exe,
-            "--headless",
-            "--disable-gpu",
-            "--run-all-compositor-stages-before-draw",
-            "--virtual-time-budget=10000",
-            "--no-pdf-header-footer",
-            f"--print-to-pdf={temp_pdf_path}",
-            temp_html_path
-        ]
-
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-        )
-
-        try:
-            stdout, stderr = process.communicate(timeout=45)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-            return None
-        finally:
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
-
-        time_module.sleep(2)
-
-        if os.path.exists(temp_pdf_path) and os.path.getsize(temp_pdf_path) > 0:
-            with open(temp_pdf_path, "rb") as f:
-                return f.read()
-        return None
+        return render_html_to_pdf_bytes(html_content)
 
     except Exception as e:
         logger.error(f"Error generating chains PDF: {e}", exc_info=True)
         return None
-
-    finally:
-        from services.email_service import safe_delete_file
-        if temp_html_path:
-            safe_delete_file(temp_html_path, initial_wait=1.0)
-        if temp_pdf_path:
-            safe_delete_file(temp_pdf_path, initial_wait=1.0)
 
 
 async def chains_report_email(
@@ -1651,14 +1559,14 @@ async def chains_report_email(
         try:
             body = await request.json()
             custom_email = body.get('email')
-        except:
+        except Exception:
             pass
 
     except HTTPException as e:
         return JSONResponse({"success": False, "error": e.detail}, status_code=e.status_code)
     except Exception as e:
         logger.error(f"Error in chains_report_email setup: {e}", exc_info=True)
-        return JSONResponse({"success": False, "error": f"שגיאה: {str(e)}"})
+        return JSONResponse({"success": False, "error": GENERIC_ERROR})
 
     array_filter_for_thread = housing_filter
 
@@ -1718,7 +1626,7 @@ async def chains_report_email(
 
         except Exception as e:
             logger.error(f"Error sending chains email: {e}")
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": GENERIC_ERROR}
         finally:
             set_housing_array_filter(None)
 
@@ -1727,7 +1635,7 @@ async def chains_report_email(
         return JSONResponse(result)
     except Exception as e:
         logger.error(f"Error in chains_report_email execution: {e}", exc_info=True)
-        return JSONResponse({"success": False, "error": f"שגיאה בשליחת המייל: {str(e)}"})
+        return JSONResponse({"success": False, "error": GENERIC_ERROR})
 
 
 # =============================================================================
@@ -1751,8 +1659,77 @@ def _fetch_notes(conn, person_id: int, year: int, month: int) -> List[dict]:
     return [dict(r) for r in rows]
 
 
+def _fetch_all_notes_for_month(
+    conn,
+    year: int,
+    month: int,
+    housing_filter: int | None = None,
+) -> List[dict]:
+    """שליפת כל הערות המדריכים לחודש, עם סינון מערך דיור אם קיים."""
+    if housing_filter is not None:
+        rows = conn.execute(
+            """
+            SELECT n.id, n.person_id, n.content, n.created_at, n.updated_at,
+                   guide.name AS guide_name,
+                   guide.id_number AS guide_id_number,
+                   creator.name AS created_by_name
+            FROM guide_monthly_notes n
+            JOIN people guide ON guide.id = n.person_id
+            LEFT JOIN people creator ON creator.id = n.created_by
+            WHERE n.year = %s AND n.month = %s
+              AND guide.housing_array_id = %s
+            ORDER BY guide.name, n.created_at DESC, n.id DESC
+            """,
+            (year, month, housing_filter),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT n.id, n.person_id, n.content, n.created_at, n.updated_at,
+                   guide.name AS guide_name,
+                   guide.id_number AS guide_id_number,
+                   creator.name AS created_by_name
+            FROM guide_monthly_notes n
+            JOIN people guide ON guide.id = n.person_id
+            LEFT JOIN people creator ON creator.id = n.created_by
+            WHERE n.year = %s AND n.month = %s
+            ORDER BY guide.name, n.created_at DESC, n.id DESC
+            """,
+            (year, month),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def guide_notes_management(
+    request: Request,
+    year: int | None = None,
+    month: int | None = None,
+) -> HTMLResponse:
+    """עמוד ניהול מרוכז לכל הערות המדריכים בחודש."""
+    if year is None or month is None:
+        default_year, default_month = get_default_period(request)
+        year = year or default_year
+        month = month or default_month
+
+    housing_filter = get_housing_array_filter()
+    with get_conn() as conn:
+        notes = _fetch_all_notes_for_month(conn, year, month, housing_filter)
+
+    return templates.TemplateResponse(
+        "guide_notes_management.html",
+        {
+            "request": request,
+            "notes": notes,
+            "selected_year": year,
+            "selected_month": month,
+            "years": list(range(2023, 2028)),
+        },
+    )
+
+
 def get_guide_notes(request: Request, person_id: int, year: int, month: int) -> JSONResponse:
     """API: שליפת הערות למדריך וחודש."""
+    _validate_guide_access(person_id, get_housing_array_filter())
     with get_conn() as conn:
         notes = _fetch_notes(conn, person_id, year, month)
     for n in notes:
@@ -1762,6 +1739,7 @@ def get_guide_notes(request: Request, person_id: int, year: int, month: int) -> 
 
 async def add_guide_note(request: Request, person_id: int) -> JSONResponse:
     """API: הוספת הערה למדריך."""
+    _validate_guide_access(person_id, get_housing_array_filter())
     data = await request.json()
     content = (data.get("content") or "").strip()
     year = data.get("year")
@@ -1771,7 +1749,7 @@ async def add_guide_note(request: Request, person_id: int) -> JSONResponse:
         return JSONResponse({"success": False, "error": "תוכן ההערה ריק"}, status_code=400)
 
     user = getattr(request.state, "current_user", None)
-    created_by = user["id"] if user else None
+    created_by = user.get("person_id") if user else None
 
     with get_conn() as conn:
         conn.execute(
@@ -1789,6 +1767,14 @@ async def add_guide_note(request: Request, person_id: int) -> JSONResponse:
 async def delete_guide_note(request: Request, note_id: int) -> JSONResponse:
     """API: מחיקת הערה."""
     with get_conn() as conn:
+        note = conn.execute(
+            "SELECT person_id FROM guide_monthly_notes WHERE id = %s",
+            (note_id,),
+        ).fetchone()
+        if not note:
+            return JSONResponse({"success": False, "error": "הערה לא נמצאה"}, status_code=404)
+
+        _validate_guide_access(note["person_id"], get_housing_array_filter())
         conn.execute("DELETE FROM guide_monthly_notes WHERE id = %s", (note_id,))
         conn.conn.commit()
 
@@ -1806,6 +1792,8 @@ def get_holiday_payment_setup_api(request: Request, year: int, month: int) -> JS
 
 async def save_holiday_payment_setup_api(request: Request) -> JSONResponse:
     """API: שמירת ניהול תשלום חג לחודש."""
+    from core.history import is_month_locked
+
     data = await request.json()
     year = int(data.get("year") or 0)
     month = int(data.get("month") or 0)
@@ -1818,6 +1806,11 @@ async def save_holiday_payment_setup_api(request: Request) -> JSONResponse:
     housing_filter = get_housing_array_filter()
     try:
         with get_conn() as conn:
+            if is_month_locked(conn.conn, year, month):
+                return JSONResponse(
+                    {"success": False, "error": "החודש נעול לעריכה"},
+                    status_code=400,
+                )
             save_holiday_payment_setup(conn.conn, year, month, rows, housing_filter)
         return JSONResponse({"success": True})
     except ValueError as exc:

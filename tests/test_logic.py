@@ -12,10 +12,13 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from app_utils import (
+    aggregate_daily_segments_to_monthly,
     calculate_wage_rate,
     get_effective_hourly_rate,
+    _get_asd_seniority_supplement,
     _filter_previous_month_carryover_reports,
 )
+from core.constants import ASD_SENIORITY_SUPPLEMENT
 from core.sick_days import get_sick_payment_rate
 from core.time_utils import (
     minutes_to_time_str,
@@ -281,6 +284,53 @@ class TestEffectiveHourlyRate(unittest.TestCase):
                        'shabbat_rate': None, 'shabbat_wage_percentage': None}
         }
         self.assertEqual(get_effective_hourly_rate(report, minimum_wage, False, housing_rates_cache), 32.30)
+
+
+class TestPaymentComponentsClassification(unittest.TestCase):
+    """סיווג רכיבי תשלום ידניים בסיכום חודשי."""
+
+    def test_preloaded_for_pension_components_are_split_from_regular_extras(self):
+        totals = aggregate_daily_segments_to_monthly(
+            conn=None,
+            daily_segments=[],
+            person_id=1,
+            year=2026,
+            month=4,
+            minimum_wage=34.40,
+            preloaded_payment_comps=[
+                {"total_amount": 10000, "component_type_id": 99, "for_pension": True},
+                {"total_amount": 2500, "component_type_id": 99, "for_pension": False},
+            ],
+            person_start_date=date(2026, 1, 1),
+        )
+
+        self.assertEqual(totals["extras_for_pension"], 100.0)
+        self.assertEqual(totals["extras"], 25.0)
+        self.assertEqual(totals["gesher_total"], 125.0)
+
+
+class TestAsdSenioritySupplement(unittest.TestCase):
+    """בדיקות תוספת ותק ASD לפי תאריך תחילת עבודה."""
+
+    def test_exact_calendar_year_is_eligible(self):
+        supplement = _get_asd_seniority_supplement(
+            "permanent",
+            date(2025, 4, 1),
+            2026,
+            4,
+        )
+
+        self.assertEqual(supplement, ASD_SENIORITY_SUPPLEMENT)
+
+    def test_less_than_calendar_year_is_not_eligible(self):
+        supplement = _get_asd_seniority_supplement(
+            "permanent",
+            date(2025, 4, 2),
+            2026,
+            4,
+        )
+
+        self.assertEqual(supplement, 0)
 
 
 class TestPreviousMonthCarryoverFiltering(unittest.TestCase):

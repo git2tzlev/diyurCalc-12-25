@@ -176,7 +176,8 @@
     <table style="max-width: 500px; margin: 0 auto;">
       <thead>
         <tr style="background-color: #f1f5f9;">
-          <th>סוג משמרת</th>
+          <th>{% if is_asd_multi_rate %}שורת תלוש{% else %}סוג משמרת{% endif %}</th>
+          <th>למה</th>
           <th>שעות</th>
           <th>תעריף</th>
           <th>שכר ש"נ</th>
@@ -187,6 +188,7 @@
         {% for var_shift in variable_shifts %}
         <tr style="background-color: #f8fafc;">
           <td style="text-align: right;">{{ var_shift.shift_name }}</td>
+          <td style="text-align: right;">{{ var_shift.reason or '-' }}</td>
           <td>{{ var_shift.hours }}</td>
           <td>{{ var_shift.rate }} ₪</td>
           <td>{{ var_shift.overtime_payment }}</td>
@@ -195,6 +197,7 @@
         {% endfor %}
         <tr style="background-color: #e2e8f0; font-weight: bold; border-top: 2px solid #94a3b8;">
           <td style="text-align: right;">{% if is_asd_multi_rate %}סה"כ:{% else %}סה"כ תעריף משתנה:{% endif %}</td>
+          <td>-</td>
           <td>{{ variable_shifts | sum(attribute='hours') | round(2) }}</td>
           <td>-</td>
           <td>-</td>

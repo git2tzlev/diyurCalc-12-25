@@ -10,18 +10,48 @@ from dataclasses import dataclass, field
 
 from core.constants import (
     ASD_NIGHT_STANDBY_RATE,
+    ASD_HOUSING_ARRAY_ID,
     ASD_SENIORITY_SUPPLEMENT,
     ASD_SENIORITY_YEARS_THRESHOLD,
+    APT_TYPE_NAMES,
+    BERESHIT_APT_TYPE,
     BREAK_THRESHOLD_MINUTES,
+    COMPLETION_APARTMENT_IDS,
     DEFAULT_STANDBY_RATE,
+    FRIDAY_SHIFT_ID,
+    HIGH_FUNCTIONING_APT_TYPE,
     HOLIDAY_PAY_MIN_SENIORITY_MONTHS,
+    HOLIDAY_PAYMENT_INTERNAL_KEY,
+    HOLIDAY_PAYMENT_MERAV_CODE,
+    HOSPITAL_ESCORT_SHIFT_ID,
+    KALANIYOT_APT_TYPE,
+    LOW_FUNCTIONING_APT_TYPE,
     MAX_CANCELLED_STANDBY_DEDUCTION,
+    MEDICAL_ESCORT_SHIFT_ID,
     MINIMUM_ESCORT_MINUTES,
+    NIGHT_HOURS_END,
+    NIGHT_HOURS_START,
     NIGHT_HOURS_THRESHOLD,
+    NIGHT_SHIFT_ID,
+    NIGHT_SHIFT_MORNING_END,
+    NIGHT_SHIFT_STANDBY_END,
     NIGHT_SHIFT_WORK_FIRST_MINUTES,
+    PERMANENT_EMPLOYEE_TYPE,
+    REGULAR_APT_TYPE,
+    SHABBAT_SHIFT_ID,
+    SICK_SHIFT_TYPE_ID,
     STANDBY_CANCEL_OVERLAP_THRESHOLD,
+    SUBSTITUTE_TRAVEL_TYPE_ID,
     TAGBUR_FRIDAY_PRE_ENTRY_MINUTES,
+    TAGBUR_FRIDAY_SHIFT_ID,
     TAGBUR_SHABBAT_POST_EXIT_MINUTES,
+    TAGBUR_SHABBAT_SHIFT_ID,
+    THERAPEUTIC_APT_TYPE,
+    VACATION_SHIFT_TYPE_ID,
+    WEEKDAY_SHIFT_TYPE_ID,
+    WEEKDAY_STANDBY_END,
+    WEEKDAY_STANDBY_START,
+    WORK_HOUR_SHIFT_ID,
 )
 
 
@@ -42,6 +72,308 @@ class BusinessRuleSection:
     title: str
     description: str
     rules: tuple[BusinessRule, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class BusinessRuleTable:
+    key: str
+    title: str
+    description: str
+    columns: tuple[str, ...]
+    rows: tuple[tuple[str, ...], ...] = field(default_factory=tuple)
+    source: tuple[str, ...] = ()
+
+
+def _minutes_to_clock(minutes: int) -> str:
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+BUSINESS_RULE_TABLES: tuple[BusinessRuleTable, ...] = (
+    BusinessRuleTable(
+        key="shift-types",
+        title="סוגי משמרות מרכזיים",
+        description="מיפוי קודי המשמרות שהקוד מזהה באופן מפורש וההשפעה שלהם על החישוב.",
+        columns=("קוד", "שם", "שימוש בחישוב", "הערות"),
+        rows=(
+            (
+                str(WEEKDAY_SHIFT_TYPE_ID),
+                "משמרת חול",
+                "משמרת בסיס לעבודה רגילה, חופשה ומחלה לפי סוג דירה.",
+                f"כוננות חול מוגדרת כברירת מחדל בין {_minutes_to_clock(WEEKDAY_STANDBY_START)} ל-{_minutes_to_clock(WEEKDAY_STANDBY_END)}.",
+            ),
+            (
+                str(FRIDAY_SHIFT_ID),
+                "משמרת שישי / ערב חג",
+                "משמרת שבת/חג רגילה שנחתכת לפי זמני שבת או חג.",
+                "בדירה טיפולית עם תעריף דירה רגילה היא מזוהה כתגבור משתמע.",
+            ),
+            (
+                str(SHABBAT_SHIFT_ID),
+                "משמרת שבת / חג",
+                "משמרת שבת/חג רגילה שנכנסת לרצפים ולמדרגות שבת.",
+                "גם היא יכולה להפוך לתגבור משתמע בדירה טיפולית עם תעריף רגיל.",
+            ),
+            (
+                str(NIGHT_SHIFT_ID),
+                "משמרת לילה",
+                "בונה מקטעי עבודה וכוננות לילה ומפעילה ספי שעות לילה.",
+                f"{NIGHT_SHIFT_WORK_FIRST_MINUTES // 60} שעות ראשונות עבודה, כוננות עד {_minutes_to_clock(NIGHT_SHIFT_STANDBY_END)}, עבודה עד {_minutes_to_clock(NIGHT_SHIFT_MORNING_END)}.",
+            ),
+            (
+                str(TAGBUR_FRIDAY_SHIFT_ID),
+                "תגבור שישי / ערב חג",
+                "מקטעי תגבור סביב כניסת שבת או חג.",
+                f"מצופה להתחיל {TAGBUR_FRIDAY_PRE_ENTRY_MINUTES} דקות לפני כניסה.",
+            ),
+            (
+                str(TAGBUR_SHABBAT_SHIFT_ID),
+                "תגבור שבת / חג",
+                "מקטעי תגבור סביב יציאת שבת או חג.",
+                f"מצופה להסתיים {TAGBUR_SHABBAT_POST_EXIT_MINUTES} דקות אחרי יציאה.",
+            ),
+            (
+                str(WORK_HOUR_SHIFT_ID),
+                "שעת עבודה",
+                "משמשת לשעות שלא כוסו על ידי מקטע מוגדר.",
+                "בחופשה/מחלה אין יצירת שעות לא מכוסות.",
+            ),
+            (
+                str(HOSPITAL_ESCORT_SHIFT_ID),
+                "ליווי בי\"ח",
+                "משמרת ליווי ייעודית.",
+                "נכנסת לחישוב לפי המקטעים/התעריפים המוגדרים עבורה.",
+            ),
+            (
+                str(MEDICAL_ESCORT_SHIFT_ID),
+                "ליווי רפואי",
+                "משמרת ליווי עם מינימום תשלום.",
+                f"דיווח קצר מ-{MINIMUM_ESCORT_MINUTES} דקות מקבל בונוס תשלום עד שעה.",
+            ),
+            (
+                str(SICK_SHIFT_TYPE_ID),
+                "מחלה",
+                "דיווח היעדרות שמומר לתשלום מחלה ולצבירות.",
+                "לא יוצר שעות לא מכוסות ולא נחשב להצעת מדריך קבוע לתשלום חג.",
+            ),
+            (
+                str(VACATION_SHIFT_TYPE_ID),
+                "חופשה",
+                "דיווח היעדרות שמומר לתשלום חופשה ולצבירות.",
+                "לא יוצר שעות לא מכוסות ולא נחשב להצעת מדריך קבוע לתשלום חג.",
+            ),
+        ),
+        source=("core/constants.py", "app_utils.py:get_daily_segments_data", "core/shift_hours.py"),
+    ),
+    BusinessRuleTable(
+        key="employee-types",
+        title="סוגי מדריכים ועובדים",
+        description="סוג העובד נשמר על person.type, עם היסטוריה חודשית כאשר יש שינוי סטטוס.",
+        columns=("מפתח", "שם תצוגה", "איפה משפיע", "הערות"),
+        rows=(
+            (
+                PERMANENT_EMPLOYEE_TYPE,
+                "קבוע",
+                "זכאות לתשלום חג, תוספת ותק ASD, רשימות דוחות.",
+                f"תשלום חג דורש לפחות {HOLIDAY_PAY_MIN_SENIORITY_MONTHS} חודשי ותק, גם ב-ASD.",
+            ),
+            (
+                "substitute",
+                "מחליף",
+                "רשימות דוחות, נסיעות מדריך מחליף ואישור אוטומטי.",
+                f"נסיעות מסוג רכיב {SUBSTITUTE_TRAVEL_TYPE_ID} יכולות להתאשר אוטומטית אחרי אישור דיווחי היום.",
+            ),
+            (
+                "אחר / ריק",
+                "לא מוצג כמדריך פעיל בדוחות",
+                "לא נכנס לרשימת דוחות חודשית רגילה.",
+                "מסכי דוחות מסננים כיום לקבוע/מחליף בלבד.",
+            ),
+            (
+                "unpaid holiday slot",
+                "מדריך ללא תשלום חג",
+                "ניהול תשלום חג בלבד.",
+                "משבצת שמחלקת את תשלום החג לחצי בלי ליצור תשלום לעובד נוסף.",
+            ),
+        ),
+        source=("core/history.py:get_person_status_for_month", "routes/reports.py:reports_page", "core/holiday_payment.py"),
+    ),
+    BusinessRuleTable(
+        key="apartment-types",
+        title="סוגי דירות ומערכים",
+        description="סוג הדירה קובע תוספות, כללי היעדרות וחריגי תשלום חג.",
+        columns=("קוד", "שם", "קבוצה עסקית", "השפעה מרכזית"),
+        rows=(
+            (
+                str(REGULAR_APT_TYPE),
+                APT_TYPE_NAMES[REGULAR_APT_TYPE],
+                "רגיל",
+                "ברירת מחדל של תעריף דירה ותשלום חג רגיל.",
+            ),
+            (
+                str(THERAPEUTIC_APT_TYPE),
+                APT_TYPE_NAMES[THERAPEUTIC_APT_TYPE],
+                "טיפולי",
+                "שישי/שבת עם תעריף דירה רגילה מזוהים כתגבור משתמע.",
+            ),
+            (
+                str(BERESHIT_APT_TYPE),
+                APT_TYPE_NAMES[BERESHIT_APT_TYPE],
+                "היעדרות מיוחדת",
+                "חג/חופשה/מחלה מחושבים לפי משמרת לילה ובקיזוז 70 ש\"ח בלבד מהכוננות.",
+            ),
+            (
+                str(KALANIYOT_APT_TYPE),
+                APT_TYPE_NAMES[KALANIYOT_APT_TYPE],
+                "היעדרות מיוחדת",
+                "חג/חופשה/מחלה מחושבים לפי משמרת חול ובקיזוז 70 ש\"ח בלבד מהכוננות.",
+            ),
+            (
+                str(HIGH_FUNCTIONING_APT_TYPE),
+                APT_TYPE_NAMES[HIGH_FUNCTIONING_APT_TYPE],
+                "ASD",
+                f"שייך לקבוצת ASD; כוננות לילה מסומנת יכולה לקבל {ASD_NIGHT_STANDBY_RATE:.0f} ש\"ח.",
+            ),
+            (
+                str(LOW_FUNCTIONING_APT_TYPE),
+                APT_TYPE_NAMES[LOW_FUNCTIONING_APT_TYPE],
+                "ASD",
+                "שייך לקבוצת ASD; כוננות לילה מסומנת יכולה להפוך לעבודה.",
+            ),
+            (
+                ", ".join(str(apt_id) for apt_id in sorted(COMPLETION_APARTMENT_IDS)),
+                "דירות השלמות",
+                "תצוגה",
+                "מופרדות בדוחות להצגת השלמות, לא כסוג תעריף עצמאי.",
+            ),
+            (
+                str(ASD_HOUSING_ARRAY_ID),
+                "מערך דיור ASD",
+                "מערך",
+                "כל דירה במערך הזה מקבלת חריג ASD בתשלום חג ותוספת ותק ASD.",
+            ),
+        ),
+        source=("core/constants.py", "app_utils.py", "core/holiday_payment.py"),
+    ),
+    BusinessRuleTable(
+        key="housing-arrays",
+        title="הבדלים בין מערכי דיור",
+        description="הבדלים עסקיים שמופעלים לפי housing_array_id, מעבר לסוג הדירה עצמו.",
+        columns=("מערך", "זיהוי בקוד", "תעריפים", "תשלום חג", "לילה וותק", "הרשאות ותצוגה"),
+        rows=(
+            (
+                "צוהר הלב",
+                "מערך רגיל; כרגע id=1 ב-DB.",
+                "תעריפים לפי shift_type_housing_rates לכל סוג משמרת. אם אין תעריף, fallback לשכר מינימום + תוספת סוג דירה.",
+                "חלוקת חג רגילה: מדריך אחד מקבל מלא, שני מדריכים חצי-חצי, ומשבצת ללא תשלום מחלקת לחצי.",
+                "אין תוספת ותק ASD ואין חריג ASD במשמרת לילה.",
+                "מנהל מערך שמוגבל למערך זה רואה רק דירות/מדריכים של צוהר הלב.",
+            ),
+            (
+                "ASD",
+                f"מזוהה בקוד לפי housing_array_id={ASD_HOUSING_ARRAY_ID}.",
+                "תעריפים לפי shift_type_housing_rates של ASD; עדיין יש fallback לשכר מינימום + תוספת סוג דירה אם חסר תעריף.",
+                "חריג חג: כל מדריך זכאי מקבל חג מלא גם כשיש יותר ממדריך אחד בדירה; תנאי 3 חודשי ותק עדיין נשאר.",
+                f"מדריך קבוע עם {ASD_SENIORITY_YEARS_THRESHOLD}+ שנת ותק מקבל תוספת {ASD_SENIORITY_SUPPLEMENT / 100:.0f} ש\"ח לשעה. בסימון לילה ASD יש הבדל בין תפקוד גבוה לתפקוד נמוך.",
+                "מנהל מערך ASD רואה רק דירות/מדריכים של ASD; דוחות ורצפים מסמנים את שם המערך.",
+            ),
+        ),
+        source=("core/constants.py:is_asd_housing_array", "app_utils.py", "core/holiday_payment.py", "core/auth.py"),
+    ),
+    BusinessRuleTable(
+        key="thresholds",
+        title="ספים, זמנים וקיזוזים קשיחים",
+        description="ערכים מספריים שהקוד משתמש בהם כחלק מהחלטות שכר ורצפים.",
+        columns=("כלל", "ערך", "משמעות", "מקור"),
+        rows=(
+            (
+                "שבירת רצף",
+                f"{BREAK_THRESHOLD_MINUTES} דקות",
+                "הפסקה באורך הזה או יותר שוברת רצף מחודש 02/2026.",
+                "core/constants.py",
+            ),
+            (
+                "סף חפיפה לביטול כוננות",
+                f"{STANDBY_CANCEL_OVERLAP_THRESHOLD:.0%}",
+                "אם עבודה חופפת לפחות שיעור זה מהכוננות, הכוננות מתבטלת.",
+                "core/constants.py",
+            ),
+            (
+                "קיזוז מקסימלי בכוננות מבוטלת",
+                f"{MAX_CANCELLED_STANDBY_DEDUCTION:.0f} ש\"ח",
+                "בכוננות יקרה יותר משלמים רק את ההפרש מעל הקיזוז.",
+                "core/constants.py",
+            ),
+            (
+                "תעריף כוננות ברירת מחדל",
+                f"{DEFAULT_STANDBY_RATE:.0f} ש\"ח",
+                "משמש כאשר אין תעריף כוננות אחר.",
+                "core/constants.py",
+            ),
+            (
+                "סף משמרת לילה",
+                f"{NIGHT_HOURS_THRESHOLD // 60} שעות",
+                f"נדרשות לפחות {NIGHT_HOURS_THRESHOLD // 60} שעות בטווח {_minutes_to_clock(NIGHT_HOURS_START)}-{_minutes_to_clock(NIGHT_HOURS_END)}.",
+                "core/constants.py",
+            ),
+            (
+                "ותק מינימלי לתשלום חג",
+                f"{HOLIDAY_PAY_MIN_SENIORITY_MONTHS} חודשים",
+                "מדריך קבוע מתחת לסף לא מקבל תשלום חג.",
+                "core/constants.py",
+            ),
+            (
+                "תוספת ותק ASD",
+                f"{ASD_SENIORITY_SUPPLEMENT / 100:.0f} ש\"ח אחרי {ASD_SENIORITY_YEARS_THRESHOLD} שנה",
+                "נוספת לשעת עבודה של מדריך קבוע במערך ASD.",
+                "core/constants.py",
+            ),
+            (
+                "תגבור ערב",
+                f"{TAGBUR_FRIDAY_PRE_ENTRY_MINUTES} דקות לפני כניסה",
+                "גבול מצופה למשמרת תגבור שישי/ערב חג.",
+                "core/constants.py",
+            ),
+            (
+                "תגבור יציאה",
+                f"{TAGBUR_SHABBAT_POST_EXIT_MINUTES} דקות אחרי יציאה",
+                "גבול מצופה למשמרת תגבור שבת/חג.",
+                "core/constants.py",
+            ),
+            (
+                "מינימום ליווי רפואי",
+                f"{MINIMUM_ESCORT_MINUTES} דקות",
+                "בונוס תשלום עד שעה לדיווח קצר יותר.",
+                "core/constants.py",
+            ),
+        ),
+        source=("core/constants.py",),
+    ),
+    BusinessRuleTable(
+        key="export-components",
+        title="רכיבי שכר וייצוא גשר",
+        description="מיפוי המפתחות הפנימיים לסוג הערך שנשלח לגשר. סמלי מירב עצמם מנוהלים בטבלת payment_codes.",
+        columns=("מפתח פנימי", "סוג ייצוא", "מה נשלח", "הערות"),
+        rows=(
+            ("calc100", "hours_100", "שעות ותעריף בסיס", "שעות עבודה רגילות."),
+            ("calc125", "hours_125", "שעות ותעריף 125%", "שעות נוספות מדרגה ראשונה."),
+            ("calc150 / calc150_overtime", "hours_150", "שעות ותעריף 150%", "שבת/חג או שעות נוספות לפי הרצף."),
+            ("calc150_shabbat_100", "hours_100", "שעות ותעריף בסיס", "פיצול שעות שבת לפנסיה."),
+            ("calc150_shabbat_50", "hours_50", "שעות ותעריף 50%", "השלמת רכיב שבת מעל הבסיס."),
+            ("calc175", "hours_175", "שעות ותעריף 175%", "מדרגת שבת/חג."),
+            ("calc200", "hours_200", "שעות ותעריף 200%", "מדרגת שבת/חג או פרימיום 200%."),
+            ("standby", "standby_with_rate", "כמות 1 ותעריף שהוא סכום הכוננות הכולל", "כך נבנית השורה בפועל בייצוא גשר."),
+            ("vacation / vacation_minutes", "hours_100", "שעות ותעריף שכר מינימום", "תלוי בלוגיקת חופשה."),
+            ("sick_payment", "sick_hours_paid", "שעות מחלה משולמות", "אחרי אחוזי מחלה מדורגים."),
+            ("calc_variable", "variable_rate_payment", "כמות 1 וסכום", "נועד למנוע פערי עיגול בתעריף משתנה."),
+            (HOLIDAY_PAYMENT_INTERNAL_KEY, "money", "סכום ישיר", f"סמל ברירת המחדל הידוע: {HOLIDAY_PAYMENT_MERAV_CODE}."),
+            ("travel / extras / extras_for_pension / professional_support", "money", "סכום ישיר", "רכיבי תשלום ידניים."),
+            ("actual_work_days", "days_with_total_hours", "ימים ותעריף שמייצג סה\"כ שעות", "נתון אינפורמטיבי לייצוא."),
+            ("sick_days_* / vacation_days_*", "days", "ימים", "צבירות וניצולים."),
+            ("130, 199", "מוחרג", "לא נשלח", "קודי מירב מוחרגים גם אם קיימים בתצוגה."),
+        ),
+        source=("services/gesher_exporter.py:load_export_config_from_db", "services/gesher_exporter.py:calculate_value"),
+    ),
+)
 
 
 BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
@@ -88,20 +420,22 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
                 details=(
                     "הסינון חל על דוחות, ניהול תשלום חג, ייצוא גשר וחלק משאילתות החישוב.",
                     "גישה למדריך מחוץ למערך של מנהל מערך נחסמת.",
+                    "פער ידוע: בייצור PDF/מייל משולב יש מסלול שבו המדריכים נבחרים לפי מערך, אך הכנת נתוני הדוח נקראת בלי housing_filter.",
                 ),
-                source=("core/auth.py:get_user_housing_array", "core/auth.py:enforce_framework_manager_guide_access"),
+                source=("core/auth.py:get_user_housing_array", "core/auth.py:enforce_framework_manager_guide_access", "services/email_service.py:_generate_combined_guides_pdf"),
                 tags=("הרשאות", "מנהל מערך"),
                 status="הרשאה",
             ),
             BusinessRule(
                 title="נעילת חודש",
-                summary="חודש נעול מונע עדכון הגדרות רגישות לחודש הנוכחי עד לפתיחה מחדש.",
+                summary="חודש נעול נשמר בטבלת month_locks ומשמש את מסכי הניהול שחשופים כרגע לנעילה/פתיחה.",
                 details=(
                     "נעילה נשמרת בטבלת month_locks.",
                     "אם unlocked_at מלא, החודש נחשב פתוח.",
-                    "עדכוני תעריפי משמרות ומקטעי משמרות בודקים נעילה לפני שינוי.",
+                    "API נעילה ופתיחה דורשים מנהל על; סטטוס נעילה חשוף למשתמש מחובר.",
+                    "קיימות פונקציות עדכון תעריפי משמרות ומקטעים שבודקות נעילה, אך הן אינן מחוברות כרגע כנתיבי app פעילים.",
                 ),
-                source=("core/history.py:is_month_locked", "routes/admin.py:update_shift_type_rate", "routes/admin.py:update_shift_segment"),
+                source=("core/history.py:is_month_locked", "routes/admin.py:get_month_lock_status", "routes/admin.py:lock_month_api", "routes/admin.py:unlock_month_api"),
                 tags=("נעילת חודש", "ניהול"),
                 status="מנוהל במסך ניהול",
             ),
@@ -207,10 +541,12 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
             ),
             BusinessRule(
                 title="ASD לילה",
-                summary="ב-ASD תפקוד גבוה משאיר כוננות ככוננות לילה, ותפקוד נמוך הופך כוננות לשעות עבודה.",
+                summary="סימון ASD לילה מפעיל הבחנה בין תפקוד גבוה לתפקוד נמוך במשמרות לילה.",
                 details=(
+                    "הכלל מופעל רק כאשר הדיווח מסומן כ-ASD night marking.",
                     f"תפקוד גבוה מקבל כוננות לילה בסך {ASD_NIGHT_STANDBY_RATE:.0f} ש\"ח.",
                     "תפקוד נמוך: מקטע standby בלילה הופך ל-work.",
+                    "ללא סימון ASD לילה, משמרת ASD משתמשת במקטעי המשמרת הרגילים.",
                     "הדוח מסמן תוויות 'שינה בסלון' ו'ערות בלילה'.",
                 ),
                 source=("core/constants.py", "app_utils.py:get_daily_segments_data"),
@@ -267,9 +603,10 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
             ),
             BusinessRule(
                 title="כוננות ושבירת רצף",
-                summary="כוננות שוברת רצף רק כאשר אין עבודה שחופפת לה.",
+                summary="כוננות שוברת רצף לפי החלק שנותר אחרי חפיפה עם עבודה.",
                 details=(
-                    "עבודה חופפת לכוננות מאפשרת לרצף העבודה להימשך.",
+                    "הקוד קודם מחסיר מקטעי עבודה מתוך הכוננות.",
+                    "אם נותרו חלקי כוננות שאינם חופפים עבודה, הם יכולים לשבור את הרצף.",
                     "כוננות ללא חפיפה מאפסת את offset השעות הנוספות.",
                 ),
                 source=("app_utils.py:get_daily_segments_data", "app_utils.py:_calculate_previous_month_carryover"),
@@ -293,6 +630,7 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
                     "המערכת מחפשת אחורה עד 31 ימים או עד יום ללא דיווחים.",
                     "חופשה/מחלה ללא שעות שוברת carryover מהחודש הקודם.",
                     "הcarryover כולל גם דקות לילה לצורך סף משמרת לילה.",
+                    "פער ידוע: חישוב דקות הלילה ב-carryover החודש הקודם משתמש בנרמול שונה מהמסלול היומי.",
                 ),
                 source=("app_utils.py:_calculate_previous_month_carryover",),
                 tags=("carryover", "חודש קודם"),
@@ -351,6 +689,7 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
                 details=(
                     f"אם תעריף הכוננות גבוה מ-{MAX_CANCELLED_STANDBY_DEDUCTION:.0f} ש\"ח, משולם רק ההפרש.",
                     "אם החפיפה קטנה מהסף, הכוננות נחתכת ומשולמת רק על החלקים שלא חפפו עבודה.",
+                    "חריג היסטורי 11-12/2025: חפיפה עם משמרת שמירה על דייר בלילה מבטלת גם את ההפרש, למעט שישי/שבת/חג.",
                 ),
                 source=("app_utils.py:get_daily_segments_data", "core/constants.py"),
                 tags=("כוננות", "חפיפה", "קיזוז"),
@@ -392,6 +731,7 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
                     "ימים 2-3: 50%.",
                     "יום 4 והלאה: 100%.",
                     "ימי מחלה מהחודש הקודם נטענים כדי לשמור רצף בין חודשים.",
+                    "רק תאריכי מחלה רצופים ממשיכים רצף; פער של יותר מיום אחד מאפס את הספירה.",
                 ),
                 source=("core/sick_days.py", "app_utils.py:_fetch_prev_month_sick_dates"),
                 tags=("מחלה", "רצף"),
@@ -414,6 +754,7 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
                 details=(
                     "חופשה נצברת כ-vacation_minutes ו-vacation_payment.",
                     "מחלה נצברת כ-sick_minutes, sick_payment, effective_sick_minutes ו-non_effective_sick_minutes.",
+                    "פער ידוע: במסלול יום מעורב שיש בו גם עבודה וגם חופשה/מחלה, ההיעדרות מחושבת לפי שכר מינימום ומחלה אינה מקבלת את הדירוג המיוחד של מסלול יום היעדרות מלא.",
                 ),
                 source=("app_utils.py:get_daily_segments_data", "app_utils.py:aggregate_daily_segments_to_monthly"),
                 tags=("חופשה", "מחלה", "100%"),
@@ -446,6 +787,7 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
                 details=(
                     "ימי עבודה בפועל כוללים עבודה, חופשה ומחלה.",
                     "הפירוט נשמר בשדות vacation_details, sick_days_accrued ו-vacation_days_accrued.",
+                    "פער תצוגה ידוע: שורת חופשה בדוח הרצפים מחשבת לעיתים דקות כפול שכר מינימום במקום להציג ישירות את vacation_payment המחושב.",
                 ),
                 source=("app_utils.py:aggregate_daily_segments_to_monthly", "utils/utils.py:calculate_accruals"),
                 tags=("צבירה", "חופשה", "מחלה"),
@@ -481,14 +823,28 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
             ),
             BusinessRule(
                 title="ניהול תשלום חג כמקור קובע",
-                summary="אם נשמרה טבלת ניהול מלאה לחודש, הבחירות שם מחליפות את הזיהוי האוטומטי לפי דיווחים.",
+                summary="שורת ניהול תשלום חג שמורה היא המקור הקובע לדירה שלה בלבד.",
                 details=(
                     "דירה עם שני שדות מדריכים ריקים פירושה שאין תשלום חג לדירה.",
-                    "אם הטבלה השמורה לא כוללת את כל הדירות הרלוונטיות, המערכת חוזרת לזיהוי לפי דיווחים.",
+                    "דירה שיש לה שורה שמורה משתמשת בבחירת המדריכים שבטבלה.",
+                    "דירה שאין לה שורה שמורה ממשיכה להיבנות אוטומטית לפי דיווחים.",
                     "בכניסה למערכת יכול לקפוץ דיאלוג ניהול בחודש שיש בו חג ועדיין אין טבלה שמורה מלאה.",
                 ),
                 source=("core/holiday_payment.py:_load_saved_assignments", "core/holiday_payment.py:calculate_holiday_payments"),
                 tags=("ניהול חג", "דיאלוג"),
+                status="מנוהל במסך ניהול תשלום חג",
+            ),
+            BusinessRule(
+                title="הצעות ושמירת ניהול חג",
+                summary="הצעות המדריכים בדיאלוג נבנות לפי ימי עבודה בדירה, ושמירה עוברת ולידציה לפני כתיבה.",
+                details=(
+                    "הצעות לא כוללות דיווחי חופשה/מחלה.",
+                    "הצעות ממוינות לפי מספר ימי עבודה, מספר משמרות ושם.",
+                    "מדריך שני מוצע אוטומטית רק אם יש לו לפחות 7 ימי עבודה בחודש.",
+                    "בשמירה נבחרים רק מדריכים קבועים פעילים במערך המותר; בחירה כפולה נדחית; מדריך 2 נמחק אם מדריך 1 ריק.",
+                ),
+                source=("core/holiday_payment.py:_load_holiday_payment_suggestions", "core/holiday_payment.py:save_holiday_payment_setup"),
+                tags=("ניהול חג", "הצעות", "שמירה"),
                 status="מנוהל במסך ניהול תשלום חג",
             ),
             BusinessRule(
@@ -550,9 +906,11 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
                 details=(
                     "החלון נשאר ב-special_days ולא מוכנס ל-shabbat_times.",
                     "בחלון שחוצה חצות, תאריך הזכאות הוא end_date.",
-                    "עבודה בכל אחד מתאריכי החלון מונעת תשלום חג לאותו יום.",
+                    "ביטול התשלום נבדק לפי חפיפה שעותית לחלון המיוחד, לא רק לפי תאריך הדיווח.",
+                    "משמרת מהיום שלפני החג שנמשכת לתוך החג לא מבטלת אם היא לא עברה את סוף המקטעים המוגדרים של המשמרת.",
+                    "הדגל counts_as_holiday_payment נקבע בעת יצירת יום פרימיום; במסך הנוכחי אין פעולת עריכה ייעודית לדגל אחרי יצירה.",
                 ),
-                source=("core/holiday_payment.py:_get_special_holiday_payment_windows", "core/holiday_payment.py:get_holiday_payment_dates_in_month"),
+                source=("core/holiday_payment.py:_get_special_holiday_payment_window_details", "core/holiday_payment.py:_report_overlaps_special_holiday_window"),
                 tags=("יום העצמאות", "ימי פרימיום", "254"),
                 status="מנוהל במסך ימי פרימיום",
             ),
@@ -569,9 +927,9 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
                 details=(
                     "המקטע הראשון נבנה דינמית לפי shabbat_times.",
                     "מ-12/2025 שעות לא מכוסות אחרי תגבור ערב אינן מתווספות כשעות עבודה.",
-                    "לפני 12/2025 נשמרה לוגיקה היסטורית לפי יום בשבוע.",
+                    "לפני 12/2025 רק ההחלטה אילו שעות לא מכוסות לדלג נקבעת לפי יום בשבוע; גבולות תגבור עדיין מגיעים מזמני שבת/חג.",
                 ),
-                source=("core/constants.py", "app_utils.py:get_daily_segments_data", "core/shift_hours.py:calculate_tagbur_segments"),
+                source=("core/constants.py", "app_utils.py:get_daily_segments_data"),
                 tags=("תגבור", "שישי", "ערב חג"),
             ),
             BusinessRule(
@@ -582,7 +940,7 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
                     "מ-12/2025 שעות לא מכוסות לפני תגבור שבת/חג אינן מתווספות כשעות עבודה.",
                     "שעות אחרי המקטע יכולות להיכנס כשעות לא מכוסות לפי הדיווח.",
                 ),
-                source=("core/constants.py", "app_utils.py:get_daily_segments_data", "core/shift_hours.py:calculate_tagbur_segments"),
+                source=("core/constants.py", "app_utils.py:get_daily_segments_data"),
                 tags=("תגבור", "שבת", "חג"),
             ),
             BusinessRule(
@@ -591,6 +949,8 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
                 details=(
                     "הדוח מסמן את סוג המשמרת כ'תגבור'.",
                     "הפיצול לשבת/חול נעשה לפי זמן בפועל בתוך גבולות שבת/חג.",
+                    "במסלול השכר, מקטעי התגבור המוגדרים מתווספים כמקטעים קבועים ולא נחתכים לפי חפיפת שעות הדיווח; רק שעות לא מכוסות לפני/אחרי מטופלות לפי הכללים.",
+                    "core/shift_hours.calculate_tagbur_segments משמש בעיקר להצגה/PDF ולא כמסלול השכר הראשי.",
                 ),
                 source=("app_utils.py:get_daily_segments_data",),
                 tags=("תגבור", "רצפים"),
@@ -631,6 +991,7 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
                     "חלון 150% מתנהג כמו שבת מבחינת מדרגות: 150%, 175%, 200%.",
                     "חלון 200% ומעלה מתנהג כתעריף שטוח באחוז החלון.",
                     "חלון יכול להיחתך לפי עיר הדירה.",
+                    "פער ידוע: ברצף שמערב כמה דירות, סינון העיר נעשה לפי עיר הסגמנט הראשון של הרצף.",
                 ),
                 source=("app_utils.py:_calculate_chain_wages", "core/premium_windows.py:filter_windows_by_city"),
                 tags=("ימי פרימיום", "150%", "200%"),
@@ -660,9 +1021,21 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
                     "סוגים 2 ו-7 נצברים כנסיעות.",
                     "סוג 13 נצבר כתומך מקצועי.",
                     "רכיב שמסומן for_pension נכנס לתוספות לפנסיה; השאר לתוספות רגילות.",
+                    "הסיווג נשמר גם במסלול עובד יחיד וגם במסלול הסיכום החודשי המרוכז.",
                 ),
-                source=("app_utils.py:aggregate_daily_segments_to_monthly",),
+                source=("app_utils.py:aggregate_daily_segments_to_monthly", "core/logic.py:calculate_monthly_summary"),
                 tags=("נסיעות", "תוספות", "תומך מקצועי"),
+            ),
+            BusinessRule(
+                title="תצוגת רכיבי תשלום בדוחות",
+                summary="בדוחות PDF/משמרות רכיבי תשלום מקובצים ומוצגים לפי סוג ותיאור.",
+                details=(
+                    "נסיעות ותומך מקצועי מקובצים לפי סוג והרכיב מוצג ללא פירוט תיאור.",
+                    "רכיבים אחרים מוצגים עם התיאור אם קיים.",
+                    "רכיבים שמשויכים לדירת השלמות מופרדים לנתוני השלמות.",
+                ),
+                source=("routes/guide.py:prepare_guide_pdf_data",),
+                tags=("דוחות", "רכיבים", "השלמות"),
             ),
             BusinessRule(
                 title="אישור אוטומטי נסיעות מחליף",
@@ -712,9 +1085,23 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
                     "הכותרת כוללת קוד מפעל, שנה דו-ספרתית וחודש.",
                     "הקובץ נכתב עם CRLF.",
                     "ערכי אפס מדולגים כברירת מחדל לפי min_amount.",
+                    "נתיב הייצוא המלא דורש company מפורש בבקשה; ברירת המחדל של exporter אינה מופעלת דרך route זה.",
+                    "ייצוא מרובה מדריכים יוצר קובץ אחד עם כותרת לפי החברה של המדריך הראשון שנבחר.",
                 ),
-                source=("services/gesher_exporter.py:format_gesher_header", "services/gesher_exporter.py:format_gesher_line"),
+                source=("services/gesher_exporter.py:format_gesher_header", "services/gesher_exporter.py:format_gesher_line", "routes/export.py"),
                 tags=("גשר", "פורמט"),
+            ),
+            BusinessRule(
+                title="כללי עמוד דוחות ושליחה",
+                summary="עמוד הדוחות כולל רק מדריכים רלוונטיים לחודש, והפקת PDF/מייל משתמשת בתבניות HTML.",
+                details=(
+                    "ברשימת הדוחות מופיעים רק מדריכים מסוג קבוע/מחליף שיש להם לפחות משמרת או רכיב תשלום בחודש.",
+                    "מנהל מערך מוגבל למערך שלו ברשימת הדוחות.",
+                    "PDF מופק מתבנית HTML באמצעות Edge/Chrome headless ללא header/footer של הדפדפן.",
+                    "שליחת מייל מצרפת PDF, משתמשת ב-HTML RTL ובכותרות UTF-8.",
+                ),
+                source=("routes/reports.py:reports_page", "routes/guide.py:_generate_shifts_pdf", "routes/guide.py:_generate_chains_pdf", "services/email_service.py"),
+                tags=("דוחות", "PDF", "מייל"),
             ),
         ),
     ),
@@ -723,3 +1110,7 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
 
 def get_business_rule_sections() -> tuple[BusinessRuleSection, ...]:
     return BUSINESS_RULE_SECTIONS
+
+
+def get_business_rule_reference_tables() -> tuple[BusinessRuleTable, ...]:
+    return BUSINESS_RULE_TABLES

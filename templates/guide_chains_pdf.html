@@ -272,6 +272,7 @@
         'effective_rate': chain.effective_rate,
         'display_base_rate': chain.display_base_rate if chain.display_base_rate is defined else chain.effective_rate,
         'apartment_hourly_supplement_nis': chain.apartment_hourly_supplement_nis if chain.apartment_hourly_supplement_nis is defined else 0,
+        'asd_seniority_supplement_nis': chain.asd_seniority_supplement_nis if chain.asd_seniority_supplement_nis is defined else 0,
         'asd_night_label': chain.asd_night_label if chain.asd_night_label is defined else '',
         'shift_type': chain.shift_type,
         'shift_name': chain.shift_name,
@@ -302,7 +303,21 @@
           <td>{{ chain.apartment_name or '-' }}{% if chain.apartment_type_id == 2 %}<span title="דירה טיפולית" style="color:#e91e63;font-size:0.75em;">&#x2764;</span>{% endif %}</td>
           <td>{{ chain.housing_array_name or '-' }}</td>
           <td>{{ (chain.apartment_type_name or '-')|replace('דירה ', '') }}{% if chain.apartment_type_change_date %} <span style="color:#777;">(מ-{{ chain.apartment_type_change_date }})</span>{% endif %}{% if chain.rate_apartment_type_name and chain.rate_apartment_type_name != chain.apartment_type_name %} <span style="color:#777;">(משולם: {{ chain.rate_apartment_type_name|replace('דירה ', '') }})</span>{% endif %}</td>
-          <td>{% if chain.type == 'standby' %}-{% elif chain.apartment_hourly_supplement_nis is defined and chain.apartment_hourly_supplement_nis > 0 %}{{ "%.2f"|format(chain.effective_rate or 0) }} <span style="color:#888;">+ {{ "%.2f"|format(chain.apartment_hourly_supplement_nis) }}</span>{% elif chain.display_base_rate is defined %}{{ "%.2f"|format(chain.display_base_rate or 0) }}{% else %}{{ "%.2f"|format(chain.effective_rate or 0) }}{% endif %}</td>
+          <td>
+            {% if chain.type == 'standby' %}
+            -
+            {% else %}
+            {% set basis = namespace(parts=[]) %}
+            {% if chain.apartment_hourly_supplement_nis is defined and chain.apartment_hourly_supplement_nis > 0 %}
+            {% set _ = basis.parts.append('+' ~ ("%.2f"|format(chain.apartment_hourly_supplement_nis)) ~ ' סוג דירה') %}
+            {% endif %}
+            {% if chain.asd_seniority_supplement_nis is defined and chain.asd_seniority_supplement_nis > 0 %}
+            {% set _ = basis.parts.append('+' ~ ("%.2f"|format(chain.asd_seniority_supplement_nis)) ~ ' ותק ASD') %}
+            {% endif %}
+            {{ "%.2f"|format((chain.display_base_rate if chain.display_base_rate is defined else chain.effective_rate) or 0) }}
+            {% if basis.parts %}<span style="color:#888;">({{ basis.parts|join(', ') }})</span>{% endif %}
+            {% endif %}
+          </td>
           <td>
             {% if chain.shift_type %}{{ chain.shift_type }}{% elif chain.type == 'standby' %}כוננות{% elif chain.type == 'vacation' %}חופשה{% else %}עבודה{% endif %}
           </td>

@@ -152,6 +152,13 @@ py -m pytest tests\test_salary_calculation.py -q
 py -m pytest tests\test_holiday_payment.py -q
 ```
 
+קומפילציה בסיסית:
+
+```powershell
+$files = @('app.py','app_utils.py') + (Get-ChildItem core,routes,services -Filter *.py | ForEach-Object { $_.FullName })
+py -m py_compile @files
+```
+
 ## פריסה
 
 - `Procfile` מריץ את האפליקציה עם `uvicorn app:app`

@@ -4,17 +4,54 @@ Gesher File Exporter
 """
 import io
 import configparser
+import logging
+import calendar
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
 
-from core.database import get_housing_array_filter
+from core.constants import TZOHAR_HALEV_HOUSING_ARRAY_ID
+from core.database import get_housing_array_filter, get_multi_housing_guides
 from core.history import get_minimum_wage_for_month
+
+logger = logging.getLogger(__name__)
 
 # נתיב לקובץ התצורה
 CONFIG_PATH = Path(__file__).parent / "gesher_config.ini"
 
 # קודים שלא לייצא לקובץ גשר בשום מצב
 EXCLUDED_EXPORT_CODES = {'130', '199'}
+
+
+def should_block_multi_housing_for_gesher(housing_filter: int | None) -> bool:
+    """בצוהר הלב לא מייצאים לגשר מדריך שפעיל ביותר ממערך דיור באותו חודש."""
+    return housing_filter == TZOHAR_HALEV_HOUSING_ARRAY_ID
+
+
+def get_blocked_multi_housing_for_gesher(
+    conn,
+    year: int,
+    month: int,
+    person_ids: List[int] | None = None,
+) -> dict[int, list[str]]:
+    """מדריכים שיש לחסום מייצוא גשר במערך צוהר הלב בגלל פעילות בכמה מערכים."""
+    housing_filter = get_housing_array_filter()
+    if not should_block_multi_housing_for_gesher(housing_filter):
+        return {}
+
+    start_date = date(year, month, 1)
+    last_day = calendar.monthrange(year, month)[1]
+    end_date = date(year, month, last_day) + timedelta(days=1)
+    blocked = get_multi_housing_guides(conn, start_date, end_date)
+    if person_ids is not None:
+        allowed = set(person_ids)
+        blocked = {pid: arrays for pid, arrays in blocked.items() if pid in allowed}
+    return blocked
+
+
+def get_blocked_multi_housing_reason(arrays: list[str]) -> str:
+    arrays_text = ", ".join(arrays)
+    return f"המדריך פעיל בחודש זה ביותר ממערך דיור אחד: {arrays_text}"
 
 
 
@@ -112,7 +149,7 @@ def load_export_config_from_db(conn) -> Dict[str, Tuple[str, str, str]]:
 
         return export_codes
     except Exception as e:
-        print(f"Error loading export config from DB: {e}")
+        logger.error("Error loading export config from DB: %s", e)
         return {} # Fallback to empty or file config if needed
 
 def load_export_config() -> Dict[str, Tuple[str, str, str]]:
@@ -165,7 +202,7 @@ def get_companies(conn) -> Dict[str, str]:
         for row in rows:
             companies[row['code']] = row['name']
     except Exception as e:
-        print(f"Error loading companies from DB: {e}")
+        logger.error("Error loading companies from DB: %s", e)
     
     return companies
 
@@ -194,9 +231,12 @@ def calculate_value(totals: Dict, internal_key: str, value_type: str, minimum_wa
         except ValueError:
             multiplier = 1.0
         hours = round(raw_value / 60, 2)
-        # שעות עבודה (calc*) - שימוש בתעריף בסיס ממוצע (כולל תוספות סוג דירה)
+        # שעות עבודה (calc*) - שימוש בתעריף בסיס ממוצע לרכיב הספציפי
         if internal_key.startswith('calc'):
-            base_rate = totals.get('average_base_rate', minimum_wage)
+            base_rate = (totals.get('component_base_rates') or {}).get(
+                internal_key,
+                totals.get('average_base_rate', minimum_wage),
+            )
         else:
             base_rate = minimum_wage
         hourly_rate = round(base_rate * multiplier, 2)
@@ -305,15 +345,14 @@ def generate_gesher_file_for_person(conn, person_id: int, year: int, month: int)
     Returns:
         Tuple[תוכן הקובץ, קוד מפעל]
     """
-    from app import calculate_person_monthly_totals
-    from core.logic import get_shabbat_times_cache
+    from core.logic import calculate_person_monthly_totals, get_shabbat_times_cache
     
     # שליפת פרטי העובד כולל מפעל
     person = conn.execute("""
         SELECT p.id, p.name, p.meirav_code, e.code as employer_code
         FROM people p
         LEFT JOIN employers e ON p.employer_id = e.id
-        WHERE p.id = ?
+        WHERE p.id = %s
     """, (person_id,)).fetchone()
     
     if not person or not person['meirav_code']:
@@ -389,7 +428,7 @@ def generate_gesher_file_for_person(conn, person_id: int, year: int, month: int)
         line_count += 1
     
     result = output.getvalue()
-    print(f"Gesher export for person {person_id}: {line_count} lines")
+    logger.info("Gesher export for person %s: %s lines", person_id, line_count)
     return (result, company)
 
 
@@ -425,6 +464,7 @@ def generate_gesher_file(conn, year: int, month: int, filter_name: str = None, c
 
     minimum_wage = get_minimum_wage(conn, year, month)
     housing_filter = get_housing_array_filter()
+    blocked_multi_housing = get_blocked_multi_housing_for_gesher(conn, year, month)
 
     # שליפת מיפוי עובדים למפעלים - עם סינון לפי מערך דיור אם מוגדר
     if housing_filter is not None:
@@ -466,6 +506,14 @@ def generate_gesher_file(conn, year: int, month: int, filter_name: str = None, c
     line_count = 0
 
     for person_id, person in all_people.items():
+        if person_id in blocked_multi_housing:
+            logger.info(
+                "Skipping person %s from Gesher export: %s",
+                person_id,
+                get_blocked_multi_housing_reason(blocked_multi_housing[person_id]),
+            )
+            continue
+
         # סינון לפי מפעל
         if person.get('employer_code') != company:
             continue
@@ -522,7 +570,7 @@ def generate_gesher_file(conn, year: int, month: int, filter_name: str = None, c
             line_count += 1
 
     result = output.getvalue()
-    print(f"Gesher export: {line_count} lines for company {company}")
+    logger.info("Gesher export: %s lines for company %s", line_count, company)
     return result
 
 
@@ -547,6 +595,7 @@ def generate_gesher_file_for_multiple(conn, person_ids: List[int], year: int, mo
         export_codes = load_export_config()
     options = get_export_options()
     minimum_wage = get_minimum_wage(conn, year, month)
+    blocked_multi_housing = get_blocked_multi_housing_for_gesher(conn, year, month, person_ids)
 
     # שליפת פרטי העובדים
     if not person_ids:
@@ -594,6 +643,14 @@ def generate_gesher_file_for_multiple(conn, person_ids: List[int], year: int, mo
     line_count = 0
 
     for person_id in person_ids:
+        if person_id in blocked_multi_housing:
+            logger.info(
+                "Skipping person %s from selected Gesher export: %s",
+                person_id,
+                get_blocked_multi_housing_reason(blocked_multi_housing[person_id]),
+            )
+            continue
+
         if person_id not in people_data:
             continue
 
@@ -649,7 +706,7 @@ def generate_gesher_file_for_multiple(conn, person_ids: List[int], year: int, mo
             line_count += 1
 
     result = output.getvalue()
-    print(f"Gesher export for {len(person_ids)} selected people: {line_count} lines")
+    logger.info("Gesher export for %s selected people: %s lines", len(person_ids), line_count)
     return (result, first_company)
 
 
@@ -694,7 +751,16 @@ def get_export_preview(
         totals = person_data.get('totals', {})
 
         person_lines = []
-        for symbol, (internal_key, value_type, display_name) in export_codes.items():
+        for symbol, value_tuple in export_codes.items():
+            if symbol in EXCLUDED_EXPORT_CODES:
+                continue
+
+            if len(value_tuple) >= 3:
+                internal_key, value_type, display_name = value_tuple
+            else:
+                internal_key, value_type = value_tuple
+                display_name = internal_key
+
             quantity, payment = calculate_value(totals, internal_key, value_type, minimum_wage)
             if quantity >= options['min_amount'] or payment >= options['min_amount']:
                 person_lines.append({

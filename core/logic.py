@@ -324,7 +324,6 @@ def calculate_person_monthly_totals(
     from core.history import get_minimum_wage_for_month
     from core.database import PostgresConnection
     from app_utils import (
-        _fetch_weekday_overrides,
         aggregate_daily_segments_to_monthly,
         get_daily_segments_data,
     )
@@ -543,17 +542,21 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
     month_end = end_dt
     if housing_filter is not None:
         cursor.execute("""
-            SELECT pc.person_id, (pc.quantity * pc.rate) as total_amount, pc.component_type_id
+            SELECT pc.person_id, (pc.quantity * pc.rate) as total_amount, pc.component_type_id,
+                   COALESCE(pct.for_pension, FALSE) as for_pension
             FROM payment_components pc
             JOIN apartments ap ON ap.id = pc.apartment_id
+            LEFT JOIN payment_component_types pct ON pc.component_type_id = pct.id
             WHERE pc.person_id = ANY(%s) AND pc.date >= %s AND pc.date < %s
               AND ap.housing_array_id = %s
         """, (person_ids, month_start, month_end, housing_filter))
     else:
         cursor.execute("""
-            SELECT person_id, (quantity * rate) as total_amount, component_type_id
-            FROM payment_components
-            WHERE person_id = ANY(%s) AND date >= %s AND date < %s
+            SELECT pc.person_id, (pc.quantity * pc.rate) as total_amount, pc.component_type_id,
+                   COALESCE(pct.for_pension, FALSE) as for_pension
+            FROM payment_components pc
+            LEFT JOIN payment_component_types pct ON pc.component_type_id = pct.id
+            WHERE pc.person_id = ANY(%s) AND pc.date >= %s AND pc.date < %s
         """, (person_ids, month_start, month_end))
     all_payment_comps = cursor.fetchall()
 

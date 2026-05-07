@@ -447,8 +447,17 @@ def _get_asd_seniority_supplement(
         except (ValueError, TypeError, OSError):
             return 0
     report_dt = date(year, month, 1)
-    seniority_years = (report_dt - start_dt).days / 365.25
-    if seniority_years >= ASD_SENIORITY_YEARS_THRESHOLD:
+    try:
+        threshold_date = start_dt.replace(
+            year=start_dt.year + ASD_SENIORITY_YEARS_THRESHOLD
+        )
+    except ValueError:
+        # Leap-day starts reach a full calendar year on Feb 28 in non-leap years.
+        threshold_date = start_dt.replace(
+            year=start_dt.year + ASD_SENIORITY_YEARS_THRESHOLD,
+            day=28,
+        )
+    if report_dt >= threshold_date:
         return ASD_SENIORITY_SUPPLEMENT
     return 0
 
@@ -1758,11 +1767,11 @@ def get_daily_segments_data(
     # תוספת ותק ASD: +3₪ למדריך קבוע עם שנה+ ותק
     employee_type = historical_person.get("employee_type")
     person_start_date_row = conn.execute(
-        "SELECT work_start_date FROM people WHERE id = %s", (person_id,)
+        "SELECT start_date FROM people WHERE id = %s", (person_id,)
     ).fetchone()
     asd_seniority_bonus = _get_asd_seniority_supplement(
         employee_type,
-        person_start_date_row["work_start_date"] if person_start_date_row else None,
+        person_start_date_row["start_date"] if person_start_date_row else None,
         year, month,
     )
 
@@ -1772,11 +1781,12 @@ def get_daily_segments_data(
     shift_names_map = {}  # Map shift_id -> shift_name
     shift_is_special_hourly = {}  # Map shift_id -> is_special_hourly (for variable rate tracking)
     shabbat_shifts = set()  # Track which shifts are Shabbat/holiday shifts
-    apt_type_supplement = {}  # Map apartment_type_id -> hourly_wage_supplement (in agorot)
+    apt_type_supplement = {}  # Map apartment_type_id -> hourly_wage_supplement (in agorot), including ASD seniority when eligible
+    apt_type_apartment_supplement = {}  # Map apartment_type_id -> apartment-type supplement only (in agorot)
     for r in reports:
         shift_id = r.get("shift_type_id")
         housing_array_id = r.get("housing_array_id")
-        rate_apartment_type_id = r.get("rate_apartment_type_id")  # Include for rate calculation
+        rate_apartment_type_id = r.get("rate_apartment_type_id") or r.get("apartment_type_id")  # Include effective apartment type for rate calculation
         if shift_id:
             # Include rate_apartment_type_id in key because same shift can have different rates
             rate_key = (shift_id, housing_array_id, rate_apartment_type_id)
@@ -1793,7 +1803,15 @@ def get_daily_segments_data(
                 shabbat_rate = get_effective_hourly_rate(
                     rate_report, minimum_wage, is_shabbat=True, housing_rates_cache=housing_rates_cache
                 )
-                shift_rates[rate_key] = {"weekday": weekday_rate, "shabbat": shabbat_rate, "supplement": effective_supplement}
+                shift_rates[rate_key] = {
+                    "weekday": weekday_rate,
+                    "shabbat": shabbat_rate,
+                    "supplement": effective_supplement,
+                    "apartment_supplement": r.get("hourly_wage_supplement") or 0,
+                    "asd_seniority_supplement": asd_seniority_bonus if (
+                        asd_seniority_bonus and is_asd_housing_array(housing_array_id)
+                    ) else 0,
+                }
             if shift_id not in shift_names_map:
                 shift_names_map[shift_id] = r.get("shift_name", "")
             if shift_id not in shift_is_special_hourly:
@@ -1808,12 +1826,16 @@ def get_daily_segments_data(
             if asd_seniority_bonus and is_asd_array:
                 base_supplement += asd_seniority_bonus
             apt_type_supplement[apt_type_id] = base_supplement
+        if apt_type_id and apt_type_id not in apt_type_apartment_supplement:
+            apt_type_apartment_supplement[apt_type_id] = r.get("hourly_wage_supplement") or 0
         actual_apt_tid = r.get("actual_apartment_type_id")
         if actual_apt_tid and actual_apt_tid not in apt_type_supplement:
             actual_supplement = r.get("actual_hourly_wage_supplement") or 0
             if asd_seniority_bonus and is_asd_array:
                 actual_supplement += asd_seniority_bonus
             apt_type_supplement[actual_apt_tid] = actual_supplement
+        if actual_apt_tid and actual_apt_tid not in apt_type_apartment_supplement:
+            apt_type_apartment_supplement[actual_apt_tid] = r.get("actual_hourly_wage_supplement") or 0
 
     # טעינת תעריפי "שעת עבודה" לכל housing_array_id שנמצא בדיווחים
     # כי Uncovered Minutes ישולמו לפי תעריף זה
@@ -1835,7 +1857,54 @@ def get_daily_segments_data(
             shabbat_rate = get_effective_hourly_rate(
                 dummy_report, minimum_wage, is_shabbat=True, housing_rates_cache=housing_rates_cache
             )
-            shift_rates[rate_key] = {"weekday": weekday_rate, "shabbat": shabbat_rate}
+            shift_rates[rate_key] = {
+                "weekday": weekday_rate,
+                "shabbat": shabbat_rate,
+                "supplement": 0,
+                "apartment_supplement": 0,
+                "asd_seniority_supplement": 0,
+            }
+
+    # תעריפי "שעת עבודה" לפי סוג דירה לתשלום.
+    # שעות לא מכוסות מקבלות shift_id=138, אבל עדיין צריכות לקבל תוספת סוג דירה/ותק לפי הדירה בפועל.
+    work_hour_rate_supplements = {}
+    for r in reports:
+        ha_id = r.get("housing_array_id")
+        rate_apt_type_id = r.get("rate_apartment_type_id") or r.get("apartment_type_id")
+        if not ha_id or not rate_apt_type_id:
+            continue
+        is_asd_array = is_asd_housing_array(ha_id)
+        apartment_supplement = r.get("hourly_wage_supplement") or 0
+        seniority_supplement = asd_seniority_bonus if (asd_seniority_bonus and is_asd_array) else 0
+        work_hour_rate_supplements[(ha_id, rate_apt_type_id)] = (
+            apartment_supplement + seniority_supplement,
+            apartment_supplement,
+            seniority_supplement,
+        )
+
+    for (ha_id, rate_apt_type_id), (effective_supplement, apartment_supplement, seniority_supplement) in work_hour_rate_supplements.items():
+        rate_key = (WORK_HOUR_SHIFT_ID, ha_id, rate_apt_type_id)
+        if rate_key in shift_rates:
+            continue
+        dummy_report = {
+            "shift_type_id": WORK_HOUR_SHIFT_ID,
+            "housing_array_id": ha_id,
+            "is_married": historical_is_married if historical_is_married is not None else False,
+            "hourly_wage_supplement": effective_supplement,
+        }
+        weekday_rate = get_effective_hourly_rate(
+            dummy_report, minimum_wage, is_shabbat=False, housing_rates_cache=housing_rates_cache
+        )
+        shabbat_rate = get_effective_hourly_rate(
+            dummy_report, minimum_wage, is_shabbat=True, housing_rates_cache=housing_rates_cache
+        )
+        shift_rates[rate_key] = {
+            "weekday": weekday_rate,
+            "shabbat": shabbat_rate,
+            "supplement": effective_supplement,
+            "apartment_supplement": apartment_supplement,
+            "asd_seniority_supplement": seniority_supplement,
+        }
 
     # טעינת שם המשמרת "שעת עבודה" אם לא קיים
     if WORK_HOUR_SHIFT_ID not in shift_names_map:
@@ -2107,7 +2176,7 @@ def get_daily_segments_data(
             # נתוני הדיווח לשעות לא מכוסות
             apartment_type_id = r.get("apartment_type_id")
             actual_apartment_type_id = r.get("actual_apartment_type_id")
-            rate_apartment_type_id = r.get("rate_apartment_type_id")
+            rate_apartment_type_id = r.get("rate_apartment_type_id") or apartment_type_id
             is_married = r.get("is_married")
             apartment_name = r.get("apartment_name", "")
             apartment_type_name = r.get("apartment_type_name", "")
@@ -2427,7 +2496,7 @@ def get_daily_segments_data(
                     segment_id = seg.get("id")
                     apartment_type_id = r.get("apartment_type_id")
                     actual_apartment_type_id = r.get("actual_apartment_type_id")
-                    rate_apartment_type_id = r.get("rate_apartment_type_id")
+                    rate_apartment_type_id = r.get("rate_apartment_type_id") or apartment_type_id
                     is_married = r.get("is_married")
                     apartment_name = r.get("apartment_name", "")
                     apartment_type_name = r.get("apartment_type_name", "")
@@ -2457,7 +2526,7 @@ def get_daily_segments_data(
                     segment_id = None
                     apartment_type_id = r.get("apartment_type_id")
                     actual_apartment_type_id = r.get("actual_apartment_type_id") or apartment_type_id
-                    rate_apartment_type_id = r.get("rate_apartment_type_id")
+                    rate_apartment_type_id = r.get("rate_apartment_type_id") or apartment_type_id
                     is_married = r.get("is_married")
                     apartment_name = r.get("apartment_name", "")
                     apartment_type_name = r.get("apartment_type_name", "")
@@ -3375,13 +3444,22 @@ def get_daily_segments_data(
 
                 # קבלת תעריף לפי (shift_id, housing_array_id, rate_apt_type) של הסגמנט הספציפי
                 seg_rate_key = (seg_shift_id, seg_housing_array_id, seg_rate_apt)
-                seg_rates_dict = shift_rates.get(seg_rate_key, {"weekday": minimum_wage, "shabbat": minimum_wage, "supplement": 0})
+                seg_rates_dict = shift_rates.get(seg_rate_key, {
+                    "weekday": minimum_wage,
+                    "shabbat": minimum_wage,
+                    "supplement": 0,
+                    "apartment_supplement": 0,
+                    "asd_seniority_supplement": 0,
+                })
                 # בחירת תעריף שבת או חול לפי is_shabbat (מטבלת shift_type_housing_rates)
                 seg_rate = seg_rates_dict["shabbat"] if is_shabbat else seg_rates_dict["weekday"]
 
                 # תוספת סוג דירה מוצגת בעמודת «בסיס» בטבלה, לא בתווית הפירוט (אחוזים בלבד)
-                hourly_supplement = apt_type_supplement.get(seg_actual_apt, 0)
+                hourly_supplement = apt_type_apartment_supplement.get(seg_actual_apt, 0)
                 apartment_supplement_nis = round(hourly_supplement / 100, 2) if hourly_supplement else 0.0
+                asd_seniority_supplement_nis = round(
+                    (seg_rates_dict.get("asd_seniority_supplement", 0) or 0) / 100, 2
+                )
 
                 # חישוב תשלום בנוסחת גשר: round(שעות,2) × round(תעריף×מכפיל,2) → עיגול לעשרון (שיטת מירב)
                 seg_pay = (
@@ -3499,8 +3577,9 @@ def get_daily_segments_data(
                     "from_prev_day": (seg_start >= MINUTES_PER_DAY) if is_first else False,
                     "effective_rate": seg_rate,  # שימוש בתעריף הנכון (שבת או חול) לפי is_shabbat
                     "display_base_rate": display_base,  # תעריף בסיס לתצוגה (כולל תוספת דירה בפועל)
-                    "apartment_hourly_supplement_nis": apartment_supplement_nis,  # תוספת דירה לשעה (שקלים) — מוצגת בעמודת בסיס
-                    "hourly_wage_supplement": seg_rates_dict.get("supplement", 0),  # תוספת סוג דירה באגורות
+                    "apartment_hourly_supplement_nis": apartment_supplement_nis,  # תוספת סוג דירה לשעה (שקלים)
+                    "asd_seniority_supplement_nis": asd_seniority_supplement_nis,  # תוספת ותק ASD לשעה (שקלים)
+                    "hourly_wage_supplement": seg_rates_dict.get("supplement", 0),  # כלל התוספות השעתיות באגורות
                     "asd_night_label": _asd_night_label_for_row(
                         entry.get("asd_night_label_by_apt"),
                         entry.get("asd_night_label_by_apt_type"),
@@ -3958,19 +4037,20 @@ def aggregate_daily_segments_to_monthly(
         # תעריף בסיס ממוצע - לחישוב תעריף בגשר (כולל תוספות סוג דירה)
         "regular_minutes_sum": 0,
         "regular_rate_x_minutes_sum": 0.0,
+        "component_rate_minutes_sum": {},
+        "component_rate_x_minutes_sum": {},
+        "component_base_rates": {},
     }
 
-    # ASD: סריקה מקדימה לבדיקה אם יש יותר מתעריף בסיס אחד
-    is_asd = housing_filter is not None and is_asd_housing_array(housing_filter)
-    asd_has_multiple_rates = False
-    if is_asd:
-        asd_distinct_rates: set[float] = set()
-        for day in daily_segments:
-            for chain in day.get("chains", []):
-                if chain.get("type", "work") == "work":
-                    rate = round(chain.get("effective_rate", minimum_wage), 2)
-                    asd_distinct_rates.add(rate)
-        asd_has_multiple_rates = len(asd_distinct_rates) > 1
+    def add_component_rate(component_key: str, minutes: int | float, rate: float) -> None:
+        if minutes <= 0:
+            return
+        monthly_totals["component_rate_minutes_sum"][component_key] = (
+            monthly_totals["component_rate_minutes_sum"].get(component_key, 0) + minutes
+        )
+        monthly_totals["component_rate_x_minutes_sum"][component_key] = (
+            monthly_totals["component_rate_x_minutes_sum"].get(component_key, 0.0) + minutes * rate
+        )
 
     # ספירת ימי עבודה, חופשה ומחלה
     work_days_set = set()
@@ -3995,15 +4075,10 @@ def aggregate_daily_segments_to_monthly(
             chain_type = chain.get("type", "work")
             effective_rate = chain.get("effective_rate", minimum_wage)
 
-            # תעריף משתנה:
-            # ASD: כל המשמרות נחשבות "תעריף משתנה" רק אם יש יותר מתעריף בסיס אחד
-            # אחרת: משמרת עם תעריף שעתי מיוחד, או תעריף שונה משכר מינימום + תוספת
+            # תעריף משתנה: משמרת עם תעריף שעתי מיוחד, או תעריף שונה משכר מינימום + תוספת
             is_special_hourly = chain.get("is_special_hourly", False)
             supplement = float(chain.get("hourly_wage_supplement", 0)) / 100
-            if is_asd:
-                is_variable_rate = asd_has_multiple_rates
-            else:
-                is_variable_rate = is_special_hourly or abs(effective_rate - minimum_wage - supplement) > 0.01
+            is_variable_rate = is_special_hourly or abs(effective_rate - minimum_wage - supplement) > 0.01
 
             if chain_type == "work":
                 # אתחול מילון לתעריף משתנה אם צריך
@@ -4031,6 +4106,7 @@ def aggregate_daily_segments_to_monthly(
                     else:
                         monthly_totals["calc100"] += c100
                         monthly_totals["payment_calc100"] += _mul_pay(round(c100 / 60, 2), rounded_rate)
+                        add_component_rate("calc100", c100, rounded_rate)
 
                 # שעות נוספות 125%
                 c125 = chain.get("calc125", 0) or 0
@@ -4045,6 +4121,7 @@ def aggregate_daily_segments_to_monthly(
                     else:
                         monthly_totals["calc125"] += c125
                         monthly_totals["payment_calc125"] += _mul_pay(round(c125 / 60, 2), round(rounded_rate * 1.25, 2))
+                        add_component_rate("calc125", c125, rounded_rate)
 
                 # שעות נוספות 150% (כולל הפרדה בין חול לשבת)
                 c150 = chain.get("calc150", 0) or 0
@@ -4062,6 +4139,7 @@ def aggregate_daily_segments_to_monthly(
                     else:
                         monthly_totals["calc150"] += c150
                         monthly_totals["payment_calc150"] += _mul_pay(round(c150 / 60, 2), round(rounded_rate * 1.5, 2))
+                        add_component_rate("calc150", c150, rounded_rate)
 
                         # הפרדה בין שבת לחול
                         if c150_shabbat > 0:
@@ -4069,9 +4147,13 @@ def aggregate_daily_segments_to_monthly(
                             monthly_totals["calc150_shabbat_100"] += c150_shabbat
                             monthly_totals["calc150_shabbat_50"] += c150_shabbat
                             monthly_totals["payment_calc150_shabbat"] += _mul_pay(round(c150_shabbat / 60, 2), round(rounded_rate * 1.5, 2))
+                            add_component_rate("calc150_shabbat", c150_shabbat, rounded_rate)
+                            add_component_rate("calc150_shabbat_100", c150_shabbat, rounded_rate)
+                            add_component_rate("calc150_shabbat_50", c150_shabbat, rounded_rate)
                         if c150_overtime > 0:
                             monthly_totals["calc150_overtime"] += c150_overtime
                             monthly_totals["payment_calc150_overtime"] += _mul_pay(round(c150_overtime / 60, 2), round(rounded_rate * 1.5, 2))
+                            add_component_rate("calc150_overtime", c150_overtime, rounded_rate)
 
                 # שעות שבת 175%
                 c175 = chain.get("calc175", 0) or 0
@@ -4086,6 +4168,7 @@ def aggregate_daily_segments_to_monthly(
                     else:
                         monthly_totals["calc175"] += c175
                         monthly_totals["payment_calc175"] += _mul_pay(round(c175 / 60, 2), round(rounded_rate * 1.75, 2))
+                        add_component_rate("calc175", c175, rounded_rate)
 
                 # שעות שבת 200%
                 c200 = chain.get("calc200", 0) or 0
@@ -4100,6 +4183,7 @@ def aggregate_daily_segments_to_monthly(
                     else:
                         monthly_totals["calc200"] += c200
                         monthly_totals["payment_calc200"] += _mul_pay(round(c200 / 60, 2), round(rounded_rate * 2.0, 2))
+                        add_component_rate("calc200", c200, rounded_rate)
 
                 # בונוס ליווי רפואי (תשלום בלבד, לא נספר בשעות)
                 escort_bonus = chain.get("escort_bonus_pay", 0) or 0
@@ -4235,8 +4319,35 @@ def aggregate_daily_segments_to_monthly(
             "job_scope_pct": 100
         }
 
+    # תעריף בסיס ממוצע - ממוצע משוקלל של כל התעריפים בשעות רגילות
+    # כולל תוספות סוג דירה ותוספת ותק ASD. זהו גם התעריף שגשר מייצא.
+    if monthly_totals["regular_minutes_sum"] > 0:
+        monthly_totals["average_base_rate"] = (
+            monthly_totals["regular_rate_x_minutes_sum"] / monthly_totals["regular_minutes_sum"]
+        )
+    else:
+        monthly_totals["average_base_rate"] = minimum_wage
+
+    base_rate_for_work = round(monthly_totals["average_base_rate"], 2)
+    for component_key, minutes_sum in monthly_totals["component_rate_minutes_sum"].items():
+        if minutes_sum > 0:
+            monthly_totals["component_base_rates"][component_key] = (
+                monthly_totals["component_rate_x_minutes_sum"].get(component_key, 0.0) / minutes_sum
+            )
+
+    def component_base_rate(component_key: str) -> float:
+        return round(monthly_totals["component_base_rates"].get(component_key, base_rate_for_work), 2)
+
+    rate100 = component_base_rate("calc100")
+    rate125_base = component_base_rate("calc125")
+    rate150_overtime_base = component_base_rate("calc150_overtime")
+    rate150_shabbat_100_base = component_base_rate("calc150_shabbat_100")
+    rate150_shabbat_50_base = component_base_rate("calc150_shabbat_50")
+    rate175_base = component_base_rate("calc175")
+    rate200_base = component_base_rate("calc200")
+
     # תשלום סופי כולל - מחושב מהרכיבים המפורטים (לא מ-payment שכולל כפילויות)
-    # payment_calc100/125/150/175/200 = עבודה בשכר מינימום
+    # payment_calc100/125/150/175/200 = עבודה בתעריף הבסיס הממוצע
     # variable_rates = עבודה בתעריפים מיוחדים
     # vacation_payment = ימי חופשה
     # sick_payment = ימי מחלה
@@ -4274,26 +4385,26 @@ def aggregate_daily_segments_to_monthly(
     h200 = round(monthly_totals.get("calc200", 0) / 60, 2)
 
     # חישוב מחדש מסה"כ דקות (שיטת מירב - מחשב מהשעות הסופיות, לא מצבירת רצפים)
-    monthly_totals["payment_calc100"] = _mul_pay(h100, round(minimum_wage * 1.0, 2))
-    monthly_totals["payment_calc125"] = _mul_pay(h125, round(minimum_wage * 1.25, 2))
-    monthly_totals["payment_calc150_overtime"] = _mul_pay(h150_overtime, round(minimum_wage * 1.5, 2))
+    monthly_totals["payment_calc100"] = _mul_pay(h100, round(rate100 * 1.0, 2))
+    monthly_totals["payment_calc125"] = _mul_pay(h125, round(rate125_base * 1.25, 2))
+    monthly_totals["payment_calc150_overtime"] = _mul_pay(h150_overtime, round(rate150_overtime_base * 1.5, 2))
     monthly_totals["payment_calc150_shabbat"] = (
-        _mul_pay(h150_shabbat_100, round(minimum_wage * 1.0, 2)) +
-        _mul_pay(h150_shabbat_50, round(minimum_wage * 0.5, 2))
+        _mul_pay(h150_shabbat_100, round(rate150_shabbat_100_base * 1.0, 2)) +
+        _mul_pay(h150_shabbat_50, round(rate150_shabbat_50_base * 0.5, 2))
     )
     monthly_totals["payment_calc150"] = monthly_totals["payment_calc150_overtime"] + monthly_totals["payment_calc150_shabbat"]
-    monthly_totals["payment_calc175"] = _mul_pay(h175, round(minimum_wage * 1.75, 2))
-    monthly_totals["payment_calc200"] = _mul_pay(h200, round(minimum_wage * 2.0, 2))
+    monthly_totals["payment_calc175"] = _mul_pay(h175, round(rate175_base * 1.75, 2))
+    monthly_totals["payment_calc200"] = _mul_pay(h200, round(rate200_base * 2.0, 2))
 
     # כל רכיב מעוגל בשיטת מירב (Decimal, round half up)
     gesher_total = (
-        _mul_pay(h100, round(minimum_wage * 1.0, 2)) +
-        _mul_pay(h125, round(minimum_wage * 1.25, 2)) +
-        _mul_pay(h150_overtime, round(minimum_wage * 1.5, 2)) +
-        _mul_pay(h150_shabbat_100, round(minimum_wage * 1.0, 2)) +
-        _mul_pay(h150_shabbat_50, round(minimum_wage * 0.5, 2)) +
-        _mul_pay(h175, round(minimum_wage * 1.75, 2)) +
-        _mul_pay(h200, round(minimum_wage * 2.0, 2)) +
+        _mul_pay(h100, round(rate100 * 1.0, 2)) +
+        _mul_pay(h125, round(rate125_base * 1.25, 2)) +
+        _mul_pay(h150_overtime, round(rate150_overtime_base * 1.5, 2)) +
+        _mul_pay(h150_shabbat_100, round(rate150_shabbat_100_base * 1.0, 2)) +
+        _mul_pay(h150_shabbat_50, round(rate150_shabbat_50_base * 0.5, 2)) +
+        _mul_pay(h175, round(rate175_base * 1.75, 2)) +
+        _mul_pay(h200, round(rate200_base * 2.0, 2)) +
         _round_pay(monthly_totals.get("payment_calc_variable", 0) or 0) +
         _round_pay(monthly_totals.get("standby_payment", 0) or 0) +
         _round_pay(monthly_totals.get("vacation_payment", 0) or 0) +
@@ -4304,14 +4415,6 @@ def aggregate_daily_segments_to_monthly(
         _round_pay(monthly_totals.get("extras", 0) or 0) +
         _round_pay(monthly_totals.get("extras_for_pension", 0) or 0)
     )
-
-    # תעריף בסיס ממוצע - ממוצע משוקלל של כל התעריפים בשעות רגילות (כולל תוספות סוג דירה)
-    if monthly_totals["regular_minutes_sum"] > 0:
-        monthly_totals["average_base_rate"] = (
-            monthly_totals["regular_rate_x_minutes_sum"] / monthly_totals["regular_minutes_sum"]
-        )
-    else:
-        monthly_totals["average_base_rate"] = minimum_wage
 
     monthly_totals["gesher_total"] = round(gesher_total, 2)
     # display_total = סכום השורות המעוגלות (ללא round(2) בסוף) - מתאים לחישוב ידני
