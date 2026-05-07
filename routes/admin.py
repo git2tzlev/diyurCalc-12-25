@@ -6,7 +6,6 @@ Contains administrative functionality like payment codes management.
 from __future__ import annotations
 
 import logging
-from datetime import date
 
 from fastapi import Request, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
@@ -15,12 +14,13 @@ from core.config import config
 from core.database import get_conn
 from core.business_rules_catalog import get_business_rule_reference_tables, get_business_rule_sections
 from core.logic import get_payment_codes
-from core.auth import is_super_admin
+from core.auth import create_action_token, is_super_admin, validate_action_token
 from scripts.db_sync import sync_database, check_demo_database_status
 from utils.utils import format_currency, human_date
 import psycopg2.extras
 
 logger = logging.getLogger(__name__)
+GENERIC_ERROR = "שגיאת מערכת. נסי שוב מאוחר יותר"
 
 
 def _require_super_admin(request: Request) -> None:
@@ -95,7 +95,8 @@ def demo_sync_page(request: Request) -> HTMLResponse:
     status = check_demo_database_status()
     return templates.TemplateResponse("demo_sync.html", {
         "request": request,
-        "demo_status": status
+        "demo_status": status,
+        "demo_sync_token": create_action_token(request, "demo_sync"),
     })
 
 
@@ -114,11 +115,17 @@ def business_rules_page(request: Request) -> HTMLResponse:
     })
 
 
-async def sync_demo_database(request: Request):
+async def sync_demo_database(request: Request, token: str = ""):
     """Sync demo database with production data using Server-Sent Events for progress. רק למנהל על."""
     _require_super_admin(request)
     from fastapi.responses import StreamingResponse
     import json
+
+    if not validate_action_token(request, token, "demo_sync"):
+        async def forbidden_progress():
+            yield f"data: {json.dumps({'type': 'error', 'message': 'אין הרשאה להפעלת הסנכרון'})}\n\n"
+
+        return StreamingResponse(forbidden_progress(), media_type="text/event-stream")
 
     async def generate_progress():
         progress_data = {"current": 0, "total": 0, "message": ""}
@@ -173,7 +180,7 @@ async def sync_demo_database(request: Request):
 
         except Exception as e:
             logger.error(f"Error syncing demo database: {e}", exc_info=True)
-            yield f"data: {json.dumps({'type': 'error', 'message': f'שגיאה בסנכרון: {str(e)}'})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'message': GENERIC_ERROR})}\n\n"
 
     return StreamingResponse(
         generate_progress(),
@@ -231,7 +238,7 @@ async def lock_month_api(request: Request) -> JSONResponse:
 
     except Exception as e:
         logger.error(f"Error locking month: {e}", exc_info=True)
-        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+        return JSONResponse({"success": False, "error": GENERIC_ERROR}, status_code=500)
 
 
 async def unlock_month_api(request: Request) -> JSONResponse:
@@ -257,7 +264,7 @@ async def unlock_month_api(request: Request) -> JSONResponse:
 
     except Exception as e:
         logger.error(f"Error unlocking month: {e}", exc_info=True)
-        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+        return JSONResponse({"success": False, "error": GENERIC_ERROR}, status_code=500)
 
 
 async def update_shift_type_rate(request: Request, shift_type_id: int) -> JSONResponse:
@@ -320,7 +327,7 @@ async def update_shift_type_rate(request: Request, shift_type_id: int) -> JSONRe
     except Exception as e:
         logger.error(f"Error updating shift type rate: {e}", exc_info=True)
         return JSONResponse(
-            {"success": False, "error": str(e)},
+            {"success": False, "error": GENERIC_ERROR},
             status_code=500
         )
 
@@ -412,7 +419,7 @@ async def update_shift_segment(request: Request, segment_id: int) -> JSONRespons
     except Exception as e:
         logger.error(f"Error updating shift segment: {e}", exc_info=True)
         return JSONResponse(
-            {"success": False, "error": str(e)},
+            {"success": False, "error": GENERIC_ERROR},
             status_code=500
         )
 
@@ -451,7 +458,7 @@ async def save_all_segments_history_for_month(request: Request) -> JSONResponse:
     except Exception as e:
         logger.error(f"Error saving segments history: {e}", exc_info=True)
         return JSONResponse(
-            {"success": False, "error": str(e)},
+            {"success": False, "error": GENERIC_ERROR},
             status_code=500
         )
 
@@ -472,11 +479,6 @@ def manage_special_days(request: Request) -> HTMLResponse:
     with get_conn() as conn:
         cursor = conn.conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         try:
-            cursor.execute("""
-                ALTER TABLE special_days
-                ADD COLUMN IF NOT EXISTS counts_as_holiday_payment BOOLEAN NOT NULL DEFAULT false
-            """)
-            conn.conn.commit()
             cursor.execute("""
                 SELECT * FROM special_days
                 ORDER BY start_date DESC, id DESC
@@ -550,9 +552,11 @@ async def add_special_day(request: Request) -> RedirectResponse:
             conn.commit()
 
         return RedirectResponse(url="/admin/special-days", status_code=303)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         logger.error(f"Error adding special day: {e}", exc_info=True)
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=GENERIC_ERROR)
 
 
 async def toggle_special_day(request: Request) -> JSONResponse:
@@ -577,7 +581,7 @@ async def toggle_special_day(request: Request) -> JSONResponse:
         return JSONResponse({"success": True, "message": f"יום פרימיום {status}"})
     except Exception as e:
         logger.error(f"Error toggling special day: {e}", exc_info=True)
-        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+        return JSONResponse({"success": False, "error": GENERIC_ERROR}, status_code=500)
 
 
 async def delete_special_day(request: Request) -> JSONResponse:
@@ -597,4 +601,4 @@ async def delete_special_day(request: Request) -> JSONResponse:
         return JSONResponse({"success": True, "message": "יום פרימיום נמחק"})
     except Exception as e:
         logger.error(f"Error deleting special day: {e}", exc_info=True)
-        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+        return JSONResponse({"success": False, "error": GENERIC_ERROR}, status_code=500)

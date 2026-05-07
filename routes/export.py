@@ -15,26 +15,68 @@ from fastapi.templating import Jinja2Templates
 from core.config import config
 from core.database import get_conn, get_housing_array_filter, get_default_period, get_multi_housing_guides
 from core.logic import calculate_monthly_summary
+from core.auth import enforce_housing_filter_guide_access
 from services import gesher_exporter
+from utils.utils import format_currency, human_date
 
 
 def _validate_guide_access(person_id: int, housing_filter: Optional[int]) -> None:
-    """
-    בודק שלמשתמש יש הרשאה לצפות במדריך.
-    זורק HTTPException 403 אם אין הרשאה.
-    """
-    if housing_filter is None:
-        return  # מנהל על - יכול לראות הכל
+    """בדיקת הרשאת ייצוא מדריך לפי פילטר מערך דיור."""
+    enforce_housing_filter_guide_access(
+        person_id,
+        housing_filter,
+        message="אין הרשאה לייצא מדריך זה",
+    )
 
-    # בדוק שהמדריך שייך למערך הדיור של המשתמש
-    with get_conn() as conn:
-        row = conn.execute(
-            "SELECT housing_array_id FROM people WHERE id = %s",
-            (person_id,)
-        ).fetchone()
-        if not row or row["housing_array_id"] != housing_filter:
-            raise HTTPException(status_code=403, detail="אין הרשאה לייצא מדריך זה")
-from utils.utils import format_currency, human_date
+
+def _filter_multi_housing_for_summary(
+    multi_housing: dict[int, list[str]],
+    summary_data: list[dict],
+) -> dict[int, list[str]]:
+    """Limit multi-housing warnings to people visible in the current summary."""
+    visible_person_ids = {
+        row.get("person_id") or row.get("id")
+        for row in summary_data
+        if row.get("person_id") or row.get("id")
+    }
+    return {
+        person_id: arrays
+        for person_id, arrays in multi_housing.items()
+        if person_id in visible_person_ids
+    }
+
+
+def _build_blocked_multi_housing_warnings(
+    preview: list[dict],
+    blocked_multi_housing: dict[int, list[str]],
+) -> list[dict]:
+    """Build warning rows for people blocked from Gesher export."""
+    preview_by_id = {person["person_id"]: person for person in preview}
+    warnings = []
+    for person_id, arrays in blocked_multi_housing.items():
+        person = preview_by_id.get(person_id)
+        if not person:
+            continue
+        warnings.append({
+            "person_id": person_id,
+            "name": person["name"],
+            "meirav_code": person["meirav_code"],
+            "arrays": arrays,
+            "reason": gesher_exporter.get_blocked_multi_housing_reason(arrays),
+        })
+    return warnings
+
+
+def _remove_blocked_preview_people(
+    preview: list[dict],
+    blocked_multi_housing: dict[int, list[str]],
+) -> list[dict]:
+    """Remove people that must not be exported from the selectable preview table."""
+    if not blocked_multi_housing:
+        return preview
+    blocked_ids = set(blocked_multi_housing)
+    return [person for person in preview if person["person_id"] not in blocked_ids]
+
 
 templates = Jinja2Templates(directory=str(config.TEMPLATES_DIR))
 templates.env.filters["format_currency"] = format_currency
@@ -89,6 +131,15 @@ def export_gesher_person(
     _validate_guide_access(person_id, housing_filter)
 
     with get_conn() as conn:
+        blocked = gesher_exporter.get_blocked_multi_housing_for_gesher(
+            conn, year, month, [person_id],
+        )
+        if person_id in blocked:
+            raise HTTPException(
+                status_code=400,
+                detail=f"לא ניתן לייצא מדריך זה לגשר: {gesher_exporter.get_blocked_multi_housing_reason(blocked[person_id])}",
+            )
+
         # שליפת שם העובד לשם הקובץ
         person = conn.execute("SELECT name, meirav_code FROM people WHERE id = %s", (person_id,)).fetchone()
         if not person:
@@ -133,7 +184,14 @@ def export_gesher_multiple(
         _validate_guide_access(person_id, housing_filter)
 
     with get_conn() as conn:
-        content, company = gesher_exporter.generate_gesher_file_for_multiple(conn, person_ids, year, month)
+        blocked = gesher_exporter.get_blocked_multi_housing_for_gesher(conn, year, month, person_ids)
+        exportable_person_ids = [pid for pid in person_ids if pid not in blocked]
+        if not exportable_person_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="כל המדריכים שנבחרו לא עוברים לקובץ גשר כי הם פעילים ביותר ממערך דיור בחודש זה",
+            )
+        content, company = gesher_exporter.generate_gesher_file_for_multiple(conn, exportable_person_ids, year, month)
 
     if not content:
         raise HTTPException(status_code=400, detail="לא נוצרו נתונים - אין קוד מירב לעובדים שנבחרו")
@@ -203,6 +261,9 @@ def export_gesher_preview(
         last_day = calendar.monthrange(year, month)[1]
         end_date = date(year, month, last_day) + timedelta(days=1)
         multi_housing = get_multi_housing_guides(conn, start_date, end_date)
+        multi_housing = _filter_multi_housing_for_summary(multi_housing, summary_data)
+        blocked_multi_housing = gesher_exporter.get_blocked_multi_housing_for_gesher(conn, year, month)
+        blocked_multi_housing = _filter_multi_housing_for_summary(blocked_multi_housing, summary_data)
 
     missing_merav_list = []
     for person_data in summary_data:
@@ -233,6 +294,15 @@ def export_gesher_preview(
                 })
         preview = filtered_preview
 
+    blocked_gesher_list = _build_blocked_multi_housing_warnings(preview, blocked_multi_housing)
+    preview = _remove_blocked_preview_people(preview, blocked_multi_housing)
+    if blocked_multi_housing:
+        multi_housing = {
+            person_id: arrays
+            for person_id, arrays in multi_housing.items()
+            if person_id not in blocked_multi_housing
+        }
+
     return templates.TemplateResponse("gesher_preview.html", {
         "request": request,
         "preview": preview,
@@ -245,6 +315,7 @@ def export_gesher_preview(
         "missing_merav_count": missing_merav_count,
         "missing_merav_list": missing_merav_list,
         "multi_housing": multi_housing,
+        "blocked_gesher_list": blocked_gesher_list,
     })
 
 

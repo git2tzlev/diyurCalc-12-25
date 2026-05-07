@@ -12,70 +12,13 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 from typing import Optional, Dict, Any, List
-import os
 import re
 from core.config import config
 from core.database import get_conn
+from services.pdf_renderer import render_html_to_pdf_bytes
 
 logger = logging.getLogger(__name__)
-
-
-def safe_delete_file(file_path: str, max_retries: int = 5, retry_delay: float = 1.0, initial_wait: float = 2.0) -> bool:
-    """
-    Safely delete a file with retry mechanism for Windows file locking issues.
-
-    Args:
-        file_path: Path to the file to delete
-        max_retries: Maximum number of retry attempts (default: 5)
-        retry_delay: Delay between retries in seconds (default: 1.0)
-        initial_wait: Initial wait time before first deletion attempt in seconds (default: 2.0)
-
-    Returns:
-        True if file was successfully deleted, False otherwise
-    """
-    import time
-
-    if not os.path.exists(file_path):
-        logger.debug(f"File does not exist, nothing to delete: {file_path}")
-        return True
-
-    # Initial wait to allow processes (like Edge/Chrome) to release file handles
-    if initial_wait > 0:
-        logger.debug(f"Waiting {initial_wait} seconds before attempting to delete: {file_path}")
-        time.sleep(initial_wait)
-
-    for attempt in range(1, max_retries + 1):
-        try:
-            os.unlink(file_path)
-            logger.info(f"Successfully deleted file on attempt {attempt}: {file_path}")
-            return True
-        except PermissionError as e:
-            if attempt < max_retries:
-                logger.warning(
-                    f"Failed to delete file (attempt {attempt}/{max_retries}): {file_path}. "
-                    f"Error: {e}. Retrying in {retry_delay} seconds..."
-                )
-                time.sleep(retry_delay)
-            else:
-                logger.error(
-                    f"Failed to delete file after {max_retries} attempts: {file_path}. "
-                    f"Error: {e}. File may be locked by another process."
-                )
-        except FileNotFoundError:
-            # File was already deleted (possibly by another process)
-            logger.debug(f"File already deleted: {file_path}")
-            return True
-        except Exception as e:
-            logger.error(
-                f"Unexpected error deleting file (attempt {attempt}/{max_retries}): {file_path}. "
-                f"Error: {type(e).__name__}: {e}"
-            )
-            if attempt < max_retries:
-                time.sleep(retry_delay)
-            else:
-                return False
-
-    return False
+GENERIC_ERROR = "שגיאת מערכת. נסי שוב מאוחר יותר"
 
 
 def get_email_settings(conn) -> Optional[Dict[str, Any]]:
@@ -179,7 +122,8 @@ def test_email_connection(settings: Dict[str, Any]) -> Dict[str, Any]:
     except smtplib.SMTPConnectError:
         return {"success": False, "error": "לא ניתן להתחבר לשרת"}
     except Exception as e:
-        return {"success": False, "error": f"שגיאה: {str(e)}"}
+        logger.error(f"Error testing email connection: {e}", exc_info=True)
+        return {"success": False, "error": GENERIC_ERROR}
 
 
 def send_test_email(conn, to_email: str) -> Dict[str, Any]:
@@ -243,19 +187,13 @@ def send_test_email(conn, to_email: str) -> Dict[str, Any]:
         return {"success": False, "error": "שגיאת אימות - בדוק שם משתמש וסיסמה"}
     except Exception as e:
         logger.error(f"Error sending test email: {e}")
-        return {"success": False, "error": f"שגיאה: {str(e)}"}
+        return {"success": False, "error": GENERIC_ERROR}
 
 
 def generate_guide_pdf(person_id: int, year: int, month: int) -> Optional[bytes]:
     """יצירת PDF לדוח מדריך באמצעות רינדור ישיר של התבנית ו-Edge/Chrome headless."""
-    import subprocess
-    import tempfile
-    import time
     from jinja2 import Environment, FileSystemLoader
     from routes.guide import prepare_guide_pdf_data
-
-    temp_html_path = None
-    temp_pdf_path = None
 
     try:
         # 1. הכנת נתונים - חיבור DB קצר, משתחרר לפני יצירת PDF
@@ -269,87 +207,15 @@ def generate_guide_pdf(person_id: int, year: int, month: int) -> Optional[bytes]
         template = env.get_template("guide_shifts_pdf.html")
         html_content = template.render(**pdf_data)
 
-        # 2. שמירה לקובץ זמני
-        fd, temp_html_path = tempfile.mkstemp(suffix='.html')
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            f.write(html_content)
-
-        # 3. הכנת נתיב PDF זמני
-        fd_pdf, temp_pdf_path = tempfile.mkstemp(suffix='.pdf')
-        os.close(fd_pdf)
-
-        # 4. חיפוש דפדפן (Edge או Chrome)
-        browser_paths = [
-            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
-        ]
-
-        browser_exe = None
-        for path in browser_paths:
-            if os.path.exists(path):
-                browser_exe = path
-                break
-
-        if not browser_exe:
-            raise FileNotFoundError("דפדפן Edge/Chrome לא נמצא בשרת")
-
-        cmd = [
-            browser_exe,
-            "--headless",
-            "--disable-gpu",
-            "--run-all-compositor-stages-before-draw",
-            "--virtual-time-budget=10000",
-            "--no-pdf-header-footer",
-            f"--print-to-pdf={temp_pdf_path}",
-            temp_html_path
-        ]
-
         logger.info(f"Generating PDF for person_id={person_id}")
-
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-        )
-
-        try:
-            stdout, stderr = process.communicate(timeout=45)
-            return_code = process.returncode
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-            raise TimeoutError("הדפדפן לא סיים תוך 45 שניות")
-        finally:
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
-
-        if return_code != 0:
-            logger.error(f"Browser PDF error: {stderr.decode('utf-8', errors='ignore')}")
-
-        # המתנה לשחרור קבצים (בעיית Windows)
-        time.sleep(2)
-
-        if os.path.exists(temp_pdf_path) and os.path.getsize(temp_pdf_path) > 0:
-            with open(temp_pdf_path, "rb") as f:
-                pdf_bytes = f.read()
-            logger.info(f"PDF generated successfully, size: {len(pdf_bytes)} bytes")
-            return pdf_bytes
-
-        raise RuntimeError("קובץ PDF לא נוצר או ריק")
-
-    finally:
-        if temp_html_path:
-            safe_delete_file(temp_html_path, initial_wait=1.0)
-        if temp_pdf_path:
-            safe_delete_file(temp_pdf_path, initial_wait=1.0)
+        pdf_bytes = render_html_to_pdf_bytes(html_content)
+        if not pdf_bytes:
+            raise RuntimeError("קובץ PDF לא נוצר או ריק")
+        logger.info(f"PDF generated successfully, size: {len(pdf_bytes)} bytes")
+        return pdf_bytes
+    except Exception as e:
+        logger.error(f"Error generating guide PDF: {e}", exc_info=True)
+        return None
 
 
 def send_email_with_pdf(
@@ -425,7 +291,7 @@ def send_email_with_pdf(
         return {"success": True}
     except Exception as e:
         logger.error(f"Error sending email: {e}")
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": GENERIC_ERROR}
 
 
 def send_guide_email(person_id: int, year: int, month: int, custom_email: Optional[str] = None, settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -456,7 +322,7 @@ def send_guide_email(person_id: int, year: int, month: int, custom_email: Option
             pdf_bytes = generate_guide_pdf(person_id, year, month)
         except Exception as pdf_err:
             logger.error(f"PDF generation failed for {person['name']}: {pdf_err}", exc_info=True)
-            return {"success": False, "error": f"שגיאה ביצירת PDF: {pdf_err}"}
+            return {"success": False, "error": "שגיאה ביצירת PDF"}
         if not pdf_bytes:
             return {"success": False, "error": "שגיאה ביצירת PDF: קובץ ריק"}
 
@@ -493,7 +359,7 @@ def send_guide_email(person_id: int, year: int, month: int, custom_email: Option
 
     except Exception as e:
         logger.error(f"Error in send_guide_email: {e}", exc_info=True)
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": GENERIC_ERROR}
 
 
 def send_all_guides_email(
@@ -557,7 +423,7 @@ def send_all_guides_email(
 
     except Exception as e:
         logger.error(f"Error in send_all_guides_email: {e}", exc_info=True)
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": GENERIC_ERROR}
 
 
 def send_all_guides_to_single_email(
@@ -640,7 +506,7 @@ def send_all_guides_to_single_email(
 
     except Exception as e:
         logger.error(f"Error in send_all_guides_to_single_email: {e}", exc_info=True)
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": GENERIC_ERROR}
 
 
 def send_selected_guides_email(
@@ -731,7 +597,7 @@ def send_selected_guides_email(
 
     except Exception as e:
         logger.error(f"Error in send_selected_guides_email: {e}", exc_info=True)
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": GENERIC_ERROR}
 
 
 def send_selected_guides_to_single_email(
@@ -814,7 +680,7 @@ def send_selected_guides_to_single_email(
 
     except Exception as e:
         logger.error(f"Error in send_selected_guides_to_single_email: {e}", exc_info=True)
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": GENERIC_ERROR}
 
 
 def _generate_combined_guides_pdf(guides, year: int, month: int):
@@ -823,9 +689,6 @@ def _generate_combined_guides_pdf(guides, year: int, month: int):
     משתמש ב-prepare_guide_pdf_data מ-routes.guide לקבלת נתונים זהים לדוח הבודד.
     כל מדריך מקבל חיבור DB קצר ומשחרר אותו לפני יצירת PDF.
     """
-    import time
-    import subprocess
-    import tempfile
     from jinja2 import Environment, FileSystemLoader
     from routes.guide import prepare_guide_pdf_data
 
@@ -991,88 +854,17 @@ def _generate_combined_guides_pdf(guides, year: int, month: int):
 
         logger.info(f"Generating combined PDF for {successful_guides} guides using headless browser")
 
-        # יצירת PDF באמצעות דפדפן headless
-        temp_html_path = None
-        temp_pdf_path = None
+        pdf_bytes = render_html_to_pdf_bytes(
+            combined_html,
+            timeout_seconds=120,
+            settle_seconds=1.0,
+        )
+        if not pdf_bytes:
+            logger.error("Combined PDF file was not created or is empty")
+            return None, 0, failed_guides
 
-        try:
-            # Save to temp HTML file
-            fd, temp_html_path = tempfile.mkstemp(suffix='.html')
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                f.write(combined_html)
-
-            # Prepare temp PDF path
-            fd_pdf, temp_pdf_path = tempfile.mkstemp(suffix='.pdf')
-            os.close(fd_pdf)
-
-            # Find Browser
-            browser_paths = [
-                r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-                r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-                r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
-            ]
-
-            browser_exe = None
-            for path in browser_paths:
-                if os.path.exists(path):
-                    browser_exe = path
-                    break
-
-            if not browser_exe:
-                logger.error("No suitable browser (Edge/Chrome) found for PDF generation")
-                return None, 0, failed_guides
-
-            cmd = [
-                browser_exe,
-                "--headless",
-                "--disable-gpu",
-                "--run-all-compositor-stages-before-draw",
-                "--virtual-time-budget=10000",
-                "--no-pdf-header-footer",
-                f"--print-to-pdf={temp_pdf_path}",
-                temp_html_path
-            ]
-
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-            )
-
-            try:
-                stdout, stderr = process.communicate(timeout=120)
-            except subprocess.TimeoutExpired:
-                logger.error("Browser process timed out")
-                process.kill()
-                process.wait()
-                return None, 0, failed_guides
-            finally:
-                if process.poll() is None:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait()
-
-            time.sleep(1)
-
-            if os.path.exists(temp_pdf_path) and os.path.getsize(temp_pdf_path) > 0:
-                with open(temp_pdf_path, "rb") as f:
-                    pdf_bytes = f.read()
-                logger.info(f"Combined PDF generated successfully, size: {len(pdf_bytes)} bytes")
-                return pdf_bytes, successful_guides, failed_guides
-            else:
-                logger.error("Combined PDF file was not created or is empty")
-                return None, 0, failed_guides
-
-        finally:
-            if temp_html_path:
-                safe_delete_file(temp_html_path, initial_wait=1.0)
-            if temp_pdf_path:
-                safe_delete_file(temp_pdf_path, initial_wait=1.0)
+        logger.info(f"Combined PDF generated successfully, size: {len(pdf_bytes)} bytes")
+        return pdf_bytes, successful_guides, failed_guides
 
     except Exception as e:
         logger.error(f"Error generating combined PDF: {e}", exc_info=True)
@@ -1082,9 +874,9 @@ def _generate_combined_guides_pdf(guides, year: int, month: int):
 # ─── Email Logs ───────────────────────────────────────────────
 
 
-def _ensure_email_logs_table(conn) -> None:
+def ensure_email_logs_table(conn) -> None:
     """יצירת טבלת email_logs אם לא קיימת."""
-    conn.execute("""
+    sql = """
         CREATE TABLE IF NOT EXISTS email_logs (
             id SERIAL PRIMARY KEY,
             recipient_id INTEGER,
@@ -1100,7 +892,15 @@ def _ensure_email_logs_table(conn) -> None:
             sent_at TIMESTAMP DEFAULT NOW(),
             batch_id VARCHAR(100)
         )
-    """)
+    """
+    if hasattr(conn, "execute"):
+        conn.execute(sql)
+    else:
+        cursor = conn.cursor()
+        try:
+            cursor.execute(sql)
+        finally:
+            cursor.close()
     conn.commit()
 
 
@@ -1135,7 +935,7 @@ def insert_email_log(
         logger.error(f"Error inserting email log: {e}")
         try:
             conn.rollback()
-            _ensure_email_logs_table(conn)
+            ensure_email_logs_table(conn)
             conn.execute("""
                 INSERT INTO email_logs
                 (recipient_id, recipient_email, recipient_name, email_type,
@@ -1158,6 +958,7 @@ def get_email_logs(
     month: Optional[int] = None,
     year: Optional[int] = None,
     status: Optional[str] = None,
+    housing_array_id: Optional[int] = None,
     limit: int = 100,
 ) -> List[Dict[str, Any]]:
     """שליפת לוגי שליחת מייל עם סינון."""
@@ -1180,6 +981,18 @@ def get_email_logs(
         if status:
             conditions.append("status = %s")
             params.append(status)
+        if housing_array_id is not None:
+            conditions.append(
+                """
+                EXISTS (
+                    SELECT 1
+                    FROM people p
+                    WHERE p.id = email_logs.recipient_id
+                      AND p.housing_array_id = %s
+                )
+                """
+            )
+            params.append(housing_array_id)
 
         where_clause = " AND ".join(conditions) if conditions else "TRUE"
         params.append(limit)
@@ -1200,15 +1013,29 @@ def get_email_logs(
         return []
 
 
-def get_batch_summary(conn, batch_id: str) -> Dict[str, Any]:
+def get_batch_summary(conn, batch_id: str, housing_array_id: Optional[int] = None) -> Dict[str, Any]:
     """סיכום batch שליחה לפי batch_id."""
     try:
-        rows = conn.execute("""
+        params: list[Any] = [batch_id]
+        housing_filter = ""
+        if housing_array_id is not None:
+            housing_filter = """
+              AND EXISTS (
+                  SELECT 1
+                  FROM people p
+                  WHERE p.id = email_logs.recipient_id
+                    AND p.housing_array_id = %s
+              )
+            """
+            params.append(housing_array_id)
+
+        rows = conn.execute(f"""
             SELECT status, COUNT(*) as count
             FROM email_logs
             WHERE batch_id = %s
+            {housing_filter}
             GROUP BY status
-        """, (batch_id,)).fetchall()
+        """, tuple(params)).fetchall()
 
         summary = {"sent": 0, "failed": 0, "skipped": 0, "total": 0}
         for row in rows:
@@ -1300,7 +1127,7 @@ def process_guide_for_bulk(
 
     except Exception as e:
         logger.error(f"Error processing guide {guide_name}: {e}", exc_info=True)
-        error_msg = f"שגיאה בשליחה: {str(e)}"
+        error_msg = "שגיאה בשליחה"
         with get_conn() as conn:
             insert_email_log(
                 conn,

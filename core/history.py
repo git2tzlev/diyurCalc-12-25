@@ -6,8 +6,7 @@ Uses "save on change" approach - current data is used unless there's a historica
 from __future__ import annotations
 
 import logging
-from typing import Optional, Any, List, Dict
-from datetime import datetime
+from typing import Optional, List, Dict
 
 import psycopg2.extras
 from utils.cache_manager import cached

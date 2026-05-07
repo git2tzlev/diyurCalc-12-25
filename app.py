@@ -5,28 +5,22 @@ Uses modular structure with separate route handlers.
 from __future__ import annotations
 
 import logging
-import time
 import signal
 import sys
 import atexit
-from datetime import datetime
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.exceptions import RequestValidationError
-from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 import psycopg2
 
 from core.config import config
 from core.database import (
-    set_demo_mode, get_demo_mode_from_cookie, is_demo_mode, get_current_db_name, close_all_pools,
-    get_housing_array_from_cookie, set_housing_array_filter, get_housing_array_filter, get_conn
-)
-from core.logic import (
-    calculate_person_monthly_totals,
+    set_demo_mode, get_demo_mode_from_cookie, close_all_pools,
+    get_housing_array_from_cookie, set_housing_array_filter, get_conn
 )
 from utils.utils import human_date, format_currency, format_currency_total
 from routes.home import home
@@ -36,6 +30,7 @@ from routes.guide import (
     shifts_report_pdf, shifts_report_preview, shifts_report_email, chains_report_email,
     get_guide_notes, add_guide_note, delete_guide_note,
     get_holiday_payment_setup_api, save_holiday_payment_setup_api,
+    guide_notes_management,
 )
 from routes.admin import (
     manage_payment_codes, update_payment_codes,
@@ -90,11 +85,20 @@ from routes.stats import (
     send_overtime_email_route,
 )
 from routes.auth import login_page, login_submit, logout
-from core.auth import validate_session_token, SESSION_COOKIE_NAME, is_framework_manager, is_super_admin
+from core.auth import (
+    can_login,
+    validate_session_token,
+    refresh_session_user,
+    SESSION_COOKIE_NAME,
+    is_framework_manager,
+    is_super_admin,
+    get_user_housing_array,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+GENERIC_ERROR = "שגיאת מערכת. נסי שוב מאוחר יותר"
 
 # Global flag to track shutdown
 _shutting_down = False
@@ -133,8 +137,25 @@ if hasattr(signal, 'SIGINT'):
 # Register cleanup on exit
 atexit.register(cleanup_resources)
 
-# FastAPI app setup
-app = FastAPI(title="ניהול משמרות בענן")
+
+async def run_startup_tasks():
+    """Ensure runtime defaults exist in production and demo databases."""
+    from core.runtime_defaults import ensure_runtime_defaults
+
+    ensure_runtime_defaults(include_demo=True)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    await run_startup_tasks()
+    try:
+        yield
+    finally:
+        logger.info("Application shutting down...")
+        cleanup_resources()
+
+
+app = FastAPI(title="ניהול משמרות בענן", lifespan=lifespan)
 templates = Jinja2Templates(directory=str(config.TEMPLATES_DIR))
 templates.env.filters["human_date"] = human_date
 templates.env.filters["format_currency"] = format_currency
@@ -145,7 +166,13 @@ templates.env.globals["app_version"] = config.VERSION
 # Middleware to set demo mode and housing array filter from cookies
 class DemoModeMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        demo_mode = get_demo_mode_from_cookie(request)
+        token = request.cookies.get(SESSION_COOKIE_NAME)
+        user = validate_session_token(token) if token else None
+        demo_mode = bool(
+            user
+            and user.get("role") == "super_admin"
+            and get_demo_mode_from_cookie(request)
+        )
         set_demo_mode(demo_mode)
         housing_array_id = get_housing_array_from_cookie(request)
         set_housing_array_filter(housing_array_id)
@@ -179,14 +206,19 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         # בדיקת session cookie
         token = request.cookies.get(SESSION_COOKIE_NAME)
-        user = validate_session_token(token) if token else None
+        session_user = validate_session_token(token) if token else None
+        user = None
 
-        # שמירת פרטי המשתמש ב-request state (גם אם None)
-        request.state.current_user = user
+        # שמירת פרטי המשתמש ב-request state (גם אם None). בנתיבים מוגנים
+        # נרענן מול ה-DB כדי לכבד שינוי role / סטטוס / מערך דיור מיידית.
+        request.state.current_user = None
 
         # נתיבים ציבוריים - לא צריך בדיקה
         if any(path.startswith(route) for route in self.PUBLIC_ROUTES):
             return await call_next(request)
+
+        user = refresh_session_user(session_user)
+        request.state.current_user = user
 
         if not user:
             # הפניה לעמוד התחברות עבור בקשות HTML
@@ -196,6 +228,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 {"error": "לא מחובר למערכת"},
                 status_code=401
+            )
+
+        if not can_login(user.get("role") or ""):
+            return JSONResponse(
+                {"error": "אין הרשאה להתחבר למערכת"},
+                status_code=403,
             )
 
         # עבור מנהל מסגרת - כפה סינון לפי המערך שלו
@@ -222,8 +260,10 @@ if config.STATIC_DIR:
 async def database_connection_error_handler(request: Request, exc: psycopg2.OperationalError):
     """Handle database connection errors with helpful messages."""
     error_msg = str(exc)
-    
-    if "could not translate host name" in error_msg or "Name or service not known" in error_msg:
+
+    if not config.DEBUG:
+        user_message = "שגיאת חיבור לבסיס הנתונים. נסי שוב מאוחר יותר."
+    elif "could not translate host name" in error_msg or "Name or service not known" in error_msg:
         user_message = (
             "שגיאת חיבור לבסיס הנתונים: לא ניתן לפתור את שם השרת.\n\n"
             "אפשרויות לפתרון:\n"
@@ -242,8 +282,8 @@ async def database_connection_error_handler(request: Request, exc: psycopg2.Oper
         )
     else:
         user_message = f"שגיאת חיבור לבסיס הנתונים: {error_msg}"
-    
-    logger.error(f"Database connection error: {error_msg}")
+
+    logger.error("Database connection error: %s", error_msg, exc_info=True)
     
     # Return HTML error page for web requests
     if request.url.path.startswith('/api/'):
@@ -267,15 +307,6 @@ async def database_connection_error_handler(request: Request, exc: psycopg2.Oper
         status_code=503
     )
 
-@app.get("/debug/filters")
-def debug_filters():
-    """Debug endpoint to check if filters are registered."""
-    return {
-        "format_currency_registered": "format_currency" in templates.env.filters,
-        "human_date_registered": "human_date" in templates.env.filters,
-        "available_filters": list(templates.env.filters.keys())
-    }
-
 # Route registrations
 @app.get("/health")
 def health_check():
@@ -287,12 +318,15 @@ def health_check():
             conn.execute("SELECT 1").fetchone()
         return {"status": "ok", "database": "connected"}
     except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        return {
-            "status": "error",
-            "database": "disconnected",
-            "error": str(e)
-        }, 503
+        logger.error("Health check failed: %s", e, exc_info=True)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "error",
+                "database": "disconnected",
+                "error": "database unavailable",
+            },
+        )
 
 
 # Auth routes
@@ -364,7 +398,7 @@ async def shifts_report_email_route(request: Request, person_id: int, year: int,
         return await shifts_report_email(request, person_id, year, month)
     except Exception as e:
         logger.error(f"Unhandled error in shifts_report_email_route: {e}", exc_info=True)
-        return JSONResponse({"success": False, "error": f"שגיאה לא צפויה: {str(e)}"})
+        return JSONResponse({"success": False, "error": GENERIC_ERROR})
 
 
 @app.post("/api/send-chains-email/{person_id}")
@@ -374,7 +408,7 @@ async def chains_report_email_route(request: Request, person_id: int, year: int,
         return await chains_report_email(request, person_id, year, month)
     except Exception as e:
         logger.error(f"Unhandled error in chains_report_email_route: {e}", exc_info=True)
-        return JSONResponse({"success": False, "error": f"שגיאה לא צפויה: {str(e)}"})
+        return JSONResponse({"success": False, "error": GENERIC_ERROR})
 
 
 @app.get("/api/guide/{person_id}/notes")
@@ -393,6 +427,16 @@ async def add_guide_note_route(request: Request, person_id: int):
 async def delete_guide_note_route(request: Request, note_id: int):
     """מחיקת הערה."""
     return await delete_guide_note(request, note_id)
+
+
+@app.get("/notes", response_class=HTMLResponse)
+def guide_notes_management_route(
+    request: Request,
+    year: int | None = None,
+    month: int | None = None,
+):
+    """עמוד ניהול כל הערות המדריכים."""
+    return guide_notes_management(request, year, month)
 
 
 @app.get("/api/holiday-payment-setup")
@@ -439,9 +483,9 @@ def demo_sync_route(request: Request):
 
 
 @app.get("/admin/demo-sync/run")
-async def sync_demo_route(request: Request):
+async def sync_demo_route(request: Request, token: str = ""):
     """Run demo database sync with SSE progress."""
-    return await sync_demo_database(request)
+    return await sync_demo_database(request, token)
 
 
 @app.get("/admin/demo-sync/status")
@@ -713,9 +757,9 @@ async def send_selected_guides_to_single_email_api(request: Request, year: int, 
 
 
 @app.get("/api/send-bulk-stream")
-async def send_bulk_stream_api(request: Request, year: int, month: int):
+async def send_bulk_stream_api(request: Request, year: int, month: int, token: str = ""):
     """שליחה מרוכזת עם SSE לעדכון התקדמות בזמן אמת."""
-    return await send_bulk_stream(request, year, month)
+    return await send_bulk_stream(request, year, month, token)
 
 
 @app.get("/api/email-logs")
@@ -739,11 +783,14 @@ async def retry_failed_emails_api(request: Request):
 @app.post("/api/toggle-demo-mode")
 async def toggle_demo_mode(request: Request):
     """Toggle between demo and production database."""
+    if not is_super_admin(request):
+        return JSONResponse({"success": False, "error": "אין הרשאה"}, status_code=403)
+
     # Verify password (from environment variable)
     try:
         body = await request.json()
         password = body.get("password", "")
-    except:
+    except Exception:
         password = ""
 
     # Password must be configured in environment variable DEMO_MODE_PASSWORD
@@ -778,7 +825,7 @@ async def toggle_demo_mode(request: Request):
 @app.get("/api/demo-mode-status")
 def demo_mode_status(request: Request):
     """Get current demo mode status."""
-    demo = get_demo_mode_from_cookie(request)
+    demo = bool(is_super_admin(request) and get_demo_mode_from_cookie(request))
     return {
         "demo_mode": demo,
         "db_name": "פיתוח" if demo else "עבודה"
@@ -786,12 +833,19 @@ def demo_mode_status(request: Request):
 
 
 @app.get("/api/housing-arrays")
-def get_housing_arrays():
+def get_housing_arrays(request: Request):
     """מחזיר רשימת כל מערכי הדיור."""
+    user_housing_array = get_user_housing_array(request)
     with get_conn() as conn:
-        rows = conn.execute(
-            "SELECT id, name FROM housing_arrays ORDER BY name"
-        ).fetchall()
+        if user_housing_array is not None:
+            rows = conn.execute(
+                "SELECT id, name FROM housing_arrays WHERE id = %s ORDER BY name",
+                (user_housing_array,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, name FROM housing_arrays ORDER BY name"
+            ).fetchall()
     return [{"id": r["id"], "name": r["name"]} for r in rows]
 
 
@@ -871,47 +925,6 @@ async def set_selected_period_api(request: Request):
         samesite="lax"
     )
     return response
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Handle application startup - ensure database has required codes."""
-    from core.logic import ensure_sick_payment_code, ensure_professional_support_code, ensure_holiday_payment_code
-    from core.holiday_payment import (
-        ensure_holiday_payment_assignments_table,
-        ensure_special_days_holiday_payment_column,
-    )
-    from core.database import get_conn, set_demo_mode
-    try:
-        with get_conn() as conn:
-            ensure_sick_payment_code(conn.conn)
-            ensure_professional_support_code(conn.conn)
-            ensure_holiday_payment_code(conn.conn)
-            ensure_holiday_payment_assignments_table(conn.conn)
-            ensure_special_days_holiday_payment_column(conn.conn)
-    except Exception as e:
-        logger.warning(f"Could not ensure payment codes on startup: {e}")
-
-    # וידוא קודים גם ב-DB הדמו
-    try:
-        set_demo_mode(True)
-        with get_conn() as conn:
-            ensure_sick_payment_code(conn.conn)
-            ensure_professional_support_code(conn.conn)
-            ensure_holiday_payment_code(conn.conn)
-            ensure_holiday_payment_assignments_table(conn.conn)
-            ensure_special_days_holiday_payment_column(conn.conn)
-    except Exception as e:
-        logger.debug(f"Could not ensure payment codes in demo DB: {e}")
-    finally:
-        set_demo_mode(False)
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Handle application shutdown."""
-    logger.info("Application shutting down...")
-    cleanup_resources()
 
 
 if __name__ == "__main__":

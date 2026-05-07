@@ -144,6 +144,17 @@
     </div>
     {% endif %}
 
+    {% if blocked_gesher_list is defined and blocked_gesher_list | length > 0 %}
+    <!-- אזהרה על מדריכים שלא עוברים לגשר -->
+    <div style="margin-bottom: 10px; padding: 10px 15px; background: #fff7ed; border: 1px solid #fb923c; border-radius: 6px; display: flex; align-items: center; gap: 10px;">
+        <span style="font-size: 18px;">&#9888;</span>
+        <span style="font-size: 13px; color: #9a3412;">
+            <strong>{{ blocked_gesher_list | length }}</strong> מדריכ{% if blocked_gesher_list | length > 1 %}ים לא עוברים{% else %} לא עובר{% endif %} לקובץ גשר במערך צוהר הלב בגלל פעילות ביותר ממערך דיור.
+        </span>
+        <button onclick="showBlockedGesherModal()" style="padding: 4px 10px; font-size: 12px; background: #fb923c; color:#fff; border: none; border-radius: 4px; cursor: pointer;">הצג</button>
+    </div>
+    {% endif %}
+
     {% if preview %}
     <!-- חיפוש ובחירה -->
     <div style="margin-bottom: 10px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
@@ -232,6 +243,32 @@
         <p>לא נמצאו עובדים עם קוד מירב ונתוני שכר לחודש זה.</p>
     </div>
     {% endif %}
+</div>
+
+<!-- Modal מדריכים שלא עוברים לגשר -->
+<div id="blockedGesherModal" class="modal-overlay" onclick="if(event.target===this)hideBlockedGesherModal()">
+    <div class="modal-content" style="max-width: 620px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <h3 style="margin: 0; color: #9a3412;">מדריכים שלא עוברים לקובץ גשר</h3>
+            <button onclick="hideBlockedGesherModal()" style="background: none; border: none; font-size: 20px; cursor: pointer;">&times;</button>
+        </div>
+        <p style="font-size: 12px; color: #666; margin-bottom: 15px;">מדריכים אלו לא ייכללו בקובץ גשר של מערך צוהר הלב.</p>
+        <table class="legend-table">
+            <thead><tr><th>שם</th><th>קוד מירב</th><th>סיבה</th></tr></thead>
+            <tbody>
+                {% for item in blocked_gesher_list or [] %}
+                <tr>
+                    <td>
+                        <a href="/guide/{{ item.person_id }}?year={{ selected_year }}&month={{ selected_month }}"
+                           style="text-decoration: none; color: #0969da; font-weight: bold;">{{ item.name }}</a>
+                    </td>
+                    <td>{{ item.meirav_code }}</td>
+                    <td>{{ item.reason }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
 </div>
 
 <!-- Modal עובדים ללא קוד מירב -->
@@ -402,12 +439,21 @@ function hideMultiHousingModal() {
     document.getElementById('multiHousingModal').classList.remove('show');
 }
 
+function showBlockedGesherModal() {
+    document.getElementById('blockedGesherModal').classList.add('show');
+}
+
+function hideBlockedGesherModal() {
+    document.getElementById('blockedGesherModal').classList.remove('show');
+}
+
 // Close modals with Escape key
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
         hideLegend();
         hideMissingModal();
         hideMultiHousingModal();
+        hideBlockedGesherModal();
     }
 });
 </script>

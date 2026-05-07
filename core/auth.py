@@ -21,6 +21,7 @@ AUTHORIZED_ROLES = {"super_admin", "framework_manager"}
 
 # משך תוקף session (24 שעות)
 SESSION_MAX_AGE = 86400
+ACTION_TOKEN_MAX_AGE = 3600
 
 # שם ה-cookie של ה-session
 SESSION_COOKIE_NAME = "session"
@@ -72,6 +73,80 @@ def validate_session_token(token: str) -> Optional[dict]:
         return data
     except (BadSignature, SignatureExpired):
         return None
+
+
+def create_action_token(request, action: str) -> str:
+    """יצירת token חתום לפעולה רגישה מתוך עמוד שכבר נטען למשתמש מחובר."""
+    user = getattr(request.state, "current_user", None)
+    person_id = user.get("person_id") if user else None
+    serializer = _get_session_serializer()
+    return serializer.dumps(
+        {
+            "person_id": person_id,
+            "action": action,
+            "created": datetime.now().isoformat(),
+        },
+        salt="action-token",
+    )
+
+
+def validate_action_token(request, token: str, action: str) -> bool:
+    """אימות token לפעולת GET/SSE רגישה."""
+    if not token:
+        return False
+
+    user = getattr(request.state, "current_user", None)
+    person_id = user.get("person_id") if user else None
+    if not person_id:
+        return False
+
+    serializer = _get_session_serializer()
+    try:
+        data = serializer.loads(token, salt="action-token", max_age=ACTION_TOKEN_MAX_AGE)
+    except (BadSignature, SignatureExpired):
+        return False
+
+    return data.get("action") == action and data.get("person_id") == person_id
+
+
+def refresh_session_user(session_user: Optional[dict]) -> Optional[dict]:
+    """
+    טעינת פרטי המשתמש העדכניים מה-DB עבור session חתום.
+
+    ה-session עצמו מוכיח שהבקשה נחתמה על ידי המערכת, אבל הרשאות, סטטוס פעיל
+    ומערך דיור הם נתונים חיים. לכן בכל בקשה מוגנת אנחנו מעדכנים אותם מה-DB.
+    """
+    if not session_user or not session_user.get("person_id"):
+        return None
+
+    try:
+        with get_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT p.id, p.name, p.is_active, p.housing_array_id, r.name AS role_name
+                FROM people p
+                LEFT JOIN roles r ON r.id = p.role_id
+                WHERE p.id = %s
+                """,
+                (session_user["person_id"],),
+            ).fetchone()
+    except Exception as e:
+        logger.error("שגיאה ברענון session מול DB: %s", e, exc_info=True)
+        return None
+
+    if not row or not row["is_active"]:
+        return None
+
+    role_name = row["role_name"] or ""
+    if not can_login(role_name):
+        return None
+
+    return {
+        "person_id": row["id"],
+        "name": row["name"],
+        "role": role_name,
+        "housing_array_id": row["housing_array_id"],
+    }
 
 
 def can_login(role_name: str) -> bool:
@@ -138,8 +213,8 @@ def authenticate_user(id_number: str, password: str) -> tuple[bool, Optional[dic
             return True, user_data, ""
 
     except Exception as e:
-        logger.error(f"שגיאה באימות משתמש: {e}")
-        return False, None, f"שגיאת מערכת: {e}"
+        logger.error("שגיאה באימות משתמש: %s", e, exc_info=True)
+        return False, None, "שגיאת מערכת. נסי שוב מאוחר יותר"
 
 
 def _log_login(conn, person_id: int, success: bool, ip_address: str = None) -> None:
@@ -202,3 +277,29 @@ def enforce_framework_manager_guide_access(request, person_id: int) -> None:
         ).fetchone()
     if not row or row["housing_array_id"] != hid:
         raise HTTPException(status_code=403, detail="אין הרשאה לצפות במדריך זה")
+
+
+def enforce_housing_filter_guide_access(
+    person_id: int,
+    housing_filter: Optional[int],
+    *,
+    message: str = "אין הרשאה לצפות במדריך זה",
+) -> None:
+    """
+    בדיקת גישה למדריך לפי פילטר מערך דיור פעיל.
+
+    משמשת routes שלא מחזיקים את request עצמו אלא עובדים מול ContextVar
+    של מערך הדיור.
+    """
+    if housing_filter is None:
+        return
+
+    from fastapi import HTTPException
+
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT housing_array_id FROM people WHERE id = %s",
+            (person_id,),
+        ).fetchone()
+    if not row or row["housing_array_id"] != housing_filter:
+        raise HTTPException(status_code=403, detail=message)

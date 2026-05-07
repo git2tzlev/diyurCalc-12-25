@@ -397,7 +397,7 @@
     bulkStartTime = Date.now();
 
     // SSE connection
-    const url = `/api/send-bulk-stream?year=${selectedYear}&month=${selectedMonth}`;
+    const url = `/api/send-bulk-stream?year=${selectedYear}&month=${selectedMonth}&token={{ bulk_send_token|urlencode }}`;
     bulkEventSource = new EventSource(url);
 
     bulkEventSource.addEventListener('start', function(e) {
@@ -535,7 +535,12 @@
       const response = await fetch('/api/retry-failed-emails', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ batch_id: currentBatchId, year: selectedYear, month: selectedMonth })
+        body: JSON.stringify({
+          batch_id: currentBatchId,
+          year: selectedYear,
+          month: selectedMonth,
+          token: {{ retry_failed_token|tojson }}
+        })
       });
       const result = await response.json();
       if (result.success) {

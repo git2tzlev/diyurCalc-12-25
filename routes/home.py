@@ -14,6 +14,7 @@ from fastapi.templating import Jinja2Templates
 from core.config import config
 from core.database import get_conn, get_housing_array_filter, get_default_period, get_multi_housing_guides
 from core.logic import get_active_guides
+from core.report_presence import get_report_presence_counts
 from core.time_utils import get_shabbat_times_cache
 from core.holiday_payment import get_holiday_payment_setup
 from utils.utils import month_range_ts, available_months_from_db, format_currency, human_date
@@ -75,56 +76,9 @@ def home(
         end_date = end_dt.date()
         counts_start = time.time()
         with get_conn() as conn:
-            if housing_filter is not None:
-                # Filter by housing array
-                for row in conn.execute(
-                    """
-                    SELECT tr.person_id, COUNT(*) AS cnt
-                    FROM time_reports tr
-                    JOIN apartments ap ON ap.id = tr.apartment_id
-                    WHERE tr.date >= %s AND tr.date < %s
-                      AND ap.housing_array_id = %s
-                    GROUP BY tr.person_id
-                    """,
-                    (start_date, end_date, housing_filter),
-                ):
-                    counts[row["person_id"]] = row["cnt"]
-            else:
-                # No filter - count all
-                for row in conn.execute(
-                    """
-                    SELECT person_id, COUNT(*) AS cnt
-                    FROM time_reports
-                    WHERE date >= %s AND date < %s
-                    GROUP BY person_id
-                    """,
-                    (start_date, end_date),
-                ):
-                    counts[row["person_id"]] = row["cnt"]
-            # גם מדריכים עם רכיבי תשלום צריכים להופיע
-            # כשמסננים לפי מערך דיור - רק רכיבים שקשורים לדירות מהמערך הזה
-            if housing_filter is not None:
-                for row in conn.execute(
-                    """
-                    SELECT DISTINCT pc.person_id
-                    FROM payment_components pc
-                    JOIN apartments ap ON ap.id = pc.apartment_id
-                    WHERE pc.date >= %s AND pc.date < %s
-                      AND ap.housing_array_id = %s
-                    """,
-                    (start_date, end_date, housing_filter),
-                ):
-                    has_payment_components.add(row["person_id"])
-            else:
-                for row in conn.execute(
-                    """
-                    SELECT DISTINCT person_id
-                    FROM payment_components
-                    WHERE date >= %s AND date < %s
-                    """,
-                    (start_date, end_date),
-                ):
-                    has_payment_components.add(row["person_id"])
+            counts, has_payment_components = get_report_presence_counts(
+                conn, start_date, end_date, housing_filter,
+            )
 
             for row in conn.execute(
                 """

@@ -70,6 +70,9 @@ COMPLETION_APARTMENT_IDS: Set[int] = {29, 37}
 # מערך דיור ASD - כל הדירות במערך זה מקבלות תעריפי ASD
 ASD_HOUSING_ARRAY_ID = 2
 
+# מערך דיור צוהר הלב - משמש לכללים נקודתיים בייצוא גשר.
+TZOHAR_HALEV_HOUSING_ARRAY_ID = 1
+
 
 def is_asd_housing_array(housing_array_id: int | None) -> bool:
     """בדיקה אם מערך דיור הוא ASD (תפקוד גבוה/נמוך)."""

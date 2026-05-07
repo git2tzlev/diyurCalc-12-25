@@ -68,10 +68,10 @@ async def login_submit(request: Request) -> HTMLResponse | RedirectResponse:
         return response
 
     except Exception as e:
-        logger.error(f"שגיאה בהתחברות: {e}")
+        logger.error("שגיאה בהתחברות: %s", e, exc_info=True)
         return templates.TemplateResponse("login.html", {
             "request": request,
-            "error": f"שגיאת מערכת: {e}",
+            "error": "שגיאת מערכת. נסי שוב מאוחר יותר",
             "id_number": form_data.get("id_number", "") if 'form_data' in dir() else ""
         })
 

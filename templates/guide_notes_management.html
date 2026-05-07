@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+  main { max-width: 95% !important; }
+  .notes-page-card { max-width: none; width: 100%; }
+  .notes-table-wrap { overflow: auto; max-height: 72vh; border: 1px solid #d8e0ea; border-radius: 8px; }
+  .notes-table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+  .notes-table th { position: sticky; top: 0; z-index: 2; background: #f1f5f9; color: #0f172a; border-bottom: 1px solid #cbd5e1; padding: 9px 10px; text-align: right; }
+  .notes-table td { border-bottom: 1px solid #e5e7eb; padding: 9px 10px; vertical-align: top; }
+  .notes-table tbody tr:hover { background: #f8fafc; }
+  .guide-link { color: #0969da; text-decoration: none; font-weight: 700; }
+  .guide-link:hover { text-decoration: underline; }
+  .note-content { white-space: pre-wrap; line-height: 1.55; }
+  .empty-state { text-align: center; color: #94a3b8; padding: 28px; }
+</style>
+
+<div class="card notes-page-card">
+  <div class="header-line" style="flex-wrap: wrap; gap: 10px;">
+    <div>
+      <h2 class="section-title" style="margin: 0;">ניהול הערות מדריכים</h2>
+      <div class="muted">כל ההערות לחודש {{ "%02d"|format(selected_month) }}/{{ selected_year }} · {{ notes|length }} הערות</div>
+    </div>
+    <form method="get" class="controls" style="gap: 8px; flex-wrap: wrap;">
+      <label for="month">חודש:</label>
+      <select id="month" name="month">
+        {% for m in range(1, 13) %}
+        <option value="{{ m }}" {% if m == selected_month %}selected{% endif %}>{{ "%02d"|format(m) }}</option>
+        {% endfor %}
+      </select>
+      <label for="year">שנה:</label>
+      <select id="year" name="year">
+        {% for y in years %}
+        <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit">עדכן</button>
+      <a href="/" style="text-decoration:none; padding:7px 12px; border:1px solid #cbd5e1; border-radius:6px; color:#334155;">חזרה</a>
+    </form>
+  </div>
+
+  <div class="notes-table-wrap" style="margin-top: 14px;">
+    <table class="notes-table">
+      <thead>
+        <tr>
+          <th style="width: 18%;">שם מדריך</th>
+          <th style="width: 12%;">תעודת זהות</th>
+          <th>הערה</th>
+          <th style="width: 16%;">נוצר על ידי</th>
+          <th style="width: 14%;">תאריך יצירה</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for note in notes %}
+        <tr>
+          <td>
+            <a class="guide-link" href="/guide/{{ note.person_id }}?year={{ selected_year }}&month={{ selected_month }}">
+              {{ note.guide_name }}
+            </a>
+          </td>
+          <td>{{ note.guide_id_number or '-' }}</td>
+          <td class="note-content">{{ note.content }}</td>
+          <td>{{ note.created_by_name or 'מערכת' }}</td>
+          <td>
+            {% if note.created_at %}
+              {{ note.created_at.strftime('%d/%m/%Y %H:%M') }}
+            {% else %}
+              -
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="5" class="empty-state">אין הערות לחודש זה</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

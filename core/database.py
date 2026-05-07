@@ -15,8 +15,6 @@ import psycopg2
 import psycopg2.extras
 from psycopg2 import pool
 
-from core.config import config
-
 logger = logging.getLogger(__name__)
 
 # Connection pools - initialized lazily

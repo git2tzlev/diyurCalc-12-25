@@ -19,6 +19,7 @@ from utils.utils import format_currency, human_date, available_months_from_db
 
 logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory=str(config.TEMPLATES_DIR))
+GENERIC_ERROR = "שגיאת מערכת. נסי שוב מאוחר יותר"
 templates.env.filters["format_currency"] = format_currency
 templates.env.filters["human_date"] = human_date
 templates.env.globals["app_version"] = config.VERSION
@@ -1420,9 +1421,6 @@ async def send_overtime_email_route(request: Request, year: int, month: int) -> 
             for g in target_array["guides"]
         )
 
-        total_hours_ot = target_array['hours_125'] + target_array['hours_150']
-        total_hours_shabbat = target_array['hours_175'] + target_array['hours_200']
-
         html_body = f"""
         <html dir="rtl"><body style="font-family: Arial, sans-serif; color: #1e293b; background: #f8fafc; margin:0; padding:20px;">
         <div style="max-width:750px; margin:0 auto; background:white; border-radius:12px; box-shadow:0 4px 12px rgba(0,0,0,0.08); overflow:hidden;">
@@ -1505,4 +1503,4 @@ async def send_overtime_email_route(request: Request, year: int, month: int) -> 
 
     except Exception as e:
         logger.error(f"Error in send_overtime_email_route: {e}", exc_info=True)
-        return JSONResponse({"success": False, "error": str(e)})
+        return JSONResponse({"success": False, "error": GENERIC_ERROR})

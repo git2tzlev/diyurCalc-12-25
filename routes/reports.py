@@ -14,7 +14,8 @@ from fastapi.templating import Jinja2Templates
 from core.config import config
 from core.database import get_conn, get_housing_array_filter, get_default_period
 from core.logic import get_active_guides
-from core.auth import get_user_housing_array
+from core.report_presence import get_report_presence_counts
+from core.auth import create_action_token, get_user_housing_array
 from utils.utils import month_range_ts, available_months_from_db, format_currency, human_date
 
 logger = logging.getLogger(__name__)
@@ -99,53 +100,9 @@ def reports_management(
         guides = get_active_guides(effective_filter)
 
         with get_conn() as conn:
-            # ספירת משמרות לכל מדריך
-            if effective_filter is not None:
-                for row in conn.execute(
-                    """
-                    SELECT tr.person_id, COUNT(*) AS cnt
-                    FROM time_reports tr
-                    JOIN apartments ap ON ap.id = tr.apartment_id
-                    WHERE tr.date >= %s AND tr.date < %s
-                      AND ap.housing_array_id = %s
-                    GROUP BY tr.person_id
-                    """,
-                    (start_date, end_date, effective_filter),
-                ):
-                    counts[row["person_id"]] = row["cnt"]
-
-                for row in conn.execute(
-                    """
-                    SELECT DISTINCT pc.person_id
-                    FROM payment_components pc
-                    JOIN apartments ap ON ap.id = pc.apartment_id
-                    WHERE pc.date >= %s AND pc.date < %s
-                      AND ap.housing_array_id = %s
-                    """,
-                    (start_date, end_date, effective_filter),
-                ):
-                    has_payment_components.add(row["person_id"])
-            else:
-                for row in conn.execute(
-                    """
-                    SELECT person_id, COUNT(*) AS cnt
-                    FROM time_reports
-                    WHERE date >= %s AND date < %s
-                    GROUP BY person_id
-                    """,
-                    (start_date, end_date),
-                ):
-                    counts[row["person_id"]] = row["cnt"]
-
-                for row in conn.execute(
-                    """
-                    SELECT DISTINCT person_id
-                    FROM payment_components
-                    WHERE date >= %s AND date < %s
-                    """,
-                    (start_date, end_date),
-                ):
-                    has_payment_components.add(row["person_id"])
+            counts, has_payment_components = get_report_presence_counts(
+                conn, start_date, end_date, effective_filter,
+            )
 
         # סינון מדריכים עם דוחות בלבד
         allowed_types = {"permanent", "substitute"}
@@ -180,5 +137,7 @@ def reports_management(
             "housing_arrays": housing_arrays,
             "selected_housing_array": effective_filter,
             "reports_array_locked": managed_array is not None,
+            "bulk_send_token": create_action_token(request, "bulk_send"),
+            "retry_failed_token": create_action_token(request, "retry_failed_email"),
         }
     )

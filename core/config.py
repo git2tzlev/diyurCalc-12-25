@@ -5,6 +5,7 @@ Centralizes all configuration settings and environment variables.
 from __future__ import annotations
 
 import os
+import logging
 from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -13,6 +14,7 @@ from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 
 class Config:
@@ -61,7 +63,7 @@ class Config:
             )
 
         if self.SECRET_KEY == "your-secret-key-change-in-production":
-            print("WARNING: Using default SECRET_KEY. Change this in production!")
+            logger.warning("Using default SECRET_KEY. Change this in production!")
 
     @classmethod
     def from_env(cls) -> Config:

@@ -99,7 +99,7 @@ function runSync() {
     progressBar.style.width = '0%';
 
     // Use Server-Sent Events for real-time progress
-    const eventSource = new EventSource('/admin/demo-sync/run');
+    const eventSource = new EventSource('/admin/demo-sync/run?token={{ demo_sync_token|urlencode }}');
 
     eventSource.onmessage = function(event) {
         const data = JSON.parse(event.data);

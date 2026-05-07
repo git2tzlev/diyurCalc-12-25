@@ -21,6 +21,7 @@ from core.auth import (
     enforce_framework_manager_guide_access,
     get_user_housing_array,
     is_super_admin,
+    validate_action_token,
 )
 from services.email_service import (
     get_email_settings,
@@ -36,12 +37,14 @@ from services.email_service import (
     process_guide_for_bulk,
     get_email_logs,
     get_batch_summary,
-    insert_email_log,
 )
 
 from utils.utils import format_currency, human_date
 
 logger = logging.getLogger(__name__)
+
+
+GENERIC_ERROR = "שגיאת מערכת. נסי שוב מאוחר יותר"
 
 
 def _require_super_admin(request: Request) -> None:
@@ -140,7 +143,7 @@ async def test_email_settings(request: Request) -> JSONResponse:
 
     except Exception as e:
         logger.error(f"Error testing email: {e}", exc_info=True)
-        return JSONResponse({"success": False, "error": str(e)})
+        return JSONResponse({"success": False, "error": GENERIC_ERROR})
 
 
 async def send_guide_email_route(request: Request, person_id: int, year: int, month: int) -> JSONResponse:
@@ -151,7 +154,7 @@ async def send_guide_email_route(request: Request, person_id: int, year: int, mo
         try:
             body = await request.json()
             custom_email = body.get('email')
-        except:
+        except Exception:
             pass
 
         import asyncio
@@ -160,7 +163,7 @@ async def send_guide_email_route(request: Request, person_id: int, year: int, mo
         return JSONResponse(result)
     except Exception as e:
         logger.error(f"Error in send_guide_email_route: {e}", exc_info=True)
-        return JSONResponse({"success": False, "error": str(e)})
+        return JSONResponse({"success": False, "error": GENERIC_ERROR})
 
 
 async def send_all_guides_email_route(request: Request, year: int, month: int) -> JSONResponse:
@@ -172,7 +175,7 @@ async def send_all_guides_email_route(request: Request, year: int, month: int) -
         return JSONResponse(result)
     except Exception as e:
         logger.error(f"Error in send_all_guides_email_route: {e}", exc_info=True)
-        return JSONResponse({"success": False, "error": str(e)})
+        return JSONResponse({"success": False, "error": GENERIC_ERROR})
 
 
 async def send_all_to_single_email_route(request: Request, year: int, month: int) -> JSONResponse:
@@ -192,7 +195,7 @@ async def send_all_to_single_email_route(request: Request, year: int, month: int
         return JSONResponse(result)
     except Exception as e:
         logger.error(f"Error in send_all_to_single_email_route: {e}", exc_info=True)
-        return JSONResponse({"success": False, "error": str(e)})
+        return JSONResponse({"success": False, "error": GENERIC_ERROR})
 
 
 async def send_selected_guides_emails_route(request: Request, year: int, month: int) -> JSONResponse:
@@ -210,7 +213,7 @@ async def send_selected_guides_emails_route(request: Request, year: int, month: 
         return JSONResponse(result)
     except Exception as e:
         logger.error(f"Error in send_selected_guides_emails_route: {e}", exc_info=True)
-        return JSONResponse({"success": False, "error": str(e)})
+        return JSONResponse({"success": False, "error": GENERIC_ERROR})
 
 
 async def send_selected_guides_to_single_email_route(request: Request, year: int, month: int) -> JSONResponse:
@@ -234,7 +237,7 @@ async def send_selected_guides_to_single_email_route(request: Request, year: int
         return JSONResponse(result)
     except Exception as e:
         logger.error(f"Error in send_selected_guides_to_single_email_route: {e}", exc_info=True)
-        return JSONResponse({"success": False, "error": str(e)})
+        return JSONResponse({"success": False, "error": GENERIC_ERROR})
 
 
 async def send_test_email_route(request: Request) -> JSONResponse:
@@ -252,7 +255,7 @@ async def send_test_email_route(request: Request) -> JSONResponse:
         return JSONResponse(result)
     except Exception as e:
         logger.error(f"Error in send_test_email_route: {e}", exc_info=True)
-        return JSONResponse({"success": False, "error": str(e)})
+        return JSONResponse({"success": False, "error": GENERIC_ERROR})
 
 
 # ─── SSE Bulk Send ────────────────────────────────────────────
@@ -263,9 +266,15 @@ def _sse_event(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-async def send_bulk_stream(request: Request, year: int, month: int) -> StreamingResponse:
+async def send_bulk_stream(request: Request, year: int, month: int, token: str = "") -> StreamingResponse:
     """שליחת דוחות מרוכזת עם SSE לעדכון התקדמות בזמן אמת."""
     import asyncio
+
+    if not validate_action_token(request, token, "bulk_send"):
+        async def forbidden_stream() -> AsyncGenerator[str, None]:
+            yield _sse_event("error", {"message": "אין הרשאה להפעלת שליחה מרוכזת"})
+
+        return StreamingResponse(forbidden_stream(), media_type="text/event-stream")
 
     # שליפת הגדרות ורשימת מדריכים
     with get_conn() as conn:
@@ -384,23 +393,25 @@ async def send_bulk_stream(request: Request, year: int, month: int) -> Streaming
 async def email_logs_route(request: Request, year: int, month: int) -> JSONResponse:
     """שליפת לוגי שליחת מייל לחודש מסוים."""
     try:
+        hid = get_user_housing_array(request)
         with get_conn() as conn:
-            logs = get_email_logs(conn, year=year, month=month, limit=500)
+            logs = get_email_logs(conn, year=year, month=month, housing_array_id=hid, limit=500)
         return JSONResponse({"success": True, "logs": logs}, media_type="application/json; charset=utf-8")
     except Exception as e:
         logger.error(f"Error fetching email logs: {e}", exc_info=True)
-        return JSONResponse({"success": False, "error": str(e)})
+        return JSONResponse({"success": False, "error": GENERIC_ERROR})
 
 
 async def email_batch_summary_route(request: Request, batch_id: str) -> JSONResponse:
     """סיכום batch שליחה."""
     try:
+        hid = get_user_housing_array(request)
         with get_conn() as conn:
-            summary = get_batch_summary(conn, batch_id)
+            summary = get_batch_summary(conn, batch_id, housing_array_id=hid)
         return JSONResponse({"success": True, "summary": summary})
     except Exception as e:
         logger.error(f"Error fetching batch summary: {e}", exc_info=True)
-        return JSONResponse({"success": False, "error": str(e)})
+        return JSONResponse({"success": False, "error": GENERIC_ERROR})
 
 
 async def retry_failed_route(request: Request) -> JSONResponse:
@@ -408,8 +419,12 @@ async def retry_failed_route(request: Request) -> JSONResponse:
     try:
         body = await request.json()
         batch_id = body.get("batch_id")
-        year = body.get("year")
-        month = body.get("month")
+        fallback_year = body.get("year")
+        fallback_month = body.get("month")
+        token = body.get("token", "")
+
+        if not validate_action_token(request, token, "retry_failed_email"):
+            return JSONResponse({"success": False, "error": "אין הרשאה"}, status_code=403)
 
         if not batch_id:
             return JSONResponse({"success": False, "error": "חסר batch_id"})
@@ -419,7 +434,13 @@ async def retry_failed_route(request: Request) -> JSONResponse:
             if not settings:
                 return JSONResponse({"success": False, "error": "הגדרות מייל לא נמצאו"})
 
-            failed_logs = get_email_logs(conn, batch_id=batch_id, status="failed")
+            hid = get_user_housing_array(request)
+            failed_logs = get_email_logs(
+                conn,
+                batch_id=batch_id,
+                status="failed",
+                housing_array_id=hid,
+            )
 
         if not failed_logs:
             return JSONResponse({"success": False, "error": "לא נמצאו שליחות שנכשלו ב-batch זה"})
@@ -437,8 +458,8 @@ async def retry_failed_route(request: Request) -> JSONResponse:
             }
             result = process_guide_for_bulk(
                 guide,
-                year or log.get("year"),
-                month or log.get("month"),
+                log.get("year") or fallback_year,
+                log.get("month") or fallback_month,
                 retry_batch_id,
                 settings,
                 sent_by,
@@ -456,4 +477,4 @@ async def retry_failed_route(request: Request) -> JSONResponse:
         })
     except Exception as e:
         logger.error(f"Error in retry_failed: {e}", exc_info=True)
-        return JSONResponse({"success": False, "error": str(e)})
+        return JSONResponse({"success": False, "error": GENERIC_ERROR})
