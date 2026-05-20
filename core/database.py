@@ -27,6 +27,9 @@ _demo_mode: ContextVar[bool] = ContextVar('demo_mode', default=False)
 # Context variable to track housing array filter per request
 _housing_array_filter: ContextVar[Optional[int]] = ContextVar('housing_array_filter', default=None)
 
+# Context variable to track the authenticated user for DB audit triggers.
+_db_actor_person_id: ContextVar[Optional[int]] = ContextVar('db_actor_person_id', default=None)
+
 
 def is_demo_mode() -> bool:
     """Check if currently in demo mode."""
@@ -46,6 +49,27 @@ def get_housing_array_filter() -> Optional[int]:
 def set_housing_array_filter(housing_array_id: Optional[int]) -> None:
     """מגדיר את מערך הדיור לסינון."""
     _housing_array_filter.set(housing_array_id)
+
+
+def get_db_actor_person_id() -> Optional[int]:
+    """מחזיר את מזהה המשתמש המחובר לצורך תיעוד DB."""
+    return _db_actor_person_id.get()
+
+
+def set_db_actor_person_id(person_id: Optional[int]) -> None:
+    """מגדיר את מזהה המשתמש המחובר לצורך טריגרים ב-DB."""
+    _db_actor_person_id.set(person_id)
+
+
+def _apply_db_actor(conn) -> None:
+    """Expose current request user to PostgreSQL triggers via app.current_user_id."""
+    actor_id = get_db_actor_person_id()
+    value = str(actor_id) if actor_id else ""
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT set_config('app.current_user_id', %s, false)", (value,))
+    except Exception:
+        logger.debug("Could not set DB actor context", exc_info=True)
 
 
 def get_housing_array_from_cookie(request) -> Optional[int]:
@@ -252,6 +276,7 @@ def get_conn() -> PostgresConnection:
     Uses connection pooling for better performance."""
     is_demo = is_demo_mode()
     pg_conn = get_pooled_connection()
+    _apply_db_actor(pg_conn)
     return PostgresConnection(pg_conn, use_pool=True, is_demo=is_demo)
 
 

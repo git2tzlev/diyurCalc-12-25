@@ -25,7 +25,13 @@ from decimal import Decimal
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from app_utils import calculate_wage_rate, _calculate_chain_wages as _calculate_chain_wages_new
+from app_utils import (
+    calculate_wage_rate,
+    _calculate_chain_wages as _calculate_chain_wages_new,
+    _display_base_hourly,
+    _resolve_work_segment_overlaps,
+    _should_show_hourly_supplements_in_basis,
+)
 from core.time_utils import (
     REGULAR_HOURS_LIMIT,
     OVERTIME_125_LIMIT,
@@ -210,6 +216,46 @@ class TestOverlappingShiftsWithDifferentRates(unittest.TestCase):
 
         payment = (8 * 34.40 * 1.0) + (2 * 40 * 1.25)
         self.assertAlmostEqual(payment, 375.20, places=2)
+
+    def test_overlap_keeps_higher_rate_segment(self):
+        """בחפיפת עבודה נשאר רק המקטע עם התעריף הגבוה יותר."""
+        # tuple:
+        # start, end, label, shift_id, apt, actual_date, apt_type, actual_apt_type,
+        # rate_apt_type, housing_array_id, apt_type_name, ha_name,
+        # rate_apt_type_name, apt_type_change_date, apt_city
+        low_rate_segment = (
+            16 * 60 + 30, 20 * 60, "work", 103, "השלמות", date(2026, 3, 9),
+            6, 6, 6, 2, "תפקוד גבוה", "ASD", "", "", "",
+        )
+        high_rate_segment = (
+            13 * 60, 17 * 60, "work", 138, "השלמות", date(2026, 3, 9),
+            6, 6, 6, 2, "תפקוד גבוה", "ASD", "", "", "",
+        )
+        shift_rates = {
+            (103, 2, 6): {"weekday": 34.40},
+            (138, 2, 6): {"weekday": 40.00},
+        }
+
+        resolved, warnings = _resolve_work_segment_overlaps(
+            [high_rate_segment, low_rate_segment],
+            shift_rates,
+            minimum_wage=34.40,
+        )
+
+        self.assertEqual(
+            [(seg[0], seg[1], seg[3]) for seg in resolved],
+            [
+                (13 * 60, 17 * 60, 138),
+                (17 * 60, 20 * 60, 103),
+            ],
+        )
+        self.assertEqual(len(warnings), 1)
+        self.assertEqual(warnings[0]["start"], 16 * 60 + 30)
+        self.assertEqual(warnings[0]["end"], 17 * 60)
+        self.assertEqual(warnings[0]["start_time"], "16:30")
+        self.assertEqual(warnings[0]["end_time"], "17:00")
+        self.assertEqual(warnings[0]["selected_rate"], 40.0)
+        self.assertEqual(warnings[0]["cut_segments"][0]["rate"], 34.4)
 
 
 class TestMedicalEscort(unittest.TestCase):
@@ -459,6 +505,32 @@ class TestNightFirstWorkOverlap(unittest.TestCase):
 
 class TestFullSalaryCalculation(unittest.TestCase):
     """בדיקות מקיפות לחישוב שכר מלא"""
+
+    def test_fixed_work_hour_rate_display_does_not_add_supplements(self):
+        """תעריף קבוע לשעת עבודה מוצג כתעריף סופי, ללא תוספות מדומות."""
+        display_base = _display_base_hourly(
+            seg_rate=40.0,
+            minimum_wage=35.4,
+            rate_supplement_agorot=600,
+            actual_supplement_agorot=600,
+        )
+        self.assertEqual(display_base, 40.0)
+        self.assertFalse(
+            _should_show_hourly_supplements_in_basis(40.0, 35.4, 600)
+        )
+
+    def test_minimum_wage_plus_supplements_display_keeps_breakdown(self):
+        """כאשר התעריף בנוי משכר מינימום ותוספות, הפירוט נשאר מוצג."""
+        display_base = _display_base_hourly(
+            seg_rate=41.4,
+            minimum_wage=35.4,
+            rate_supplement_agorot=600,
+            actual_supplement_agorot=600,
+        )
+        self.assertEqual(display_base, 41.4)
+        self.assertTrue(
+            _should_show_hourly_supplements_in_basis(41.4, 35.4, 600)
+        )
 
     def test_full_day_payment_8_hours(self):
         """חישוב תשלום ליום עבודה של 8 שעות"""

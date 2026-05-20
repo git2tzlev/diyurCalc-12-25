@@ -35,7 +35,7 @@
     data-should-open="{{ '1' if not holiday_payment_setup.is_configured else '0' }}"
     onclick="if (event.target === this) closeHolidayPaymentModal()"
     style="display:none; position:fixed; inset:0; background:rgba(15,23,42,0.48); z-index:1100; justify-content:center; align-items:center; padding:18px;">
-    <div onclick="event.stopPropagation()" style="background:#fff; border-radius:8px; width:min(1120px, 96vw); max-height:88vh; overflow:hidden; direction:rtl; box-shadow:0 24px 60px rgba(15,23,42,0.28); display:flex; flex-direction:column;">
+    <div onclick="event.stopPropagation()" style="background:#fff; border-radius:8px; width:min(1240px, 96vw); max-height:88vh; overflow:hidden; direction:rtl; box-shadow:0 24px 60px rgba(15,23,42,0.28); display:flex; flex-direction:column;">
       <div style="padding:16px 20px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; gap:12px;">
         <div>
           <h3 style="margin:0; font-size:18px; color:#0f172a;">ניהול תשלום חג - {{ "%02d"|format(selected_month) }}/{{ selected_year }}</h3>
@@ -52,6 +52,7 @@
               <th style="padding:8px; text-align:right; border:1px solid #e2e8f0;">הצעה לפי דיווחים</th>
               <th style="padding:8px; text-align:right; border:1px solid #e2e8f0;">מדריך 1</th>
               <th style="padding:8px; text-align:right; border:1px solid #e2e8f0;">מדריך 2</th>
+              <th style="padding:8px; text-align:right; border:1px solid #e2e8f0;">מדריך 3</th>
             </tr>
           </thead>
           <tbody id="holidayPaymentRows"></tbody>
@@ -76,6 +77,7 @@
         <th class="sortable" data-sort="type" data-type="text">סוג <span class="sort-indicator">⇅</span></th>
         <th class="sortable" data-sort="seniority" data-type="number">ותק (שנים) <span class="sort-indicator">⇅</span></th>
         <th class="sortable" data-sort="shifts" data-type="number">סה\"כ משמרות בחודש <span class="sort-indicator">⇅</span></th>
+        <th class="sortable" data-sort="alerts" data-type="number">התראות <span class="sort-indicator">⇅</span></th>
         <th class="sortable" data-sort="notes" data-type="number">הערות <span class="sort-indicator">⇅</span></th>
         <th class="sortable" data-sort="status" data-type="text">סטטוס <span class="sort-indicator">⇅</span></th>
       </tr>
@@ -104,6 +106,12 @@
           {% endif %}
         </td>
         <td data-sort-value="{{ counts.get(g['id'], 0) if counts is defined else 0 }}">{{ counts.get(g['id'], 0) if counts is defined else 0 }}</td>
+        <td data-sort-value="{{ overlap_counts.get(g['id'], 0) if overlap_counts is defined else 0 }}">
+          {% set oc = overlap_counts.get(g['id'], 0) if overlap_counts is defined else 0 %}
+          {% if oc > 0 %}
+          <span title="יש חפיפת שעות בדיווחים לחודש זה. בדוח הרצפים החפיפה נחתכת לפי התעריף הגבוה יותר." style="background: #fee2e2; color: #991b1b; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 700; cursor: help;">חפיפה</span>
+          {% endif %}
+        </td>
         <td data-sort-value="{{ notes_counts.get(g['id'], 0) if notes_counts is defined else 0 }}">
           {% set nc = notes_counts.get(g['id'], 0) if notes_counts is defined else 0 %}
           {% if nc > 0 %}
@@ -114,7 +122,7 @@
       </tr>
       {% else %}
       <tr>
-        <td colspan="6" class="muted">לא נמצאו מדריכים</td>
+        <td colspan="7" class="muted">לא נמצאו מדריכים</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -236,7 +244,7 @@
       const tr = document.createElement('tr');
       tr.className = 'holiday-payment-group-row';
       const td = document.createElement('td');
-      td.colSpan = 4;
+      td.colSpan = 5;
       td.style.cssText = 'padding:10px 12px; border:1px solid #cbd5e1; background:#eef6ff; color:#1e3a8a; font-weight:800; font-size:13px;';
       td.textContent = `${title} (${count})`;
       tr.appendChild(td);
@@ -278,6 +286,19 @@
       guide2Cell.appendChild(guide2Select);
       tr.appendChild(guide2Cell);
 
+      const guide3Cell = document.createElement('td');
+      guide3Cell.style.cssText = 'padding:8px; border:1px solid #e2e8f0;';
+      if ((row.max_guides || 2) >= 3) {
+        const guide3Select = buildHolidayGuideSelect(data.guides, row.guide_3_id);
+        guide3Select.className = 'holiday-guide-3';
+        guide3Cell.appendChild(guide3Select);
+      } else {
+        guide3Cell.textContent = '-';
+        guide3Cell.style.color = '#94a3b8';
+        guide3Cell.style.textAlign = 'center';
+      }
+      tr.appendChild(guide3Cell);
+
       tbody.appendChild(tr);
     }
 
@@ -315,12 +336,15 @@
     document.querySelectorAll('#holidayPaymentRows tr[data-apartment-id]').forEach(tr => {
       const guide1 = tr.querySelector('.holiday-guide-1')?.value || null;
       const rawGuide2 = tr.querySelector('.holiday-guide-2')?.value || null;
+      const guide3Raw = tr.querySelector('.holiday-guide-3')?.value || null;
       const guide2NoHolidayPayment = rawGuide2 === HOLIDAY_NO_PAYMENT_VALUE;
       const guide2 = guide2NoHolidayPayment ? null : rawGuide2;
+      const guide3 = guide1 && guide2 && !guide2NoHolidayPayment ? guide3Raw : null;
       rows.push({
         apartment_id: Number(tr.dataset.apartmentId),
         guide_1_id: guide1,
         guide_2_id: guide1 ? guide2 : null,
+        guide_3_id: guide3,
         guide_2_no_holiday_payment: Boolean(guide1 && guide2NoHolidayPayment)
       });
     });

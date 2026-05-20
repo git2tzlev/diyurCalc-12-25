@@ -481,7 +481,7 @@
     data-should-open="{{ '1' if not holiday_payment_setup.is_configured and request.query_params.get('print') != '1' else '0' }}"
     onclick="if (event.target === this) closeHolidayPaymentModal()"
     style="display:none; position:fixed; inset:0; background:rgba(15,23,42,0.48); z-index:1100; justify-content:center; align-items:center; padding:18px;">
-    <div onclick="event.stopPropagation()" style="background:#fff; border-radius:8px; width:min(1120px, 96vw); max-height:88vh; overflow:hidden; direction:rtl; box-shadow:0 24px 60px rgba(15,23,42,0.28); display:flex; flex-direction:column;">
+    <div onclick="event.stopPropagation()" style="background:#fff; border-radius:8px; width:min(1240px, 96vw); max-height:88vh; overflow:hidden; direction:rtl; box-shadow:0 24px 60px rgba(15,23,42,0.28); display:flex; flex-direction:column;">
       <div style="padding:16px 20px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; gap:12px;">
         <div>
           <h3 style="margin:0; font-size:18px; color:#0f172a;">ניהול תשלום חג - {{ "%02d"|format(selected_month) }}/{{ selected_year }}</h3>
@@ -498,6 +498,7 @@
               <th style="padding:8px; text-align:right; border:1px solid #e2e8f0;">הצעה לפי דיווחים</th>
               <th style="padding:8px; text-align:right; border:1px solid #e2e8f0;">מדריך 1</th>
               <th style="padding:8px; text-align:right; border:1px solid #e2e8f0;">מדריך 2</th>
+              <th style="padding:8px; text-align:right; border:1px solid #e2e8f0;">מדריך 3</th>
             </tr>
           </thead>
           <tbody id="holidayPaymentRows"></tbody>
@@ -668,6 +669,21 @@
               {{ day.day }} ({{ day.day_name }}, {{ day.hebrew_date }})
               {% endif %}
             </div>
+            {% if day.overlap_warnings %}
+            <div style="margin: 6px 0 8px; padding: 8px 10px; border: 1px solid #f59e0b; background: #fffbeb; color: #92400e; border-radius: 6px; font-size: 12px; font-weight: 600;">
+              <div>חפיפת שעות זוהתה ביום זה. החישוב חתך את החפיפה ובחר בכל טווח את התעריף הגבוה יותר.</div>
+              {% for overlap in day.overlap_warnings %}
+              <div style="margin-top:4px; font-weight:500;">
+                {{ overlap.start_time }}-{{ overlap.end_time }}:
+                נשאר תעריף {{ "%.2f"|format(overlap.selected_rate) }}{% if overlap.selected_apartment %} ({{ overlap.selected_apartment }}){% endif %};
+                נחתך:
+                {% for cut in overlap.cut_segments %}
+                  תעריף {{ "%.2f"|format(cut.rate) }}{% if cut.apartment %} ({{ cut.apartment }}){% endif %}{% if not loop.last %}, {% endif %}
+                {% endfor %}
+              </div>
+              {% endfor %}
+            </div>
+            {% endif %}
             <table>
               <thead>
                 <tr>
@@ -1100,6 +1116,13 @@
                   </td>
                   <td colspan="6" style="text-align: center; padding: 6px 8px; font-size: 0.85em;">
                     {{ monthly_totals.vacation_days_taken or 0 }} ימים (100%)
+                    {% if monthly_totals.vacation_payment_details %}
+                    <br>
+                    חישוב:
+                    {% for detail in monthly_totals.vacation_payment_details %}
+                      {{ "%.2f"|format(detail.hours) }} שעות × {{ "%.2f"|format(detail.rate) }} = {{ "%.2f"|format(detail.payment) }}{% if not loop.last %}; {% endif %}
+                    {% endfor %}
+                    {% endif %}
                   </td>
                 </tr>
                 {% endif %}
@@ -1125,6 +1148,13 @@
                   <td colspan="6" style="text-align: center; padding: 6px 8px; font-size: 0.85em;">
                     {{ monthly_totals.sick_days_taken or 0 }} ימים (תשלום מדורג)
                     &nbsp;|&nbsp; גולמי: {{ sick_raw_hours }} &rarr; אפקטיבי: {{ sick_effective_hours }}
+                    {% if monthly_totals.sick_payment_details %}
+                    <br>
+                    חישוב:
+                    {% for detail in monthly_totals.sick_payment_details %}
+                      {{ "%.2f"|format(detail.hours) }} שעות × {{ "%.2f"|format(detail.rate) }} = {{ "%.2f"|format(detail.payment) }}{% if not loop.last %}; {% endif %}
+                    {% endfor %}
+                    {% endif %}
                   </td>
                 </tr>
                 {% endif %}
@@ -1145,6 +1175,13 @@
                   </td>
                   <td colspan="6" style="text-align: right; padding: 6px 8px; font-size: 0.85em;">
                     {{ holiday_payment_chain_summary.calculation }}
+                    {% if holiday_payment_chain_summary.payment_details %}
+                    <br>
+                    חישוב:
+                    {% for detail in holiday_payment_chain_summary.payment_details %}
+                      {{ detail.count }} ימי חג × {{ "%.2f"|format(detail.hours) }} שעות × {{ "%.2f"|format(detail.rate) }} = {{ "%.2f"|format(detail.payment) }}{% if not loop.last %}; {% endif %}
+                    {% endfor %}
+                    {% endif %}
                     {% if holiday_payment_chain_summary.holiday_dates %}
                     &nbsp;|&nbsp; ימי חג: {{ holiday_payment_chain_summary.holiday_dates | join(', ') }}
                     {% endif %}
@@ -1944,7 +1981,7 @@
       const tr = document.createElement('tr');
       tr.className = 'holiday-payment-group-row';
       const td = document.createElement('td');
-      td.colSpan = 4;
+      td.colSpan = 5;
       td.style.cssText = 'padding:10px 12px; border:1px solid #cbd5e1; background:#eef6ff; color:#1e3a8a; font-weight:800; font-size:13px;';
       td.textContent = `${title} (${count})`;
       tr.appendChild(td);
@@ -1988,6 +2025,19 @@
       guide2Cell.appendChild(guide2Select);
       tr.appendChild(guide2Cell);
 
+      const guide3Cell = document.createElement('td');
+      guide3Cell.style.cssText = 'padding:8px; border:1px solid #e2e8f0;';
+      if ((row.max_guides || 2) >= 3) {
+        const guide3Select = buildHolidayGuideSelect(data.guides, row.guide_3_id);
+        guide3Select.className = 'holiday-guide-3';
+        guide3Cell.appendChild(guide3Select);
+      } else {
+        guide3Cell.textContent = '-';
+        guide3Cell.style.color = '#94a3b8';
+        guide3Cell.style.textAlign = 'center';
+      }
+      tr.appendChild(guide3Cell);
+
       tbody.appendChild(tr);
     }
 
@@ -2027,12 +2077,15 @@
     document.querySelectorAll('#holidayPaymentRows tr[data-apartment-id]').forEach(tr => {
       const guide1 = tr.querySelector('.holiday-guide-1')?.value || null;
       const rawGuide2 = tr.querySelector('.holiday-guide-2')?.value || null;
+      const guide3Raw = tr.querySelector('.holiday-guide-3')?.value || null;
       const guide2NoHolidayPayment = rawGuide2 === HOLIDAY_NO_PAYMENT_VALUE;
       const guide2 = guide2NoHolidayPayment ? null : rawGuide2;
+      const guide3 = guide1 && guide2 && !guide2NoHolidayPayment ? guide3Raw : null;
       rows.push({
         apartment_id: Number(tr.dataset.apartmentId),
         guide_1_id: guide1,
         guide_2_id: guide1 ? guide2 : null,
+        guide_3_id: guide3,
         guide_2_no_holiday_payment: Boolean(guide1 && guide2NoHolidayPayment)
       });
     });

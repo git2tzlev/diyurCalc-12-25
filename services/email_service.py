@@ -15,6 +15,7 @@ from typing import Optional, Dict, Any, List
 import re
 from core.config import config
 from core.database import get_conn
+from core.report_filters import completion_exclusion_sql_for_reports
 from services.pdf_renderer import render_html_to_pdf_bytes
 
 logger = logging.getLogger(__name__)
@@ -374,7 +375,10 @@ def send_all_guides_email(
                 return {"success": False, "error": "הגדרות מייל לא נמצאו"}
 
             if housing_array_id is not None:
-                guides = conn.execute("""
+                exclusion_sql, exclusion_params = completion_exclusion_sql_for_reports(
+                    year, month, housing_array_id
+                )
+                guides = conn.execute(f"""
                     SELECT DISTINCT p.id, p.name, p.email
                     FROM people p
                     JOIN time_reports tr ON tr.person_id = p.id
@@ -384,9 +388,13 @@ def send_all_guides_email(
                     AND p.housing_array_id = %s
                     AND EXTRACT(YEAR FROM tr.date) = %s
                     AND EXTRACT(MONTH FROM tr.date) = %s
-                """, (housing_array_id, year, month)).fetchall()
+                    {exclusion_sql}
+                """, (housing_array_id, year, month) + exclusion_params).fetchall()
             else:
-                guides = conn.execute("""
+                exclusion_sql, exclusion_params = completion_exclusion_sql_for_reports(
+                    year, month, housing_array_id
+                )
+                guides = conn.execute(f"""
                     SELECT DISTINCT p.id, p.name, p.email
                     FROM people p
                     JOIN time_reports tr ON tr.person_id = p.id
@@ -395,7 +403,8 @@ def send_all_guides_email(
                     AND p.email != ''
                     AND EXTRACT(YEAR FROM tr.date) = %s
                     AND EXTRACT(MONTH FROM tr.date) = %s
-                """, (year, month)).fetchall()
+                    {exclusion_sql}
+                """, (year, month) + exclusion_params).fetchall()
 
         if not guides:
             return {"success": False, "error": "לא נמצאו מדריכים פעילים עם מייל לחודש זה"}
@@ -444,7 +453,10 @@ def send_all_guides_to_single_email(
                 return {"success": False, "error": "הגדרות מייל לא נמצאו"}
 
             if housing_array_id is not None:
-                guides = conn.execute("""
+                exclusion_sql, exclusion_params = completion_exclusion_sql_for_reports(
+                    year, month, housing_array_id
+                )
+                guides = conn.execute(f"""
                     SELECT DISTINCT p.id, p.name
                     FROM people p
                     JOIN time_reports tr ON tr.person_id = p.id
@@ -452,18 +464,23 @@ def send_all_guides_to_single_email(
                     AND p.housing_array_id = %s
                     AND EXTRACT(YEAR FROM tr.date) = %s
                     AND EXTRACT(MONTH FROM tr.date) = %s
+                    {exclusion_sql}
                     ORDER BY p.name
-                """, (housing_array_id, year, month)).fetchall()
+                """, (housing_array_id, year, month) + exclusion_params).fetchall()
             else:
-                guides = conn.execute("""
+                exclusion_sql, exclusion_params = completion_exclusion_sql_for_reports(
+                    year, month, housing_array_id
+                )
+                guides = conn.execute(f"""
                     SELECT DISTINCT p.id, p.name
                     FROM people p
                     JOIN time_reports tr ON tr.person_id = p.id
                     WHERE p.is_active = TRUE
                     AND EXTRACT(YEAR FROM tr.date) = %s
                     AND EXTRACT(MONTH FROM tr.date) = %s
+                    {exclusion_sql}
                     ORDER BY p.name
-                """, (year, month)).fetchall()
+                """, (year, month) + exclusion_params).fetchall()
 
         if not guides:
             return {"success": False, "error": "לא נמצאו מדריכים עם משמרות בחודש זה"}

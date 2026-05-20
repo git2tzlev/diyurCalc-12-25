@@ -44,6 +44,7 @@
       <thead>
         <tr>
           <th style="width: 18%;">שם מדריך</th>
+          <th style="width: 10%;">מספר עובד</th>
           <th style="width: 12%;">תעודת זהות</th>
           <th>הערה</th>
           <th style="width: 16%;">נוצר על ידי</th>
@@ -58,6 +59,7 @@
               {{ note.guide_name }}
             </a>
           </td>
+          <td>{{ note.guide_employee_number or '-' }}</td>
           <td>{{ note.guide_id_number or '-' }}</td>
           <td class="note-content">{{ note.content }}</td>
           <td>{{ note.created_by_name or 'מערכת' }}</td>
@@ -71,7 +73,7 @@
         </tr>
         {% else %}
         <tr>
-          <td colspan="5" class="empty-state">אין הערות לחודש זה</td>
+          <td colspan="6" class="empty-state">אין הערות לחודש זה</td>
         </tr>
         {% endfor %}
       </tbody>

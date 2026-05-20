@@ -14,7 +14,7 @@ from fastapi.templating import Jinja2Templates
 from core.config import config
 from core.database import get_conn, get_housing_array_filter, get_default_period, get_multi_housing_guides
 from core.logic import get_active_guides
-from core.report_presence import get_report_presence_counts
+from core.report_presence import get_report_overlap_counts, get_report_presence_counts
 from core.time_utils import get_shabbat_times_cache
 from core.holiday_payment import get_holiday_payment_setup
 from utils.utils import month_range_ts, available_months_from_db, format_currency, human_date
@@ -68,6 +68,7 @@ def home(
     notes_counts: dict[int, int] = {}
     has_payment_components: set[int] = set()
     multi_housing: dict[int, list[str]] = {}
+    overlap_counts: dict[int, int] = {}
     holiday_payment_setup: dict | None = None
     if selected_year and selected_month:
         start_dt, end_dt = month_range_ts(selected_year, selected_month)
@@ -77,6 +78,9 @@ def home(
         counts_start = time.time()
         with get_conn() as conn:
             counts, has_payment_components = get_report_presence_counts(
+                conn, start_date, end_date, housing_filter,
+            )
+            overlap_counts = get_report_overlap_counts(
                 conn, start_date, end_date, housing_filter,
             )
 
@@ -155,6 +159,7 @@ def home(
             "counts": counts,
             "notes_counts": notes_counts,
             "multi_housing": multi_housing,
+            "overlap_counts": overlap_counts,
             "q": q or "",
             "holiday_payment_setup": holiday_payment_setup,
         },

@@ -23,6 +23,7 @@ from core.auth import (
     is_super_admin,
     validate_action_token,
 )
+from core.report_filters import completion_exclusion_sql_for_reports
 from services.email_service import (
     get_email_settings,
     save_email_settings,
@@ -286,7 +287,10 @@ async def send_bulk_stream(request: Request, year: int, month: int, token: str =
 
         hid = get_user_housing_array(request)
         if hid is not None:
-            guides = conn.execute("""
+            exclusion_sql, exclusion_params = completion_exclusion_sql_for_reports(
+                year, month, hid
+            )
+            guides = conn.execute(f"""
                 SELECT DISTINCT p.id, p.name, p.email
                 FROM people p
                 JOIN time_reports tr ON tr.person_id = p.id
@@ -294,18 +298,23 @@ async def send_bulk_stream(request: Request, year: int, month: int, token: str =
                 AND p.housing_array_id = %s
                 AND EXTRACT(YEAR FROM tr.date) = %s
                 AND EXTRACT(MONTH FROM tr.date) = %s
+                {exclusion_sql}
                 ORDER BY p.name
-            """, (hid, year, month)).fetchall()
+            """, (hid, year, month) + exclusion_params).fetchall()
         else:
-            guides = conn.execute("""
+            exclusion_sql, exclusion_params = completion_exclusion_sql_for_reports(
+                year, month, hid
+            )
+            guides = conn.execute(f"""
                 SELECT DISTINCT p.id, p.name, p.email
                 FROM people p
                 JOIN time_reports tr ON tr.person_id = p.id
                 WHERE p.is_active = TRUE
                 AND EXTRACT(YEAR FROM tr.date) = %s
                 AND EXTRACT(MONTH FROM tr.date) = %s
+                {exclusion_sql}
                 ORDER BY p.name
-            """, (year, month)).fetchall()
+            """, (year, month) + exclusion_params).fetchall()
 
     if not guides:
         async def empty_stream() -> AsyncGenerator[str, None]:

@@ -34,6 +34,7 @@ from core.constants import (
     HIGH_FUNCTIONING_APT_TYPE, LOW_FUNCTIONING_APT_TYPE,
     COMPLETION_APARTMENT_IDS,
     is_asd_housing_array,
+    should_exclude_asd_completion_report,
 )
 from core.holiday_payment import (
     calculate_holiday_payments,
@@ -138,6 +139,7 @@ def _build_holiday_payment_chain_summary(
         "rate": 0.0,
         "status": "none",
         "calculation": "",
+        "payment_details": [],
         "notes": [],
     }
     if not holiday_dates:
@@ -169,6 +171,13 @@ def _build_holiday_payment_chain_summary(
         summary["calculation"] = (
             f"{summary['count']} ימי חג × {summary['rate']:.2f} ₪ = {summary['amount']:.2f} ₪"
         )
+        if minimum_wage > 0 and summary["rate"] > 0:
+            summary["payment_details"].append({
+                "count": summary["count"],
+                "hours": round(summary["rate"] / round(minimum_wage, 2), 2),
+                "rate": round(minimum_wage, 2),
+                "payment": summary["amount"],
+            })
     else:
         summary["status"] = "cancelled"
 
@@ -213,10 +222,10 @@ def _build_holiday_payment_chain_summary(
         })
 
     saved_rows = conn.execute("""
-        SELECT apartment_id, guide_1_id, guide_2_id, guide_2_no_holiday_payment
+        SELECT apartment_id, guide_1_id, guide_2_id, guide_3_id, guide_2_no_holiday_payment
         FROM holiday_payment_apartment_guides
         WHERE year = %s AND month = %s
-          AND (%s IN (guide_1_id, guide_2_id))
+          AND (%s IN (guide_1_id, guide_2_id, guide_3_id))
     """, (year, month, person_id)).fetchall()
     saved_any = conn.execute("""
         SELECT 1
@@ -340,92 +349,27 @@ def _summarize_display_chains(chains: list[dict]) -> dict:
 
 def _prepare_daily_segments_for_display(daily_segments: list[dict]) -> list[dict]:
     """
-    העברת רצפי דירת השלמות לסקשן נפרד בסוף, ללא תאריך.
+    הכנת רצפים לתצוגה בלי לשנות את הסדר הכרונולוגי.
 
-    הרצפים עצמם נשארים באותו סדר כרונולוגי חודשי, אבל לא מוצגים תחת היום המקורי.
+    דירת השלמות מוצגת בתוך היום המקורי שלה כמו כל דירה אחרת.
     """
     display_days: list[dict] = []
-    completion_chains: list[dict] = []
-    completion_summary = {
-        "payment": 0.0,
-        "calc100": 0.0,
-        "calc125": 0.0,
-        "calc150": 0.0,
-        "calc175": 0.0,
-        "calc200": 0.0,
-        "total_minutes": 0.0,
-        "total_minutes_no_standby": 0.0,
-        "has_work": False,
-    }
 
     for day in daily_segments:
-        regular_chains: list[dict] = []
-        moved_chains: list[dict] = []
+        display_day = dict(day)
+        display_chains: list[dict] = []
         day_token = day.get("date_obj").isoformat() if day.get("date_obj") else day.get("day", "")
 
         for chain in day.get("chains", []):
-            if chain.get("type") == "work" and _is_completion_apartment(apartment_name=chain.get("apartment_name")):
-                moved_chain = dict(chain)
-                moved_chain["display_group_token"] = day_token
-                moved_chain["is_completion_apartment"] = True
-                moved_chains.append(moved_chain)
-            else:
-                regular_chains.append(chain)
+            display_chain = dict(chain)
+            display_chain["display_group_token"] = day_token
+            display_chain["is_completion_apartment"] = _is_completion_apartment(
+                apartment_name=display_chain.get("apartment_name")
+            )
+            display_chains.append(display_chain)
 
-        if regular_chains:
-            display_day = dict(day)
-            display_day["chains"] = regular_chains
-            if moved_chains:
-                regular_summary = _summarize_display_chains(regular_chains)
-                display_day["payment"] = regular_summary["payment"]
-                display_day["calc100"] = regular_summary["calc100"]
-                display_day["calc125"] = regular_summary["calc125"]
-                display_day["calc150"] = regular_summary["calc150"]
-                display_day["calc175"] = regular_summary["calc175"]
-                display_day["calc200"] = regular_summary["calc200"]
-                display_day["total_minutes"] = regular_summary["total_minutes"]
-                display_day["total_minutes_no_standby"] = regular_summary["total_minutes_no_standby"]
-                display_day["has_work"] = regular_summary["has_work"]
-            display_days.append(display_day)
-
-        elif day.get("chains") and not moved_chains:
-            display_days.append(dict(day))
-
-        if moved_chains:
-            moved_summary = _summarize_display_chains(moved_chains)
-            completion_chains.extend(moved_chains)
-            completion_summary["payment"] += moved_summary["payment"]
-            completion_summary["calc100"] += moved_summary["calc100"]
-            completion_summary["calc125"] += moved_summary["calc125"]
-            completion_summary["calc150"] += moved_summary["calc150"]
-            completion_summary["calc175"] += moved_summary["calc175"]
-            completion_summary["calc200"] += moved_summary["calc200"]
-            completion_summary["total_minutes"] += moved_summary["total_minutes"]
-            completion_summary["total_minutes_no_standby"] += moved_summary["total_minutes_no_standby"]
-            completion_summary["has_work"] = completion_summary["has_work"] or moved_summary["has_work"]
-
-    if completion_chains:
-        display_days.append({
-            "day": "",
-            "day_name": "",
-            "hebrew_date": "",
-            "date_obj": None,
-            "payment": completion_summary["payment"],
-            "standby_payment": 0.0,
-            "calc100": completion_summary["calc100"],
-            "calc125": completion_summary["calc125"],
-            "calc150": completion_summary["calc150"],
-            "calc175": completion_summary["calc175"],
-            "calc200": completion_summary["calc200"],
-            "shift_names": [],
-            "has_work": completion_summary["has_work"],
-            "total_minutes": completion_summary["total_minutes"],
-            "total_minutes_no_standby": completion_summary["total_minutes_no_standby"],
-            "chains": completion_chains,
-            "cancelled_standbys": [],
-            "is_completion_section": True,
-            "section_title": f"דירת {COMPLETION_APARTMENT_NAME}",
-        })
+        display_day["chains"] = display_chains
+        display_days.append(display_day)
 
     return display_days
 
@@ -879,6 +823,16 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
               AND tr.date >= %s AND tr.date < %s
             ORDER BY tr.date, tr.start_time
         """, (person_id, start_date, end_date)).fetchall()
+
+    reports = [
+        report for report in reports
+        if not should_exclude_asd_completion_report(
+            year,
+            month,
+            report.get("housing_array_id"),
+            report.get("apartment_id"),
+        )
+    ]
 
     # שליפת סגמנטים
     shift_ids = list({r["shift_type_id"] for r in reports if r["shift_type_id"]})
@@ -1671,6 +1625,7 @@ def _fetch_all_notes_for_month(
             """
             SELECT n.id, n.person_id, n.content, n.created_at, n.updated_at,
                    guide.name AS guide_name,
+                   guide.meirav_code AS guide_employee_number,
                    guide.id_number AS guide_id_number,
                    creator.name AS created_by_name
             FROM guide_monthly_notes n
@@ -1687,6 +1642,7 @@ def _fetch_all_notes_for_month(
             """
             SELECT n.id, n.person_id, n.content, n.created_at, n.updated_at,
                    guide.name AS guide_name,
+                   guide.meirav_code AS guide_employee_number,
                    guide.id_number AS guide_id_number,
                    creator.name AS created_by_name
             FROM guide_monthly_notes n

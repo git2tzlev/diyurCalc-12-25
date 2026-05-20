@@ -87,11 +87,31 @@ from core.constants import (
     WEEKDAY_STANDBY_START,
     WEEKDAY_STANDBY_END,
     calculate_weekday_work_minutes,
+    should_exclude_asd_completion_report,
 )
 
 logger = logging.getLogger(__name__)
 
 _NIGHT_FIRST_WORK_SEGMENT_MARKER = "__night_first_work__"
+
+
+def _filter_asd_completion_reports_for_one_time_exclusion(
+    reports: list,
+    year: int,
+    month: int,
+) -> list:
+    """החרגה חד-פעמית: דירת השלמות ב-ASD לא נכנסת לשכר 04/2026."""
+    if (year, month) != (2026, 4):
+        return reports
+    return [
+        report for report in reports
+        if not should_exclude_asd_completion_report(
+            year,
+            month,
+            report.get("housing_array_id"),
+            report.get("apartment_id"),
+        )
+    ]
 
 
 def _subtract_intervals_from_range(
@@ -149,6 +169,101 @@ def _trim_night_first_work_overlaps(segments: List[Tuple]) -> List[Tuple]:
                 trimmed.append((part_start, part_end, *seg[2:]))
 
     return trimmed
+
+
+def _resolve_work_segment_overlaps(
+    work_segments: List[Tuple],
+    shift_rates: dict,
+    minimum_wage: float,
+) -> tuple[List[Tuple], list[dict[str, Any]]]:
+    """
+    Cut overlapping work segments and keep the segment with the highest hourly rate.
+
+    work_segments tuple shape:
+    (start, end, label, shift_id, apartment_name, actual_date, apt_type,
+     actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name,
+     rate_apt_type_name, apt_type_change_date, apt_city)
+    """
+    if len(work_segments) < 2:
+        return work_segments, []
+
+    boundaries = sorted({
+        point
+        for seg in work_segments
+        for point in (seg[0], seg[1])
+        if seg[1] > seg[0]
+    })
+    if len(boundaries) < 2:
+        return work_segments, []
+
+    def segment_rate(seg: Tuple) -> float:
+        rate_key = (seg[3], seg[9], seg[8])
+        rates = shift_rates.get(rate_key, {"weekday": minimum_wage})
+        return float(rates.get("weekday") or minimum_wage)
+
+    def fmt_minutes(value: int) -> str:
+        return f"{value // 60 % 24:02d}:{value % 60:02d}"
+
+    resolved: list[Tuple] = []
+    warnings_by_key: dict[tuple[int, int], dict[str, Any]] = {}
+
+    for start, end in zip(boundaries, boundaries[1:]):
+        if end <= start:
+            continue
+        covering = [seg for seg in work_segments if seg[0] < end and seg[1] > start]
+        if not covering:
+            continue
+
+        if len(covering) > 1:
+            # Highest rate wins; if rates tie, prefer the more specific/shorter report.
+            selected = max(
+                covering,
+                key=lambda seg: (
+                    segment_rate(seg),
+                    -(seg[1] - seg[0]),
+                    seg[0],
+                ),
+            )
+            warning_key = (start, end)
+            selected_rate = segment_rate(selected)
+            dropped = [seg for seg in covering if seg is not selected]
+            warnings_by_key[warning_key] = {
+                "start": start,
+                "end": end,
+                "start_time": fmt_minutes(start),
+                "end_time": fmt_minutes(end),
+                "selected_rate": selected_rate,
+                "selected_shift_name": selected[2],
+                "selected_apartment": selected[4],
+                "rates": sorted({round(segment_rate(seg), 2) for seg in covering}, reverse=True),
+                "apartments": sorted({seg[4] for seg in covering if seg[4]}),
+                "cut_segments": [
+                    {
+                        "rate": round(segment_rate(seg), 2),
+                        "shift_name": seg[2],
+                        "apartment": seg[4],
+                    }
+                    for seg in dropped
+                ],
+            }
+        else:
+            selected = covering[0]
+
+        resolved.append((start, end, *selected[2:]))
+
+    merged: list[Tuple] = []
+    for seg in resolved:
+        if (
+            merged
+            and merged[-1][1] == seg[0]
+            and merged[-1][2:] == seg[2:]
+        ):
+            merged[-1] = (merged[-1][0], seg[1], *seg[2:])
+        else:
+            merged.append(seg)
+
+    warnings = list(warnings_by_key.values())
+    return merged, warnings
 
 
 # =============================================================================
@@ -383,9 +498,23 @@ def _display_base_hourly(
     """
     rate_supp_nis = float(rate_supplement_agorot or 0) / 100.0
     actual_supp_nis = float(actual_supplement_agorot or 0) / 100.0
-    if rate_supp_nis > 0 and abs(seg_rate - minimum_wage - rate_supp_nis) < 0.02:
-        return round(minimum_wage + actual_supp_nis, 2)
+    if rate_supp_nis > 0:
+        if abs(seg_rate - minimum_wage - rate_supp_nis) < 0.02:
+            return round(minimum_wage + actual_supp_nis, 2)
+        return round(seg_rate, 2)
     return round(seg_rate + actual_supp_nis, 2)
+
+
+def _should_show_hourly_supplements_in_basis(
+    seg_rate: float,
+    minimum_wage: float,
+    rate_supplement_agorot: int | float,
+) -> bool:
+    """True when the displayed base is built from minimum wage plus supplements."""
+    rate_supp_nis = float(rate_supplement_agorot or 0) / 100.0
+    if rate_supp_nis <= 0:
+        return False
+    return abs(seg_rate - minimum_wage - rate_supp_nis) < 0.02
 
 
 def _register_asd_night_labels(
@@ -1630,6 +1759,7 @@ def get_daily_segments_data(
                 ORDER BY tr.date, tr.start_time
             """, (person_id, start_date, end_date)).fetchall()
 
+    reports = _filter_asd_completion_reports_for_one_time_exclusion(reports, year, month)
     person_name = reports[0]["person_name"] if reports else ""
 
     # Override apartment types and marital status with historical data
@@ -2694,6 +2824,9 @@ def get_daily_segments_data(
                 deduped.append(w)
                 seen.add(k)
         work_segments = deduped  # Each is (start, end, label, sid, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date, apt_city)
+        work_segments, overlap_warnings = _resolve_work_segment_overlaps(
+            work_segments, shift_rates, minimum_wage
+        )
 
         # Note: Night chain detection is now done per-chain, not per-day
         # A chain is a "night chain" if it has 2+ hours in 22:00-06:00 range
@@ -3548,6 +3681,9 @@ def get_daily_segments_data(
                 display_base = _display_base_hourly(
                     seg_rate, minimum_wage, rate_supp_ag, actual_supp_ag
                 )
+                show_basis_supplements = _should_show_hourly_supplements_in_basis(
+                    seg_rate, minimum_wage, rate_supp_ag
+                )
 
                 chains.append({
                     "start_time": start_str,
@@ -3577,8 +3713,8 @@ def get_daily_segments_data(
                     "from_prev_day": (seg_start >= MINUTES_PER_DAY) if is_first else False,
                     "effective_rate": seg_rate,  # שימוש בתעריף הנכון (שבת או חול) לפי is_shabbat
                     "display_base_rate": display_base,  # תעריף בסיס לתצוגה (כולל תוספת דירה בפועל)
-                    "apartment_hourly_supplement_nis": apartment_supplement_nis,  # תוספת סוג דירה לשעה (שקלים)
-                    "asd_seniority_supplement_nis": asd_seniority_supplement_nis,  # תוספת ותק ASD לשעה (שקלים)
+                    "apartment_hourly_supplement_nis": apartment_supplement_nis if show_basis_supplements else 0.0,  # תוספת סוג דירה לשעה (שקלים)
+                    "asd_seniority_supplement_nis": asd_seniority_supplement_nis if show_basis_supplements else 0.0,  # תוספת ותק ASD לשעה (שקלים)
                     "hourly_wage_supplement": seg_rates_dict.get("supplement", 0),  # כלל התוספות השעתיות באגורות
                     "asd_night_label": _asd_night_label_for_row(
                         entry.get("asd_night_label_by_apt"),
@@ -3934,6 +4070,7 @@ def get_daily_segments_data(
             "total_minutes_no_standby": sum(w[1]-w[0] for w in work_segments),
             "chains": chains,
             "cancelled_standbys": cancelled_standbys,
+            "overlap_warnings": overlap_warnings,
         })
 
         # עדכון התאריך הקודם לסיבוב הבא
@@ -4009,12 +4146,14 @@ def aggregate_daily_segments_to_monthly(
         # חופשה ומחלה
         "vacation_minutes": 0,
         "vacation_payment": 0.0,
+        "vacation_payment_details": [],
         "vacation": 0,
         "vacation_days_taken": 0,
         "sick_minutes": 0,
         "effective_sick_minutes": 0,
         "non_effective_sick_minutes": 0,
         "sick_payment": 0.0,
+        "sick_payment_details": [],
         "sick_days_taken": 0,
         "sick_days_accrued": 0.0,
         "vacation_days_accrued": 0.0,
@@ -4051,6 +4190,33 @@ def aggregate_daily_segments_to_monthly(
         monthly_totals["component_rate_x_minutes_sum"][component_key] = (
             monthly_totals["component_rate_x_minutes_sum"].get(component_key, 0.0) + minutes * rate
         )
+
+    sick_payment_details_by_rate: dict[float, dict[str, float]] = {}
+    vacation_payment_details_by_rate: dict[float, dict[str, float]] = {}
+
+    def add_sick_payment_detail(minutes: int | float, payment: float, rate: float) -> None:
+        if payment <= 0 or rate <= 0:
+            return
+        rounded_rate = round(rate, 2)
+        paid_hours = round(payment / rounded_rate, 2)
+        detail = sick_payment_details_by_rate.setdefault(
+            rounded_rate,
+            {"hours": 0.0, "rate": rounded_rate, "payment": 0.0, "raw_minutes": 0.0},
+        )
+        detail["hours"] += paid_hours
+        detail["payment"] += payment
+        detail["raw_minutes"] += minutes
+
+    def add_vacation_payment_detail(minutes: int | float, payment: float, rate: float) -> None:
+        if payment <= 0 or rate <= 0:
+            return
+        rounded_rate = round(rate, 2)
+        detail = vacation_payment_details_by_rate.setdefault(
+            rounded_rate,
+            {"hours": 0.0, "rate": rounded_rate, "payment": 0.0},
+        )
+        detail["hours"] += round(minutes / 60, 2)
+        detail["payment"] += payment
 
     # ספירת ימי עבודה, חופשה ומחלה
     work_days_set = set()
@@ -4208,18 +4374,22 @@ def aggregate_daily_segments_to_monthly(
                 vacation_days_set.add(day_date)
                 vacation_mins = chain.get("total_minutes", 0) or 0
                 vacation_pay = chain.get("payment", 0) or 0
+                vacation_effective_rate = chain.get("effective_rate", minimum_wage) or minimum_wage
                 monthly_totals["vacation_minutes"] += vacation_mins
                 monthly_totals["vacation_payment"] += vacation_pay
+                add_vacation_payment_detail(vacation_mins, vacation_pay, vacation_effective_rate)
 
             elif chain_type == "sick":
                 sick_days_set.add(day_date)
                 sick_mins = chain.get("total_minutes", 0) or 0
                 sick_pay = chain.get("payment", 0) or 0
                 sick_rate = chain.get("sick_rate_percent", 100) / 100
+                sick_effective_rate = chain.get("effective_rate", minimum_wage) or minimum_wage
                 monthly_totals["sick_minutes"] += sick_mins
                 monthly_totals["sick_payment"] += sick_pay
                 monthly_totals["effective_sick_minutes"] += int(sick_mins * sick_rate)
                 monthly_totals["non_effective_sick_minutes"] += int(sick_mins * (1 - sick_rate))
+                add_sick_payment_detail(sick_mins, sick_pay, sick_effective_rate)
 
     # חישוב סך שעות אפקטיביות (עבודה + חופשה + מחלה אפקטיבית, ללא כוננויות)
     raw_total_minutes = sum(
@@ -4240,10 +4410,32 @@ def aggregate_daily_segments_to_monthly(
     # תשלום חופשה - בדרך כלל מגיע מסיכום הרצפים; fallback לשכר מינימום אם אין פירוט תשלום
     if monthly_totals["vacation_minutes"] > 0 and monthly_totals["vacation_payment"] == 0:
         monthly_totals["vacation_payment"] = _mul_pay(round(monthly_totals["vacation_minutes"] / 60, 2), round(minimum_wage, 2))
+        add_vacation_payment_detail(
+            monthly_totals["vacation_minutes"],
+            monthly_totals["vacation_payment"],
+            minimum_wage,
+        )
     monthly_totals["vacation"] = monthly_totals["vacation_minutes"]
+    monthly_totals["vacation_payment_details"] = [
+        {
+            "hours": round(detail["hours"], 2),
+            "rate": round(detail["rate"], 2),
+            "payment": round(detail["payment"], 2),
+        }
+        for detail in sorted(vacation_payment_details_by_rate.values(), key=lambda item: item["rate"])
+    ]
 
     # ימי מחלה שנוצלו (התשלום כבר חושב בלולאה עם האחוזים המדורגים)
     monthly_totals["sick_days_taken"] = len(sick_days_set)
+    monthly_totals["sick_payment_details"] = [
+        {
+            "hours": round(detail["hours"], 2),
+            "rate": round(detail["rate"], 2),
+            "payment": round(detail["payment"], 2),
+            "raw_hours": round(detail["raw_minutes"] / 60, 2),
+        }
+        for detail in sorted(sick_payment_details_by_rate.values(), key=lambda item: item["rate"])
+    ]
 
     # שליפת נסיעות ותוספות - שימוש בנתונים שנטענו מראש אם קיימים
     if preloaded_payment_comps is not None:

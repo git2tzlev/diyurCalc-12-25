@@ -20,7 +20,8 @@ import psycopg2
 from core.config import config
 from core.database import (
     set_demo_mode, get_demo_mode_from_cookie, close_all_pools,
-    get_housing_array_from_cookie, set_housing_array_filter, get_conn
+    get_housing_array_from_cookie, set_db_actor_person_id,
+    set_housing_array_filter, get_conn
 )
 from utils.utils import human_date, format_currency, format_currency_total
 from routes.home import home
@@ -219,6 +220,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         user = refresh_session_user(session_user)
         request.state.current_user = user
+        set_db_actor_person_id(user.get("person_id") if user else None)
 
         if not user:
             # הפניה לעמוד התחברות עבור בקשות HTML
@@ -241,8 +243,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if user.get("role") == "framework_manager" and user.get("housing_array_id"):
             set_housing_array_filter(user["housing_array_id"])
 
-        response = await call_next(request)
-        return response
+        try:
+            response = await call_next(request)
+            return response
+        finally:
+            set_db_actor_person_id(None)
 
 
 # סדר ה-middleware חשוב!

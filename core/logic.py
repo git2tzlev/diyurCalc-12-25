@@ -15,6 +15,7 @@ from typing import List, Tuple, Dict, Any, Optional
 from utils.cache_manager import cached
 from core.time_utils import get_shabbat_times_cache
 from core.database import get_housing_array_filter
+from core.constants import should_exclude_asd_completion_report
 
 # =============================================================================
 # Configure logging
@@ -472,6 +473,15 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
             ORDER BY tr.person_id, tr.date, tr.start_time
         """, (person_ids, start_date, end_date))
     all_reports = cursor.fetchall()
+    all_reports = [
+        report for report in all_reports
+        if not should_exclude_asd_completion_report(
+            year,
+            month,
+            report.get("housing_array_id"),
+            report.get("apartment_id"),
+        )
+    ]
 
     # Group reports by person_id
     reports_by_person = {}

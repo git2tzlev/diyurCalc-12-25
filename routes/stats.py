@@ -14,7 +14,9 @@ from fastapi.templating import Jinja2Templates
 from core.config import config
 from core.database import get_conn, get_housing_array_filter, get_default_period
 from core.auth import get_user_housing_array, is_framework_manager
+from core.constants import should_exclude_asd_completion_report
 from core.logic import calculate_monthly_summary
+from core.report_filters import completion_exclusion_sql_for_reports
 from utils.utils import format_currency, human_date, available_months_from_db
 
 logger = logging.getLogger(__name__)
@@ -127,7 +129,10 @@ def get_salary_by_housing_array(year: int, month: int) -> JSONResponse:
 
             # מציאת כל מערכי הדיור שהמדריך עבד בהם
             if housing_filter is not None:
-                housing_arrays = conn.execute("""
+                exclusion_sql, exclusion_params = completion_exclusion_sql_for_reports(
+                    year, month, housing_filter
+                )
+                housing_arrays = conn.execute(f"""
                     SELECT DISTINCT ha.name
                     FROM time_reports tr
                     JOIN apartments ap ON ap.id = tr.apartment_id
@@ -136,9 +141,13 @@ def get_salary_by_housing_array(year: int, month: int) -> JSONResponse:
                       AND EXTRACT(YEAR FROM tr.date) = %s
                       AND EXTRACT(MONTH FROM tr.date) = %s
                       AND ap.housing_array_id = %s
-                """, (person_id, year, month, housing_filter)).fetchall()
+                      {exclusion_sql}
+                """, (person_id, year, month, housing_filter) + exclusion_params).fetchall()
             else:
-                housing_arrays = conn.execute("""
+                exclusion_sql, exclusion_params = completion_exclusion_sql_for_reports(
+                    year, month, housing_filter
+                )
+                housing_arrays = conn.execute(f"""
                     SELECT DISTINCT ha.name
                     FROM time_reports tr
                     JOIN apartments ap ON ap.id = tr.apartment_id
@@ -146,7 +155,8 @@ def get_salary_by_housing_array(year: int, month: int) -> JSONResponse:
                     WHERE tr.person_id = %s
                       AND EXTRACT(YEAR FROM tr.date) = %s
                       AND EXTRACT(MONTH FROM tr.date) = %s
-                """, (person_id, year, month)).fetchall()
+                      {exclusion_sql}
+                """, (person_id, year, month) + exclusion_params).fetchall()
 
             # הוספת כל השכר של המדריך לכל מערך שעבד בו
             for row in housing_arrays:
@@ -378,7 +388,10 @@ def get_all_stats(year: int, month: int) -> JSONResponse:
     with get_conn() as conn:
         # סוגי משמרות
         if housing_filter is not None:
-            shift_rows = conn.execute("""
+            exclusion_sql, exclusion_params = completion_exclusion_sql_for_reports(
+                year, month, housing_filter
+            )
+            shift_rows = conn.execute(f"""
                 SELECT st.name, COUNT(*) as count
                 FROM time_reports tr
                 JOIN shift_types st ON st.id = tr.shift_type_id
@@ -386,16 +399,21 @@ def get_all_stats(year: int, month: int) -> JSONResponse:
                 WHERE EXTRACT(YEAR FROM tr.date) = %s
                   AND EXTRACT(MONTH FROM tr.date) = %s
                   AND ap.housing_array_id = %s
+                  {exclusion_sql}
                 GROUP BY st.id, st.name ORDER BY count DESC
-            """, (year, month, housing_filter)).fetchall()
+            """, (year, month, housing_filter) + exclusion_params).fetchall()
         else:
-            shift_rows = conn.execute("""
+            exclusion_sql, exclusion_params = completion_exclusion_sql_for_reports(
+                year, month, housing_filter
+            )
+            shift_rows = conn.execute(f"""
                 SELECT st.name, COUNT(*) as count
                 FROM time_reports tr
                 JOIN shift_types st ON st.id = tr.shift_type_id
                 WHERE EXTRACT(YEAR FROM tr.date) = %s AND EXTRACT(MONTH FROM tr.date) = %s
+                {exclusion_sql}
                 GROUP BY st.id, st.name ORDER BY count DESC
-            """, (year, month)).fetchall()
+            """, (year, month) + exclusion_params).fetchall()
 
         # === חישוב שכר לפי מערך - מדריך מופיע בכל מערך שעבד בו ===
         totals_by_housing = defaultdict(float)
@@ -409,7 +427,10 @@ def get_all_stats(year: int, month: int) -> JSONResponse:
 
             # מציאת כל מערכי הדיור שהמדריך עבד בהם
             if housing_filter is not None:
-                housing_arrays = conn.execute("""
+                exclusion_sql, exclusion_params = completion_exclusion_sql_for_reports(
+                    year, month, housing_filter
+                )
+                housing_arrays = conn.execute(f"""
                     SELECT DISTINCT ha.name
                     FROM time_reports tr
                     JOIN apartments ap ON ap.id = tr.apartment_id
@@ -418,9 +439,13 @@ def get_all_stats(year: int, month: int) -> JSONResponse:
                       AND EXTRACT(YEAR FROM tr.date) = %s
                       AND EXTRACT(MONTH FROM tr.date) = %s
                       AND ap.housing_array_id = %s
-                """, (person_id, year, month, housing_filter)).fetchall()
+                      {exclusion_sql}
+                """, (person_id, year, month, housing_filter) + exclusion_params).fetchall()
             else:
-                housing_arrays = conn.execute("""
+                exclusion_sql, exclusion_params = completion_exclusion_sql_for_reports(
+                    year, month, housing_filter
+                )
+                housing_arrays = conn.execute(f"""
                     SELECT DISTINCT ha.name
                     FROM time_reports tr
                     JOIN apartments ap ON ap.id = tr.apartment_id
@@ -428,7 +453,8 @@ def get_all_stats(year: int, month: int) -> JSONResponse:
                     WHERE tr.person_id = %s
                       AND EXTRACT(YEAR FROM tr.date) = %s
                       AND EXTRACT(MONTH FROM tr.date) = %s
-                """, (person_id, year, month)).fetchall()
+                      {exclusion_sql}
+                """, (person_id, year, month) + exclusion_params).fetchall()
 
             # הוספת כל השכר לכל מערך
             for row in housing_arrays:
@@ -497,7 +523,10 @@ def get_shift_types_distribution(year: int, month: int) -> JSONResponse:
         housing_filter = get_housing_array_filter()
 
         if housing_filter is not None:
-            rows = conn.execute("""
+            exclusion_sql, exclusion_params = completion_exclusion_sql_for_reports(
+                year, month, housing_filter
+            )
+            rows = conn.execute(f"""
                 SELECT st.name, COUNT(*) as count
                 FROM time_reports tr
                 JOIN shift_types st ON st.id = tr.shift_type_id
@@ -505,19 +534,24 @@ def get_shift_types_distribution(year: int, month: int) -> JSONResponse:
                 WHERE EXTRACT(YEAR FROM tr.date) = %s
                   AND EXTRACT(MONTH FROM tr.date) = %s
                   AND ap.housing_array_id = %s
+                  {exclusion_sql}
                 GROUP BY st.id, st.name
                 ORDER BY count DESC
-            """, (year, month, housing_filter)).fetchall()
+            """, (year, month, housing_filter) + exclusion_params).fetchall()
         else:
-            rows = conn.execute("""
+            exclusion_sql, exclusion_params = completion_exclusion_sql_for_reports(
+                year, month, housing_filter
+            )
+            rows = conn.execute(f"""
                 SELECT st.name, COUNT(*) as count
                 FROM time_reports tr
                 JOIN shift_types st ON st.id = tr.shift_type_id
                 WHERE EXTRACT(YEAR FROM tr.date) = %s
                   AND EXTRACT(MONTH FROM tr.date) = %s
+                  {exclusion_sql}
                 GROUP BY st.id, st.name
                 ORDER BY count DESC
-            """, (year, month)).fetchall()
+            """, (year, month) + exclusion_params).fetchall()
 
     labels = [r["name"] for r in rows]
     data = [r["count"] for r in rows]
@@ -580,21 +614,29 @@ def _aggregate_by_apartment(
         # שליפת קישור מדריך+דירה -> תשלומים מפורטים
         # צריך לשלוף את הדיווחים עצמם כדי לדעת איזה תשלום שייך לאיזו דירה
         if housing_array_id is not None:
-            reports = conn.execute("""
+            exclusion_sql, exclusion_params = completion_exclusion_sql_for_reports(
+                year, month, housing_array_id
+            )
+            reports = conn.execute(f"""
                 SELECT tr.person_id, tr.apartment_id
                 FROM time_reports tr
                 JOIN apartments ap ON ap.id = tr.apartment_id
                 WHERE EXTRACT(YEAR FROM tr.date) = %s
                   AND EXTRACT(MONTH FROM tr.date) = %s
                   AND ap.housing_array_id = %s
-            """, (year, month, housing_array_id)).fetchall()
+                  {exclusion_sql}
+            """, (year, month, housing_array_id) + exclusion_params).fetchall()
         else:
-            reports = conn.execute("""
+            exclusion_sql, exclusion_params = completion_exclusion_sql_for_reports(
+                year, month, housing_array_id
+            )
+            reports = conn.execute(f"""
                 SELECT tr.person_id, tr.apartment_id
                 FROM time_reports tr
                 WHERE EXTRACT(YEAR FROM tr.date) = %s
                   AND EXTRACT(MONTH FROM tr.date) = %s
-            """, (year, month)).fetchall()
+                  {exclusion_sql}
+            """, (year, month) + exclusion_params).fetchall()
 
     # מיפוי מדריך -> דירות
     person_apartments = defaultdict(set)
@@ -689,14 +731,18 @@ def get_compare_housing_arrays(
 
         # שליפת קישור מדריך -> מערך לשני החודשים
         def get_person_to_housing(y: int, m: int) -> dict:
-            rows = conn.execute("""
+            exclusion_sql, exclusion_params = completion_exclusion_sql_for_reports(
+                y, m, None
+            )
+            rows = conn.execute(f"""
                 SELECT DISTINCT tr.person_id, ap.housing_array_id
                 FROM time_reports tr
                 JOIN apartments ap ON ap.id = tr.apartment_id
                 WHERE EXTRACT(YEAR FROM tr.date) = %s
                   AND EXTRACT(MONTH FROM tr.date) = %s
                   AND ap.housing_array_id = ANY(%s)
-            """, (y, m, array_ids)).fetchall()
+                  {exclusion_sql}
+            """, (y, m, array_ids) + exclusion_params).fetchall()
             return {r["person_id"]: r["housing_array_id"] for r in rows}
 
     # סיכומים לכל חודש
@@ -933,29 +979,38 @@ def get_apartment_details(
             )
         apartment_name = apt_row["name"] if apt_row else f"דירה {apartment_id}"
 
-        # שליפת כל המדריכים שעבדו בדירה בחודש
-        guides = conn.execute("""
-            SELECT DISTINCT p.id, p.name
-            FROM time_reports tr
-            JOIN people p ON p.id = tr.person_id
-            WHERE tr.apartment_id = %s
-              AND EXTRACT(YEAR FROM tr.date) = %s
-              AND EXTRACT(MONTH FROM tr.date) = %s
-            ORDER BY p.name
-        """, (apartment_id, year, month)).fetchall()
+        if should_exclude_asd_completion_report(
+            year,
+            month,
+            apt_row["housing_array_id"] if apt_row else None,
+            apartment_id,
+        ):
+            guides = []
+            shift_types = []
+        else:
+            # שליפת כל המדריכים שעבדו בדירה בחודש
+            guides = conn.execute("""
+                SELECT DISTINCT p.id, p.name
+                FROM time_reports tr
+                JOIN people p ON p.id = tr.person_id
+                WHERE tr.apartment_id = %s
+                  AND EXTRACT(YEAR FROM tr.date) = %s
+                  AND EXTRACT(MONTH FROM tr.date) = %s
+                ORDER BY p.name
+            """, (apartment_id, year, month)).fetchall()
 
-        # שליפת סוגי משמרות בדירה
-        shift_types = conn.execute("""
-            SELECT st.id, st.name, COUNT(*) as count,
-                   SUM(EXTRACT(EPOCH FROM (tr.end_time - tr.start_time))/60) as total_minutes
-            FROM time_reports tr
-            JOIN shift_types st ON st.id = tr.shift_type_id
-            WHERE tr.apartment_id = %s
-              AND EXTRACT(YEAR FROM tr.date) = %s
-              AND EXTRACT(MONTH FROM tr.date) = %s
-            GROUP BY st.id, st.name
-            ORDER BY count DESC
-        """, (apartment_id, year, month)).fetchall()
+            # שליפת סוגי משמרות בדירה
+            shift_types = conn.execute("""
+                SELECT st.id, st.name, COUNT(*) as count,
+                       SUM(EXTRACT(EPOCH FROM (tr.end_time - tr.start_time))/60) as total_minutes
+                FROM time_reports tr
+                JOIN shift_types st ON st.id = tr.shift_type_id
+                WHERE tr.apartment_id = %s
+                  AND EXTRACT(YEAR FROM tr.date) = %s
+                  AND EXTRACT(MONTH FROM tr.date) = %s
+                GROUP BY st.id, st.name
+                ORDER BY count DESC
+            """, (apartment_id, year, month)).fetchall()
 
     # נתוני משמרות
     shift_labels = [s["name"] for s in shift_types]
@@ -1211,7 +1266,10 @@ def get_overtime_by_housing_array(year: int, month: int) -> JSONResponse:
     with get_conn() as conn:
         # מציאת מערך הדיור לכל מדריך לפי הדירות שעבד בהן בחודש
         if hf is not None:
-            person_housing_rows = conn.execute("""
+            exclusion_sql, exclusion_params = completion_exclusion_sql_for_reports(
+                year, month, hf
+            )
+            person_housing_rows = conn.execute(f"""
                 SELECT DISTINCT tr.person_id, ha.id AS housing_array_id, ha.name AS housing_array_name
                 FROM time_reports tr
                 JOIN apartments ap ON ap.id = tr.apartment_id
@@ -1220,9 +1278,13 @@ def get_overtime_by_housing_array(year: int, month: int) -> JSONResponse:
                   AND EXTRACT(YEAR FROM tr.date) = %s
                   AND EXTRACT(MONTH FROM tr.date) = %s
                   AND ap.housing_array_id = %s
-            """, (person_ids, year, month, hf)).fetchall()
+                  {exclusion_sql}
+            """, (person_ids, year, month, hf) + exclusion_params).fetchall()
         else:
-            person_housing_rows = conn.execute("""
+            exclusion_sql, exclusion_params = completion_exclusion_sql_for_reports(
+                year, month, hf
+            )
+            person_housing_rows = conn.execute(f"""
                 SELECT DISTINCT tr.person_id, ha.id AS housing_array_id, ha.name AS housing_array_name
                 FROM time_reports tr
                 JOIN apartments ap ON ap.id = tr.apartment_id
@@ -1230,7 +1292,8 @@ def get_overtime_by_housing_array(year: int, month: int) -> JSONResponse:
                 WHERE tr.person_id = ANY(%s)
                   AND EXTRACT(YEAR FROM tr.date) = %s
                   AND EXTRACT(MONTH FROM tr.date) = %s
-            """, (person_ids, year, month)).fetchall()
+                  {exclusion_sql}
+            """, (person_ids, year, month) + exclusion_params).fetchall()
 
         # שליפת פרטי רכז לכל מערך דיור
         coordinator_rows = conn.execute("""

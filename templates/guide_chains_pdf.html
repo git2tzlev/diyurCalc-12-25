@@ -184,6 +184,21 @@
   {% if day.chains and day.chains|length > 0 %}
   <div class="day-section">
     <div class="day-header">{% if day.is_completion_section %}{{ day.section_title }}{% else %}{{ day.day }} ({{ day.day_name }}, {{ day.hebrew_date }}){% endif %}</div>
+    {% if day.overlap_warnings %}
+    <div style="margin: 6px 0 8px; padding: 6px 8px; border: 1px solid #f59e0b; background: #fffbeb; color: #92400e; font-size: 10px; font-weight: bold;">
+      <div>חפיפת שעות זוהתה ביום זה. החישוב חתך את החפיפה ובחר בכל טווח את התעריף הגבוה יותר.</div>
+      {% for overlap in day.overlap_warnings %}
+      <div style="margin-top:3px; font-weight: normal;">
+        {{ overlap.start_time }}-{{ overlap.end_time }}:
+        נשאר תעריף {{ "%.2f"|format(overlap.selected_rate) }}{% if overlap.selected_apartment %} ({{ overlap.selected_apartment }}){% endif %};
+        נחתך:
+        {% for cut in overlap.cut_segments %}
+          תעריף {{ "%.2f"|format(cut.rate) }}{% if cut.apartment %} ({{ cut.apartment }}){% endif %}{% if not loop.last %}, {% endif %}
+        {% endfor %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
     <table>
       <thead>
         <tr>
@@ -478,7 +493,16 @@
           <td style="text-align: right;">ימי חופשה:</td>
           <td>{{ vacation_hours }}</td>
           <td class="payment-cell">{{ "%.2f"|format(row_payment_vacation) }}</td>
-          <td colspan="6">{{ monthly_totals.vacation_days_taken or 0 }} ימים (100%)</td>
+          <td colspan="6">
+            {{ monthly_totals.vacation_days_taken or 0 }} ימים (100%)
+            {% if monthly_totals.vacation_payment_details %}
+            <br>
+            חישוב:
+            {% for detail in monthly_totals.vacation_payment_details %}
+              {{ "%.2f"|format(detail.hours) }} שעות × {{ "%.2f"|format(detail.rate) }} = {{ "%.2f"|format(detail.payment) }}{% if not loop.last %}; {% endif %}
+            {% endfor %}
+            {% endif %}
+          </td>
         </tr>
         {% endif %}
 
@@ -493,7 +517,16 @@
           <td style="text-align: right;">ימי מחלה:</td>
           <td>{{ sick_effective_hours }}</td>
           <td class="payment-cell">{{ "%.2f"|format(row_payment_sick) }}</td>
-          <td colspan="6">{{ monthly_totals.sick_days_taken or 0 }} ימים (תשלום מדורג) | גולמי: {{ sick_raw_hours }} -> אפקטיבי: {{ sick_effective_hours }}</td>
+          <td colspan="6">
+            {{ monthly_totals.sick_days_taken or 0 }} ימים (תשלום מדורג) | גולמי: {{ sick_raw_hours }} -> אפקטיבי: {{ sick_effective_hours }}
+            {% if monthly_totals.sick_payment_details %}
+            <br>
+            חישוב:
+            {% for detail in monthly_totals.sick_payment_details %}
+              {{ "%.2f"|format(detail.hours) }} שעות × {{ "%.2f"|format(detail.rate) }} = {{ "%.2f"|format(detail.payment) }}{% if not loop.last %}; {% endif %}
+            {% endfor %}
+            {% endif %}
+          </td>
         </tr>
         {% endif %}
 
@@ -506,6 +539,13 @@
           <td class="payment-cell">{{ "%.2f"|format(row_payment_holiday) }}</td>
           <td colspan="6" style="text-align:right;">
             {{ holiday_payment_chain_summary.calculation }}
+            {% if holiday_payment_chain_summary.payment_details %}
+            <br>
+            חישוב:
+            {% for detail in holiday_payment_chain_summary.payment_details %}
+              {{ detail.count }} ימי חג × {{ "%.2f"|format(detail.hours) }} שעות × {{ "%.2f"|format(detail.rate) }} = {{ "%.2f"|format(detail.payment) }}{% if not loop.last %}; {% endif %}
+            {% endfor %}
+            {% endif %}
             {% if holiday_payment_chain_summary.holiday_dates %}
             | ימי חג: {{ holiday_payment_chain_summary.holiday_dates | join(', ') }}
             {% endif %}

@@ -16,6 +16,7 @@ from app_utils import (
     calculate_wage_rate,
     get_effective_hourly_rate,
     _get_asd_seniority_supplement,
+    _filter_asd_completion_reports_for_one_time_exclusion,
     _filter_previous_month_carryover_reports,
 )
 from core.constants import ASD_SENIORITY_SUPPLEMENT
@@ -289,6 +290,86 @@ class TestEffectiveHourlyRate(unittest.TestCase):
 class TestPaymentComponentsClassification(unittest.TestCase):
     """סיווג רכיבי תשלום ידניים בסיכום חודשי."""
 
+    def test_vacation_payment_details_group_hours_by_rate(self):
+        totals = aggregate_daily_segments_to_monthly(
+            conn=None,
+            daily_segments=[
+                {
+                    "date_obj": date(2026, 4, 1),
+                    "total_minutes_no_standby": 180,
+                    "chains": [
+                        {
+                            "type": "vacation",
+                            "total_minutes": 120,
+                            "payment": 68.80,
+                            "effective_rate": 34.40,
+                        },
+                        {
+                            "type": "vacation",
+                            "total_minutes": 60,
+                            "payment": 40.00,
+                            "effective_rate": 40.00,
+                        },
+                    ],
+                }
+            ],
+            person_id=1,
+            year=2026,
+            month=4,
+            minimum_wage=34.40,
+            preloaded_payment_comps=[],
+            person_start_date=date(2026, 1, 1),
+        )
+
+        self.assertEqual(
+            totals["vacation_payment_details"],
+            [
+                {"hours": 2.0, "rate": 34.4, "payment": 68.8},
+                {"hours": 1.0, "rate": 40.0, "payment": 40.0},
+            ],
+        )
+
+    def test_sick_payment_details_group_paid_hours_by_rate(self):
+        totals = aggregate_daily_segments_to_monthly(
+            conn=None,
+            daily_segments=[
+                {
+                    "date_obj": date(2026, 4, 1),
+                    "total_minutes_no_standby": 180,
+                    "chains": [
+                        {
+                            "type": "sick",
+                            "total_minutes": 120,
+                            "payment": 34.40,
+                            "effective_rate": 34.40,
+                            "sick_rate_percent": 50,
+                        },
+                        {
+                            "type": "sick",
+                            "total_minutes": 60,
+                            "payment": 40.00,
+                            "effective_rate": 40.00,
+                            "sick_rate_percent": 100,
+                        },
+                    ],
+                }
+            ],
+            person_id=1,
+            year=2026,
+            month=4,
+            minimum_wage=34.40,
+            preloaded_payment_comps=[],
+            person_start_date=date(2026, 1, 1),
+        )
+
+        self.assertEqual(
+            totals["sick_payment_details"],
+            [
+                {"hours": 1.0, "rate": 34.4, "payment": 34.4, "raw_hours": 2.0},
+                {"hours": 1.0, "rate": 40.0, "payment": 40.0, "raw_hours": 1.0},
+            ],
+        )
+
     def test_preloaded_for_pension_components_are_split_from_regular_extras(self):
         totals = aggregate_daily_segments_to_monthly(
             conn=None,
@@ -389,6 +470,35 @@ class TestPreviousMonthCarryoverFiltering(unittest.TestCase):
 
         self.assertEqual(len(filtered), 1)
         self.assertEqual(filtered[0]["date"], date(2026, 2, 28))
+
+
+class TestOneTimeAsdCompletionExclusion(unittest.TestCase):
+    """בדיקות להחרגת השלמות ASD החד-פעמית באפריל 2026."""
+
+    def test_filters_asd_completion_reports_only_for_april_2026(self):
+        reports = [
+            {"apartment_id": 29, "housing_array_id": 2, "label": "excluded"},
+            {"apartment_id": 100, "housing_array_id": 2, "label": "asd_regular"},
+            {"apartment_id": 29, "housing_array_id": 1, "label": "other_array_completion"},
+        ]
+
+        filtered = _filter_asd_completion_reports_for_one_time_exclusion(
+            reports, 2026, 4
+        )
+
+        self.assertEqual(
+            [report["label"] for report in filtered],
+            ["asd_regular", "other_array_completion"],
+        )
+
+    def test_does_not_filter_other_months(self):
+        reports = [{"apartment_id": 29, "housing_array_id": 2, "label": "kept"}]
+
+        filtered = _filter_asd_completion_reports_for_one_time_exclusion(
+            reports, 2026, 5
+        )
+
+        self.assertEqual(filtered, reports)
 
 
     # def test_overlap_percentage(self):

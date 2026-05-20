@@ -70,6 +70,10 @@ COMPLETION_APARTMENT_IDS: Set[int] = {29, 37}
 # מערך דיור ASD - כל הדירות במערך זה מקבלות תעריפי ASD
 ASD_HOUSING_ARRAY_ID = 2
 
+# החרגה חד-פעמית: באפריל 2026 דיווחי דירת השלמות במערך ASD לא נכנסים לשכר/גשר.
+ASD_COMPLETION_EXCLUSION_YEAR = 2026
+ASD_COMPLETION_EXCLUSION_MONTH = 4
+
 # מערך דיור צוהר הלב - משמש לכללים נקודתיים בייצוא גשר.
 TZOHAR_HALEV_HOUSING_ARRAY_ID = 1
 
@@ -77,6 +81,21 @@ TZOHAR_HALEV_HOUSING_ARRAY_ID = 1
 def is_asd_housing_array(housing_array_id: int | None) -> bool:
     """בדיקה אם מערך דיור הוא ASD (תפקוד גבוה/נמוך)."""
     return housing_array_id == ASD_HOUSING_ARRAY_ID
+
+
+def should_exclude_asd_completion_report(
+    year: int,
+    month: int,
+    housing_array_id: int | None,
+    apartment_id: int | None,
+) -> bool:
+    """החרגה חד-פעמית של משמרות השלמות ב-ASD מחישובי 04/2026."""
+    return (
+        year == ASD_COMPLETION_EXCLUSION_YEAR
+        and month == ASD_COMPLETION_EXCLUSION_MONTH
+        and is_asd_housing_array(housing_array_id)
+        and apartment_id in COMPLETION_APARTMENT_IDS
+    )
 
 # תוספת ותק ASD - למדריך קבוע עם שנה+ ותק
 ASD_SENIORITY_SUPPLEMENT = 300      # באגורות (3₪)

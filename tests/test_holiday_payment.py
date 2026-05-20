@@ -21,6 +21,7 @@ from core.holiday_payment import (
 )
 from core.constants import (
     ASD_HOUSING_ARRAY_ID,
+    COMPLETION_APARTMENT_IDS,
     HIGH_FUNCTIONING_APT_TYPE,
     HOLIDAY_PAY_MIN_SENIORITY_MONTHS,
     LOW_FUNCTIONING_APT_TYPE,
@@ -383,6 +384,25 @@ class TestCalculateHolidayPayments(unittest.TestCase):
             person_start_dates=_start_dates(1),
         )
         self.assertEqual(_get_amount(result, 1), 0)
+
+    def test_completion_apartment_never_gets_holiday_payment(self):
+        """דירת השלמות לא מקבלת תשלום חג גם אם יש בה דיווח בחודש."""
+        holiday = date(2025, 10, 2)
+        cache = _make_shabbat_cache_with_holiday([holiday])
+        completion_apt_id = next(iter(COMPLETION_APARTMENT_IDS))
+
+        reports = [
+            _make_report(1, completion_apt_id, date(2025, 10, 5), housing_array_id=1),
+        ]
+        person_types = {1: PERMANENT_EMPLOYEE_TYPE}
+
+        result = calculate_holiday_payments(
+            self.conn, 2025, 10, cache, self.minimum_wage,
+            all_reports=reports, person_types=person_types,
+            person_start_dates=_start_dates(1),
+        )
+
+        self.assertEqual(result, {})
 
     def test_no_payment_second_slot_makes_single_guide_half_shift(self):
         """מדריך אחד + משבצת ללא תשלום חג → המדריך מקבל חצי חג."""
@@ -885,6 +905,40 @@ class TestAsdHolidayPayment(unittest.TestCase):
         # person 3: לא עבד בשני הימים → 2 × full
         self.assertAlmostEqual(_get_amount(result, 3), self.full_shift_pay * 2)
         self.assertEqual(result[3]["count"], 2)
+
+    def test_asd_saved_assignment_supports_third_guide_full_shift(self):
+        """ניהול תשלום חג ב-ASD יכול לשייך 3 מדריכים, וכל אחד מקבל חג שלם."""
+        holiday = date(2025, 10, 2)
+        cache = _make_shabbat_cache_with_holiday([holiday])
+        reports = [
+            _make_report(1, 100, date(2025, 10, 5),
+                         housing_array_id=ASD_HOUSING_ARRAY_ID,
+                         apartment_type_id=HIGH_FUNCTIONING_APT_TYPE),
+        ]
+        person_types = {
+            1: PERMANENT_EMPLOYEE_TYPE,
+            2: PERMANENT_EMPLOYEE_TYPE,
+            3: PERMANENT_EMPLOYEE_TYPE,
+        }
+
+        with patch("core.holiday_payment._load_saved_assignments", return_value={
+            100: {
+                "apartment_id": 100,
+                "guide_1_id": 1,
+                "guide_2_id": 2,
+                "guide_3_id": 3,
+                "guide_2_no_holiday_payment": False,
+            }
+        }):
+            result = calculate_holiday_payments(
+                self.conn, 2025, 10, cache, self.minimum_wage,
+                all_reports=reports, person_types=person_types,
+                person_start_dates=_start_dates(1, 2, 3),
+            )
+
+        self.assertAlmostEqual(_get_amount(result, 1), self.full_shift_pay)
+        self.assertAlmostEqual(_get_amount(result, 2), self.full_shift_pay)
+        self.assertAlmostEqual(_get_amount(result, 3), self.full_shift_pay)
 
     @patch("app_utils._fetch_weekday_overrides")
     @patch("app_utils._build_sick_vacation_segments")
