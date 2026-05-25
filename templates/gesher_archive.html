@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="header-line">
+    <h2 class="section-title">ארכיון קבצי גשר</h2>
+    <div class="muted">קבצי גשר שהופקו מהמערכת נשמרים כאן לצפייה ולהורדה</div>
+  </div>
+
+  <form method="get" class="controls" style="margin: 12px 0; flex-wrap: wrap; gap: 8px;">
+    <label for="month">חודש:</label>
+    <select id="month" name="month">
+      <option value="">הכל</option>
+      {% for m in range(1, 13) %}
+        <option value="{{ m }}" {% if selected_month == m %}selected{% endif %}>{{ "%02d"|format(m) }}</option>
+      {% endfor %}
+    </select>
+
+    <label for="year">שנה:</label>
+    <select id="year" name="year">
+      <option value="">הכל</option>
+      {% for y in years %}
+        <option value="{{ y }}" {% if selected_year == y %}selected{% endif %}>{{ y }}</option>
+      {% endfor %}
+    </select>
+
+    <label for="company">מפעל:</label>
+    <select id="company" name="company">
+      <option value="">הכל</option>
+      {% for employer in employers %}
+        <option value="{{ employer.code }}" {% if selected_company == employer.code %}selected{% endif %}>
+          {{ employer.code }} - {{ employer.name }}
+        </option>
+      {% endfor %}
+    </select>
+
+    <button type="submit">סנן</button>
+    <a href="/admin/gesher-files" class="btn-secondary" style="text-decoration: none;">נקה</a>
+  </form>
+
+  <div class="muted" style="margin: 8px 0 12px;">{{ files|length }} קבצים</div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>תאריך הפקה</th>
+        <th>חודש</th>
+        <th>מפעל</th>
+        <th>מערך</th>
+        <th>סוג</th>
+        <th>שם קובץ</th>
+        <th>שורות</th>
+        <th>סטטוס</th>
+        <th style="min-width: 260px;">הערה</th>
+        <th>פעולות</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for file in files %}
+      <tr>
+        <td style="white-space: nowrap;">{{ file.created_at.strftime("%d/%m/%Y %H:%M") if file.created_at else "" }}</td>
+        <td>{{ "%02d"|format(file.month) }}/{{ file.year }}</td>
+        <td>{{ file.company_code or "-" }}</td>
+        <td>{{ file.housing_array_name or "כל המערכים" }}</td>
+        <td>
+          {% if file.export_scope == "company" %}מפעל
+          {% elif file.export_scope == "person" %}מדריך
+          {% elif file.export_scope == "multiple" %}נבחרים
+          {% else %}{{ file.export_scope }}
+          {% endif %}
+        </td>
+        <td style="direction: ltr; text-align: left;">{{ file.filename }}</td>
+        <td>{{ file.line_count }}</td>
+        <td>
+          {% if file.is_cancelled %}
+            <span style="display: inline-block; padding: 3px 8px; border-radius: 999px; background: #fee2e2; color: #991b1b; font-weight: 600;">מבוטל</span>
+            {% if file.cancelled_at %}
+              <div class="muted" style="font-size: 12px; margin-top: 4px;">
+                {{ file.cancelled_at.strftime("%d/%m/%Y %H:%M") }}
+                {% if file.cancelled_by_name %}ע"י {{ file.cancelled_by_name }}{% endif %}
+              </div>
+            {% endif %}
+          {% elif file.is_final %}
+            <span style="display: inline-block; padding: 3px 8px; border-radius: 999px; background: #dcfce7; color: #166534; font-weight: 600;">סופי</span>
+            {% if file.finalized_at %}
+              <div class="muted" style="font-size: 12px; margin-top: 4px;">
+                {{ file.finalized_at.strftime("%d/%m/%Y %H:%M") }}
+                {% if file.finalized_by_name %}ע"י {{ file.finalized_by_name }}{% endif %}
+              </div>
+            {% endif %}
+          {% else %}
+            <span style="display: inline-block; padding: 3px 8px; border-radius: 999px; background: #fef3c7; color: #92400e; font-weight: 600;">טיוטה</span>
+          {% endif %}
+        </td>
+        <td>
+          <form method="post" action="/admin/gesher-files/{{ file.id }}/note" style="display: grid; gap: 6px;">
+            <textarea name="notes" rows="2" style="width: 100%; min-width: 230px;">{{ file.notes or "" }}</textarea>
+            <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+              <button type="submit" style="padding: 4px 10px;">שמור הערה</button>
+              {% if file.notes_updated_at %}
+                <span class="muted" style="font-size: 12px;">
+                  עודכן {{ file.notes_updated_at.strftime("%d/%m/%Y %H:%M") }}
+                  {% if file.notes_updated_by_name %}ע"י {{ file.notes_updated_by_name }}{% endif %}
+                </span>
+              {% endif %}
+            </div>
+          </form>
+        </td>
+        <td style="white-space: nowrap;">
+          <a href="/admin/gesher-files/{{ file.id }}">פתח</a>
+          <span class="muted">|</span>
+          <a href="/admin/gesher-files/{{ file.id }}/download">הורד</a>
+          <div style="display: grid; gap: 4px; margin-top: 8px;">
+            {% if not file.is_final or file.is_cancelled %}
+            <form method="post" action="/admin/gesher-files/{{ file.id }}/status">
+              <input type="hidden" name="status" value="final">
+              <button type="submit" style="padding: 3px 8px;">סמן סופי</button>
+            </form>
+            {% endif %}
+            {% if file.is_final or file.is_cancelled %}
+            <form method="post" action="/admin/gesher-files/{{ file.id }}/status">
+              <input type="hidden" name="status" value="draft">
+              <button type="submit" style="padding: 3px 8px;">החזר לטיוטה</button>
+            </form>
+            {% endif %}
+            {% if not file.is_cancelled %}
+            <form method="post" action="/admin/gesher-files/{{ file.id }}/status">
+              <input type="hidden" name="status" value="cancelled">
+              <button type="submit" style="padding: 3px 8px; color: #991b1b;">בטל</button>
+            </form>
+            {% endif %}
+          </div>
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="10" class="muted">עדיין אין קבצי גשר בארכיון</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

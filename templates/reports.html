@@ -37,6 +37,19 @@
     {% endif %}
   </form>
 
+  <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; margin-bottom: 15px; padding: 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;">
+    <div style="display: flex; flex-direction: column; gap: 4px;">
+      <label for="shiftEmailSubjectInput" style="font-size: 13px; font-weight: 600;">נושא דוח משמרות</label>
+      <input type="text" id="shiftEmailSubjectInput" value="דוח משמרות - {name} - {month}/{year}"
+        style="padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 14px;">
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 4px;">
+      <label for="shiftEmailExtraMessageInput" style="font-size: 13px; font-weight: 600;">כיתוב נוסף לדוח משמרות</label>
+      <textarea id="shiftEmailExtraMessageInput" rows="2"
+        style="padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 14px; resize: vertical;"></textarea>
+    </div>
+  </div>
+
   <div style="display: flex; gap: 8px; margin-bottom: 15px; flex-wrap: wrap; align-items: center; padding: 12px; background: #f8f9fa; border-radius: 8px;">
     <button id="sendAllEmailBtn" onclick="openBulkDialog()" style="padding: 8px 16px; background: #6f42c1; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500;">
       📧 שלח דוחות לכל המדריכים
@@ -74,7 +87,7 @@
         <td>
           <a href="/guide/{{ g.id }}/shifts/preview?month={{ selected_month }}&year={{ selected_year }}" target="_blank" class="preview-btn" style="padding: 4px 10px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; text-decoration: none; display: inline-block;">צפה</a>
           <button class="send-btn" onclick="sendGuideEmail({{ g.id }}, this)" style="padding: 4px 12px; background: #1f6feb; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">
-            📧 שלח
+            📧 שלח משמרות
           </button>
           <span class="status-indicator" style="margin-right: 8px; font-size: 12px;"></span>
         </td>
@@ -293,8 +306,12 @@
   async function sendGuideEmail(personId, btn) {
     const row = btn.closest('tr');
     const emailInput = row.querySelector('.guide-email-input');
+    const subjectInput = document.getElementById('shiftEmailSubjectInput');
+    const extraMessageInput = document.getElementById('shiftEmailExtraMessageInput');
     const statusSpan = row.querySelector('.status-indicator');
     const email = emailInput.value.trim();
+    const subject = subjectInput ? subjectInput.value.trim() : '';
+    const extraMessage = extraMessageInput ? extraMessageInput.value.trim() : '';
 
     if (!email) { alert('יש להזין כתובת מייל'); emailInput.focus(); return; }
     if (!selectedYear || !selectedMonth) { alert('יש לבחור חודש ושנה'); return; }
@@ -305,8 +322,12 @@
 
     try {
       const response = await fetch(
-        `/api/send-guide-email/${personId}?year=${selectedYear}&month=${selectedMonth}`,
-        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) }
+        `/api/send-shifts-email/${personId}?year=${selectedYear}&month=${selectedMonth}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, subject, extra_message: extraMessage })
+        }
       );
       const result = await response.json();
       if (result.success) {

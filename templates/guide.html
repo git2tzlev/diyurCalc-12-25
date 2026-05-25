@@ -1317,10 +1317,21 @@
               הורד PDF
             </a>
             <div style="display: flex; flex-direction: column; gap: 4px;">
-              <label for="monthlyReportEmailInput" style="font-size: 13px; font-weight: 600;">שליחה במייל</label>
+              <label for="monthlyReportEmailInput" style="font-size: 13px; font-weight: 600;">מייל</label>
               <input type="email" id="monthlyReportEmailInput" value="{{ person['email'] or '' }}"
                 placeholder="example@mail.com"
                 style="width: 260px; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 14px; direction: ltr; text-align: left;">
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 4px;">
+              <label for="monthlyReportSubjectInput" style="font-size: 13px; font-weight: 600;">נושא</label>
+              <input type="text" id="monthlyReportSubjectInput"
+                value="דוח משמרות - {name} - {month}/{year}"
+                style="width: 300px; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 14px;">
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 4px;">
+              <label for="monthlyReportExtraMessageInput" style="font-size: 13px; font-weight: 600;">כיתוב נוסף</label>
+              <textarea id="monthlyReportExtraMessageInput" rows="2"
+                style="width: 320px; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 14px; resize: vertical;"></textarea>
             </div>
             <button type="button" id="monthlyReportEmailSendBtn" onclick="sendMonthlyReportEmail()"
               style="padding: 10px 16px; background: #059669; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600;">
@@ -1352,13 +1363,12 @@
                 <th>סיום</th>
                 <th>עבודה</th>
                 <th>כוננות</th>
-                <th>הערה</th>
               </tr>
             </thead>
             <tbody>
               {% if not monthly_report.shifts_data and not monthly_report.payments_data %}
               <tr>
-                <td colspan="9" style="padding: 18px; color: #64748b; font-size: 13px;">
+                <td colspan="8" style="padding: 18px; color: #64748b; font-size: 13px;">
                   אין משמרות או תשלומים נוספים לחודש זה.
                 </td>
               </tr>
@@ -2193,9 +2203,13 @@
 
   async function sendMonthlyReportEmail() {
     const emailInput = document.getElementById('monthlyReportEmailInput');
+    const subjectInput = document.getElementById('monthlyReportSubjectInput');
+    const extraMessageInput = document.getElementById('monthlyReportExtraMessageInput');
     const statusDiv = document.getElementById('monthlyReportEmailStatus');
     const sendBtn = document.getElementById('monthlyReportEmailSendBtn');
     const email = emailInput.value.trim();
+    const subject = subjectInput ? subjectInput.value.trim() : '';
+    const extraMessage = extraMessageInput ? extraMessageInput.value.trim() : '';
 
     if (!email) {
       statusDiv.style.display = 'block';
@@ -2219,7 +2233,7 @@
       const response = await fetch(`/api/send-shifts-email/${personId}?year=${year}&month=${month}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email })
+        body: JSON.stringify({ email: email, subject: subject, extra_message: extraMessage })
       });
       const data = await response.json();
 

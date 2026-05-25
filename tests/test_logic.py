@@ -16,10 +16,17 @@ from app_utils import (
     calculate_wage_rate,
     get_effective_hourly_rate,
     _get_asd_seniority_supplement,
+    _apply_tagbur_dynamic_boundaries,
     _filter_asd_completion_reports_for_one_time_exclusion,
     _filter_previous_month_carryover_reports,
 )
-from core.constants import ASD_SENIORITY_SUPPLEMENT
+from core.constants import (
+    ASD_SENIORITY_SUPPLEMENT,
+    TAGBUR_FRIDAY_SHIFT_ID,
+    TAGBUR_SHABBAT_SHIFT_ID,
+)
+from core.shift_hours import calculate_tagbur_segments
+from routes.guide import _allocation_windows_for_report, _apply_calculated_hours_to_shift_rows
 from core.sick_days import get_sick_payment_rate
 from core.time_utils import (
     minutes_to_time_str,
@@ -177,6 +184,238 @@ class TestTimeUtilities(unittest.TestCase):
         self.assertEqual(start, 1380)
         self.assertEqual(end, 1500)  # 60 + 1440 for overnight
         self.assertEqual(end - start, 120)  # Duration is 2 hours
+
+
+class TestTagburDynamicBoundaries(unittest.TestCase):
+    """בדיקות גבולות דינמיים למשמרות תגבור."""
+
+    def setUp(self):
+        self.friday = date(2026, 4, 10)
+        self.saturday = date(2026, 4, 11)
+        self.shabbat_cache = {
+            "2026-04-11": {
+                "enter": "17:00",
+                "exit": "19:00",
+            }
+        }
+
+    def test_friday_tagbur_before_2026_04_keeps_dynamic_start(self):
+        segs = [{"start_time": "15:00", "end_time": "22:00", "segment_type": "work"}]
+
+        result = _apply_tagbur_dynamic_boundaries(
+            TAGBUR_FRIDAY_SHIFT_ID,
+            segs,
+            self.friday,
+            report_start_min=16 * 60 + 15,
+            report_end_min=22 * 60,
+            year=2026,
+            month=3,
+            shabbat_cache=self.shabbat_cache,
+        )
+
+        self.assertEqual(result[0]["start_time"], "16:00")
+
+    def test_friday_tagbur_from_2026_04_clips_late_report_start(self):
+        segs = [{"start_time": "15:00", "end_time": "22:00", "segment_type": "work"}]
+
+        result = _apply_tagbur_dynamic_boundaries(
+            TAGBUR_FRIDAY_SHIFT_ID,
+            segs,
+            self.friday,
+            report_start_min=16 * 60 + 15,
+            report_end_min=22 * 60,
+            year=2026,
+            month=4,
+            shabbat_cache=self.shabbat_cache,
+        )
+
+        self.assertEqual(result[0]["start_time"], "16:15")
+
+    def test_friday_tagbur_from_2026_04_keeps_early_report_start(self):
+        segs = [{"start_time": "15:00", "end_time": "22:00", "segment_type": "work"}]
+
+        result = _apply_tagbur_dynamic_boundaries(
+            TAGBUR_FRIDAY_SHIFT_ID,
+            segs,
+            self.friday,
+            report_start_min=15 * 60 + 30,
+            report_end_min=22 * 60,
+            year=2026,
+            month=4,
+            shabbat_cache=self.shabbat_cache,
+        )
+
+        self.assertEqual(result[0]["start_time"], "16:00")
+
+    def test_shabbat_tagbur_before_2026_04_keeps_dynamic_end(self):
+        segs = [
+            {"start_time": "10:00", "end_time": "16:00", "segment_type": "work"},
+            {"start_time": "17:00", "end_time": "19:00", "segment_type": "work"},
+        ]
+
+        result = _apply_tagbur_dynamic_boundaries(
+            TAGBUR_SHABBAT_SHIFT_ID,
+            segs,
+            self.saturday,
+            report_start_min=0,
+            report_end_min=20 * 60,
+            year=2026,
+            month=3,
+            shabbat_cache=self.shabbat_cache,
+        )
+
+        self.assertEqual(result[-1]["end_time"], "21:00")
+
+    def test_shabbat_tagbur_from_2026_04_clips_early_report_end(self):
+        segs = [
+            {"start_time": "10:00", "end_time": "16:00", "segment_type": "work"},
+            {"start_time": "17:00", "end_time": "19:00", "segment_type": "work"},
+        ]
+
+        result = _apply_tagbur_dynamic_boundaries(
+            TAGBUR_SHABBAT_SHIFT_ID,
+            segs,
+            self.saturday,
+            report_start_min=0,
+            report_end_min=20 * 60,
+            year=2026,
+            month=4,
+            shabbat_cache=self.shabbat_cache,
+        )
+
+        self.assertEqual(result[-1]["end_time"], "20:00")
+
+    def test_shift_report_friday_tagbur_uses_calculation_start_before_2026_04(self):
+        segments_by_shift = {
+            TAGBUR_FRIDAY_SHIFT_ID: [
+                {"start_time": "15:00", "end_time": "22:00", "segment_type": "work"}
+            ]
+        }
+
+        result = calculate_tagbur_segments(
+            "16:15",
+            "22:00",
+            TAGBUR_FRIDAY_SHIFT_ID,
+            segments_by_shift,
+            report_date=self.friday,
+            year=2026,
+            month=3,
+            shabbat_cache=self.shabbat_cache,
+        )
+
+        self.assertEqual(result[0]["display_start"], "16:00")
+        self.assertEqual(result[0]["display_end"], "22:00")
+        self.assertEqual(result[0]["work_hours"], 6.0)
+
+    def test_shift_report_friday_tagbur_clips_start_from_2026_04(self):
+        segments_by_shift = {
+            TAGBUR_FRIDAY_SHIFT_ID: [
+                {"start_time": "15:00", "end_time": "22:00", "segment_type": "work"}
+            ]
+        }
+
+        result = calculate_tagbur_segments(
+            "16:15",
+            "22:00",
+            TAGBUR_FRIDAY_SHIFT_ID,
+            segments_by_shift,
+            report_date=self.friday,
+            year=2026,
+            month=4,
+            shabbat_cache=self.shabbat_cache,
+        )
+
+        self.assertEqual(result[0]["display_start"], "16:15")
+        self.assertEqual(result[0]["display_end"], "22:00")
+        self.assertEqual(result[0]["work_hours"], 5.75)
+
+    def test_shift_report_shabbat_tagbur_uses_calculation_end_before_2026_04(self):
+        segments_by_shift = {
+            TAGBUR_SHABBAT_SHIFT_ID: [
+                {"start_time": "10:00", "end_time": "16:00", "segment_type": "work"},
+                {"start_time": "17:00", "end_time": "19:00", "segment_type": "work"},
+            ]
+        }
+
+        result = calculate_tagbur_segments(
+            "00:00",
+            "20:00",
+            TAGBUR_SHABBAT_SHIFT_ID,
+            segments_by_shift,
+            report_date=self.saturday,
+            year=2026,
+            month=3,
+            shabbat_cache=self.shabbat_cache,
+        )
+
+        self.assertEqual(result[-1]["display_end"], "21:00")
+        self.assertEqual(sum(row["work_hours"] for row in result), 10.0)
+
+    def test_shift_report_shabbat_tagbur_clips_end_from_2026_04(self):
+        segments_by_shift = {
+            TAGBUR_SHABBAT_SHIFT_ID: [
+                {"start_time": "10:00", "end_time": "16:00", "segment_type": "work"},
+                {"start_time": "17:00", "end_time": "19:00", "segment_type": "work"},
+            ]
+        }
+
+        result = calculate_tagbur_segments(
+            "00:00",
+            "20:00",
+            TAGBUR_SHABBAT_SHIFT_ID,
+            segments_by_shift,
+            report_date=self.saturday,
+            year=2026,
+            month=4,
+            shabbat_cache=self.shabbat_cache,
+        )
+
+        self.assertEqual(result[-1]["display_end"], "20:00")
+        self.assertEqual(sum(row["work_hours"] for row in result), 9.0)
+
+
+class TestShiftReportDisplayAllocation(unittest.TestCase):
+    """בדיקות הקצאת שעות חישוב לשורות דוח משמרות בלי שינוי מבנה הדוח."""
+
+    def test_report_row_can_receive_hours_from_next_workday(self):
+        rows = [{
+            "date": "06/04/26",
+            "day": "שני",
+            "apartment": "דירה",
+            "shift_type": "חול",
+            "start_time": "16:00",
+            "end_time": "08:30",
+            "work_hours": 0.0,
+            "standby_hours": 0.0,
+            "_allocation_windows": _allocation_windows_for_report(date(2026, 4, 6), "16:00", "08:30"),
+        }]
+        daily_segments = [
+            {
+                "date_obj": date(2026, 4, 6),
+                "total_minutes_no_standby": 450,
+                "chains": [
+                    {"type": "work", "start_time": "16:00", "end_time": "22:00", "total_minutes": 360},
+                    {"type": "standby", "start_time": "22:00", "end_time": "06:30", "total_minutes": 510},
+                    {"type": "work", "start_time": "06:30", "end_time": "08:00", "total_minutes": 90},
+                ],
+            },
+            {
+                "date_obj": date(2026, 4, 7),
+                "total_minutes_no_standby": 30,
+                "chains": [
+                    {"type": "work", "start_time": "08:00", "end_time": "08:30", "total_minutes": 30},
+                ],
+            },
+        ]
+
+        total_work_hours, standby_count = _apply_calculated_hours_to_shift_rows(rows, daily_segments)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["work_hours"], 8.0)
+        self.assertEqual(rows[0]["standby_hours"], 8.5)
+        self.assertEqual(total_work_hours, 8.0)
+        self.assertEqual(standby_count, 1)
+        self.assertNotIn("_allocation_windows", rows[0])
 
     # def test_format_hours_minutes(self):
     #     """Test formatting minutes to HH:MM."""

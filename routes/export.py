@@ -10,13 +10,20 @@ from typing import Optional, List
 from urllib.parse import quote
 
 from fastapi import Request, HTTPException
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from core.config import config
 from core.database import get_conn, get_housing_array_filter, get_default_period, get_multi_housing_guides
 from core.logic import calculate_monthly_summary
 from core.auth import enforce_housing_filter_guide_access
 from services import gesher_exporter
+from services.gesher_archive import (
+    get_gesher_export_file,
+    list_gesher_export_files,
+    save_gesher_export_file,
+    set_gesher_export_status,
+    update_gesher_export_note,
+)
 from utils.utils import format_currency, human_date
 
 
@@ -84,7 +91,53 @@ templates.env.filters["human_date"] = human_date
 templates.env.globals["app_version"] = config.VERSION
 
 
+def _current_user_id(request: Request) -> Optional[int]:
+    user = getattr(request.state, "current_user", None)
+    return user.get("person_id") if user else None
+
+
+def _archive_gesher_file(
+    conn,
+    request: Request,
+    *,
+    year: int,
+    month: int,
+    company_code: Optional[str],
+    export_scope: str,
+    filename: str,
+    content: str,
+    encoding: str,
+    person_ids: Optional[List[int]] = None,
+    housing_array_id: Optional[int] = None,
+) -> None:
+    """Best-effort archive of a generated Gesher file."""
+    try:
+        save_gesher_export_file(
+            conn,
+            year=year,
+            month=month,
+            company_code=company_code,
+            housing_array_id=(
+                housing_array_id
+                if housing_array_id is not None
+                else get_housing_array_filter()
+            ),
+            export_scope=export_scope,
+            filename=filename,
+            content=content,
+            encoding=encoding,
+            created_by=_current_user_id(request),
+            person_ids=person_ids,
+        )
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Could not archive Gesher export file %s", filename, exc_info=True
+        )
+
+
 def export_gesher(
+    request: Request,
     year: int,
     month: int,
     company: Optional[str] = None,
@@ -102,11 +155,24 @@ def export_gesher(
     with get_conn() as conn:
         content = gesher_exporter.generate_gesher_file(conn, year, month, filter_name, company)
 
+        # שם קובץ עם קוד מפעל
+        filename = f"gesher_{company}_{year}_{month:02d}.mrv"
+        if content:
+            _archive_gesher_file(
+                conn,
+                request,
+                year=year,
+                month=month,
+                company_code=company,
+                export_scope="company",
+                filename=filename,
+                content=content,
+                encoding=encoding,
+            )
+
     # קידוד הקובץ
     encoded_content = content.encode(encoding, errors='replace')
 
-    # שם קובץ עם קוד מפעל
-    filename = f"gesher_{company}_{year}_{month:02d}.mrv"
     return Response(
         content=encoded_content,
         media_type="application/octet-stream",
@@ -118,6 +184,7 @@ def export_gesher(
 
 
 def export_gesher_person(
+    request: Request,
     person_id: int,
     year: int,
     month: int,
@@ -141,7 +208,10 @@ def export_gesher_person(
             )
 
         # שליפת שם העובד לשם הקובץ
-        person = conn.execute("SELECT name, meirav_code FROM people WHERE id = %s", (person_id,)).fetchone()
+        person = conn.execute(
+            "SELECT name, meirav_code, housing_array_id FROM people WHERE id = %s",
+            (person_id,),
+        ).fetchone()
         if not person:
             raise HTTPException(status_code=404, detail="עובד לא נמצא")
 
@@ -155,6 +225,21 @@ def export_gesher_person(
     # שם קובץ - שימוש בקוד מירב במקום שם (כי זה תמיד ASCII)
     meirav_code = person['meirav_code'] or person_id
     filename = f"gesher_{meirav_code}_{year}_{month:02d}.mrv"
+
+    with get_conn() as conn:
+        _archive_gesher_file(
+            conn,
+            request,
+            year=year,
+            month=month,
+            company_code=company,
+            export_scope="person",
+            filename=filename,
+            content=content,
+            encoding=encoding,
+            person_ids=[person_id],
+            housing_array_id=person.get("housing_array_id"),
+        )
 
     # לשם התצוגה בדפדפן - שם מקודד ב-URL encoding
     display_name = quote(person['name'], safe='')
@@ -170,6 +255,7 @@ def export_gesher_person(
 
 
 def export_gesher_multiple(
+    request: Request,
     person_ids: List[int],
     year: int,
     month: int,
@@ -201,6 +287,20 @@ def export_gesher_multiple(
 
     # שם קובץ עם קוד מפעל
     filename = f"gesher_{company}_{year}_{month:02d}.mrv"
+
+    with get_conn() as conn:
+        _archive_gesher_file(
+            conn,
+            request,
+            year=year,
+            month=month,
+            company_code=company,
+            export_scope="multiple",
+            filename=filename,
+            content=content,
+            encoding=encoding,
+            person_ids=exportable_person_ids,
+        )
 
     return Response(
         content=encoded_content,
@@ -393,3 +493,104 @@ def export_excel(year: Optional[int] = None, month: Optional[int] = None) -> Res
             "Content-Disposition": f"attachment; filename={filename}"
         }
     )
+
+
+def gesher_archive_page(
+    request: Request,
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+    company: Optional[str] = None,
+) -> HTMLResponse:
+    """Management page for archived Gesher export files."""
+    housing_filter = get_housing_array_filter()
+    with get_conn() as conn:
+        files = list_gesher_export_files(
+            conn,
+            year=year,
+            month=month,
+            company_code=company,
+            housing_array_id=housing_filter,
+        )
+        employers = conn.execute(
+            "SELECT code, name FROM employers WHERE is_active::integer = 1 ORDER BY code"
+        ).fetchall()
+
+    return templates.TemplateResponse("gesher_archive.html", {
+        "request": request,
+        "files": files,
+        "selected_year": year,
+        "selected_month": month,
+        "selected_company": company or "",
+        "years": list(range(2023, 2028)),
+        "employers": employers,
+    })
+
+
+def download_gesher_archive_file(request: Request, file_id: int) -> Response:
+    """Download an archived Gesher file."""
+    housing_filter = get_housing_array_filter()
+    with get_conn() as conn:
+        file_row = get_gesher_export_file(conn, file_id, housing_array_id=housing_filter)
+    if not file_row:
+        raise HTTPException(status_code=404, detail="קובץ גשר לא נמצא")
+
+    encoding = file_row.get("encoding") or "ascii"
+    filename = file_row.get("filename") or f"gesher_{file_id}.mrv"
+    return Response(
+        content=(file_row.get("content") or "").encode(encoding, errors="replace"),
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f"attachment; filename={quote(filename)}",
+            "Content-Type": f"text/plain; charset={encoding}",
+        },
+    )
+
+
+def view_gesher_archive_file(request: Request, file_id: int) -> HTMLResponse:
+    """View an archived Gesher file content."""
+    housing_filter = get_housing_array_filter()
+    with get_conn() as conn:
+        file_row = get_gesher_export_file(conn, file_id, housing_array_id=housing_filter)
+    if not file_row:
+        raise HTTPException(status_code=404, detail="קובץ גשר לא נמצא")
+
+    return templates.TemplateResponse("gesher_archive_view.html", {
+        "request": request,
+        "file": file_row,
+    })
+
+
+async def update_gesher_archive_note(request: Request, file_id: int) -> RedirectResponse:
+    """Update an archived Gesher file note."""
+    form = await request.form()
+    notes = (form.get("notes") or "").strip()
+    housing_filter = get_housing_array_filter()
+    with get_conn() as conn:
+        updated = update_gesher_export_note(
+            conn,
+            file_id,
+            notes,
+            updated_by=_current_user_id(request),
+            housing_array_id=housing_filter,
+        )
+    if not updated:
+        raise HTTPException(status_code=404, detail="קובץ גשר לא נמצא")
+    return RedirectResponse(url="/admin/gesher-files", status_code=303)
+
+
+async def update_gesher_archive_status(request: Request, file_id: int) -> RedirectResponse:
+    """Update archived Gesher file status."""
+    form = await request.form()
+    status = (form.get("status") or "").strip()
+    housing_filter = get_housing_array_filter()
+    with get_conn() as conn:
+        updated = set_gesher_export_status(
+            conn,
+            file_id,
+            status,
+            updated_by=_current_user_id(request),
+            housing_array_id=housing_filter,
+        )
+    if not updated:
+        raise HTTPException(status_code=404, detail="קובץ גשר לא נמצא")
+    return RedirectResponse(url="/admin/gesher-files", status_code=303)

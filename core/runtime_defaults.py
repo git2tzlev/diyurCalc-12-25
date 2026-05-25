@@ -15,6 +15,7 @@ from core.logic import (
 )
 from core.time_reports_audit import ensure_time_reports_audit_columns
 from services.email_service import ensure_email_logs_table
+from services.gesher_archive import ensure_gesher_export_files_table
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ def ensure_runtime_defaults_for_current_database() -> None:
         ensure_holiday_payment_assignments_table(conn.conn)
         ensure_special_days_holiday_payment_column(conn.conn)
         ensure_email_logs_table(conn.conn)
+        ensure_gesher_export_files_table(conn.conn)
         ensure_time_reports_audit_columns(conn.conn)
 
 

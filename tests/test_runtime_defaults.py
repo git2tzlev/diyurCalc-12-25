@@ -32,11 +32,15 @@ class TestRuntimeDefaults(unittest.TestCase):
             patch.object(runtime_defaults, "ensure_holiday_payment_assignments_table") as assignments,
             patch.object(runtime_defaults, "ensure_special_days_holiday_payment_column") as special_day,
             patch.object(runtime_defaults, "ensure_email_logs_table") as email_logs,
+            patch.object(runtime_defaults, "ensure_gesher_export_files_table") as gesher_files,
             patch.object(runtime_defaults, "ensure_time_reports_audit_columns") as time_reports_audit,
         ):
             runtime_defaults.ensure_runtime_defaults_for_current_database()
 
-        for mock in (sick, support, holiday, assignments, special_day, email_logs, time_reports_audit):
+        for mock in (
+            sick, support, holiday, assignments, special_day,
+            email_logs, gesher_files, time_reports_audit,
+        ):
             mock.assert_called_once_with("raw-connection")
 
     def test_demo_defaults_temporarily_switch_demo_mode(self):

@@ -47,6 +47,11 @@ from routes.export import (
     export_gesher_multiple,
     export_gesher_preview,
     export_excel,
+    gesher_archive_page,
+    download_gesher_archive_file,
+    view_gesher_archive_file,
+    update_gesher_archive_note,
+    update_gesher_archive_status,
 )
 from routes.email import (
     email_settings_page,
@@ -550,26 +555,26 @@ def general_summary_route(request: Request, year: int = None, month: int = None)
 
 
 @app.get("/export/gesher")
-def export_gesher_route(year: int, month: int, company: str = None, filter_name: str = None, encoding: str = "ascii"):
+def export_gesher_route(request: Request, year: int, month: int, company: str = None, filter_name: str = None, encoding: str = "ascii"):
     """Export Gesher file by company."""
-    return export_gesher(year, month, company, filter_name, encoding)
+    return export_gesher(request, year, month, company, filter_name, encoding)
 
 
 @app.get("/export/gesher/person/{person_id}")
-def export_gesher_person_route(person_id: int, year: int, month: int, encoding: str = "ascii"):
+def export_gesher_person_route(request: Request, person_id: int, year: int, month: int, encoding: str = "ascii"):
     """Export Gesher file for individual person."""
-    return export_gesher_person(person_id, year, month, encoding)
+    return export_gesher_person(request, person_id, year, month, encoding)
 
 
 @app.post("/export/gesher/multiple")
-def export_gesher_multiple_route(year: int, month: int, person_ids: str, encoding: str = "ascii"):
+def export_gesher_multiple_route(request: Request, year: int, month: int, person_ids: str, encoding: str = "ascii"):
     """Export Gesher files for multiple people as ZIP."""
     # person_ids מגיע כמחרוזת מופרדת בפסיקים
     ids = [int(x.strip()) for x in person_ids.split(",") if x.strip().isdigit()]
     if not ids:
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="לא נבחרו עובדים")
-    return export_gesher_multiple(ids, year, month, encoding)
+    return export_gesher_multiple(request, ids, year, month, encoding)
 
 
 @app.get("/export/gesher/preview")
@@ -582,6 +587,36 @@ def export_gesher_preview_route(request: Request, year: int = None, month: int =
 def export_excel_route(year: int = None, month: int = None):
     """Export monthly summary to Excel."""
     return export_excel(year, month)
+
+
+@app.get("/admin/gesher-files", response_class=HTMLResponse)
+def gesher_archive_route(request: Request, year: int = None, month: int = None, company: str = None):
+    """Gesher export files archive."""
+    return gesher_archive_page(request, year, month, company)
+
+
+@app.get("/admin/gesher-files/{file_id}", response_class=HTMLResponse)
+def view_gesher_archive_route(request: Request, file_id: int):
+    """View archived Gesher file."""
+    return view_gesher_archive_file(request, file_id)
+
+
+@app.get("/admin/gesher-files/{file_id}/download")
+def download_gesher_archive_route(request: Request, file_id: int):
+    """Download archived Gesher file."""
+    return download_gesher_archive_file(request, file_id)
+
+
+@app.post("/admin/gesher-files/{file_id}/note")
+async def update_gesher_archive_note_route(request: Request, file_id: int):
+    """Update archived Gesher file note."""
+    return await update_gesher_archive_note(request, file_id)
+
+
+@app.post("/admin/gesher-files/{file_id}/status")
+async def update_gesher_archive_status_route(request: Request, file_id: int):
+    """Update archived Gesher file status."""
+    return await update_gesher_archive_status(request, file_id)
 
 
 # Statistics routes

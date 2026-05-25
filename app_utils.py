@@ -3,7 +3,7 @@ from typing import Dict, List, Tuple, Any, Optional
 from datetime import datetime, timedelta, date
 from decimal import Decimal, ROUND_HALF_UP
 from core.time_utils import (
-    MINUTES_PER_HOUR, MINUTES_PER_DAY, LOCAL_TZ,
+    MINUTES_PER_DAY, LOCAL_TZ,
     REGULAR_HOURS_LIMIT, OVERTIME_125_LIMIT,
     FRIDAY, SATURDAY,
     span_minutes, to_local_date, _get_shabbat_boundaries,
@@ -70,9 +70,6 @@ from core.constants import (
     NIGHT_SHIFT_STANDBY_END,
     NIGHT_SHIFT_MORNING_END,
     NOON_MINUTES,
-    # Tagbur time constants
-    TAGBUR_FRIDAY_PRE_ENTRY_MINUTES,
-    TAGBUR_SHABBAT_POST_EXIT_MINUTES,
     # Helper functions
     is_tagbur_shift,
     is_night_shift,
@@ -93,6 +90,30 @@ from core.constants import (
 logger = logging.getLogger(__name__)
 
 _NIGHT_FIRST_WORK_SEGMENT_MARKER = "__night_first_work__"
+
+
+def _apply_tagbur_dynamic_boundaries(
+    shift_type_id: int,
+    seg_list: list[dict],
+    report_date: date,
+    report_start_min: int,
+    report_end_min: int,
+    year: int,
+    month: int,
+    shabbat_cache: Dict[str, Dict[str, str]],
+) -> list[dict]:
+    from core.shift_hours import apply_tagbur_dynamic_boundaries
+
+    return apply_tagbur_dynamic_boundaries(
+        shift_type_id,
+        seg_list,
+        report_date,
+        report_start_min,
+        report_end_min,
+        year,
+        month,
+        shabbat_cache,
+    )
 
 
 def _filter_asd_completion_reports_for_one_time_exclusion(
@@ -2230,53 +2251,20 @@ def get_daily_segments_data(
         # משמרת תגבור - סגמנטים דינמיים לפי זמני שבת
         # תגבור שישי (108): סגמנט ראשון מתחיל שעה לפני כניסת שבת
         # תגבור שבת (109): סגמנט אחרון מסתיים שעתיים אחרי צאת שבת
+        # מ-04/2026 לא מאריכים מעבר לשעת הדיווח בצד הדינמי.
         # שאר הסגמנטים נשארים במקום - הפיצול לשבת מתבצע אוטומטית
         if is_tagbur_shift(shift_type_id) and seg_list:
-            # יצירת עותק של seg_list כדי לא לשנות את המקור
-            seg_list = [dict(seg) for seg in seg_list]
-
-            # קבלת זמני שבת לתאריך הדיווח
-            shabbat_enter, shabbat_exit = _get_shabbat_boundaries(r_date, shabbat_cache)
-
-            if shift_type_id == TAGBUR_FRIDAY_SHIFT_ID and shabbat_enter > 0:
-                # תגבור שישי - סגמנט ראשון מתחיל שעה לפני כניסת שבת
-                # שאר הסגמנטים נשארים במקום
-                new_first_start = shabbat_enter - TAGBUR_FRIDAY_PRE_ENTRY_MINUTES
-
-                if seg_list:
-                    first_seg = seg_list[0]
-                    first_seg_start, first_seg_end = span_minutes(first_seg["start_time"], first_seg["end_time"])
-
-                    # הסגמנט הראשון מתחיל שעה לפני כניסת שבת
-                    # ונגמר בזמן המקורי או בתחילת הסגמנט הבא (מה שקודם)
-                    if len(seg_list) > 1:
-                        second_seg_start, _ = span_minutes(seg_list[1]["start_time"], seg_list[1]["end_time"])
-                        new_first_end = second_seg_start
-                    else:
-                        new_first_end = first_seg_end
-
-                    seg_list[0] = {
-                        **first_seg,
-                        "start_time": f"{(new_first_start // 60) % 24:02d}:{new_first_start % 60:02d}",
-                        "end_time": f"{(new_first_end // 60) % 24:02d}:{new_first_end % 60:02d}",
-                    }
-
-            elif shift_type_id == TAGBUR_SHABBAT_SHIFT_ID and shabbat_exit > 0:
-                # תגבור שבת - סגמנט אחרון מסתיים שעתיים אחרי צאת שבת
-                # שאר הסגמנטים נשארים במקום
-                # צאת שבת היא ביום שבת, צריך להמיר לדקות מ-00:00 של שבת
-                new_last_end = (shabbat_exit % MINUTES_PER_DAY) + TAGBUR_SHABBAT_POST_EXIT_MINUTES
-
-                if seg_list:
-                    last_seg = seg_list[-1]
-                    last_seg_start, last_seg_end = span_minutes(last_seg["start_time"], last_seg["end_time"])
-
-                    # הסגמנט האחרון מתחיל בזמן המקורי ונגמר שעתיים אחרי צאת שבת
-                    seg_list[-1] = {
-                        **last_seg,
-                        "start_time": last_seg["start_time"],  # נשאר במקום
-                        "end_time": f"{(new_last_end // 60) % 24:02d}:{new_last_end % 60:02d}",
-                    }
+            effective_report_end = rep_end_orig if rep_end_orig > rep_start_orig else rep_end_orig + MINUTES_PER_DAY
+            seg_list = _apply_tagbur_dynamic_boundaries(
+                shift_type_id,
+                seg_list,
+                r_date,
+                rep_start_orig,
+                effective_report_end,
+                year,
+                month,
+                shabbat_cache,
+            )
 
         # אם זו משמרת תגבור - מוסיפים את הסגמנטים ישירות בלי לחשב חפיפה עם שעות הדיווח
         if is_fixed_segments_shift and seg_list:

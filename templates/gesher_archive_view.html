@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="header-line">
+    <h2 class="section-title">קובץ גשר</h2>
+    <div class="muted">{{ file.filename }}</div>
+  </div>
+
+  <div class="controls" style="margin: 12px 0; flex-wrap: wrap; gap: 10px;">
+    <a href="/admin/gesher-files" class="btn-secondary" style="text-decoration: none;">חזרה לארכיון</a>
+    <a href="/admin/gesher-files/{{ file.id }}/download" style="text-decoration: none;">הורד קובץ</a>
+    <span class="muted">
+      {{ "%02d"|format(file.month) }}/{{ file.year }}
+      | מפעל {{ file.company_code or "-" }}
+      | {{ file.housing_array_name or "כל המערכים" }}
+      | {{ file.line_count }} שורות
+    </span>
+    {% if file.is_cancelled %}
+      <span style="padding: 3px 8px; border-radius: 999px; background: #fee2e2; color: #991b1b; font-weight: 600;">מבוטל</span>
+    {% elif file.is_final %}
+      <span style="padding: 3px 8px; border-radius: 999px; background: #dcfce7; color: #166534; font-weight: 600;">סופי</span>
+    {% else %}
+      <span style="padding: 3px 8px; border-radius: 999px; background: #fef3c7; color: #92400e; font-weight: 600;">טיוטה</span>
+    {% endif %}
+  </div>
+
+  {% if file.notes %}
+    <div style="margin: 10px 0; padding: 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;">
+      {{ file.notes }}
+    </div>
+  {% endif %}
+
+  <pre style="direction: ltr; text-align: left; white-space: pre; overflow-x: auto; background: #0f172a; color: #e2e8f0; padding: 14px; border-radius: 6px; font-size: 13px;">{{ file.content }}</pre>
+</div>
+{% endblock %}

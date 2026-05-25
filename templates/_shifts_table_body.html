@@ -14,12 +14,11 @@
   <td>-</td>
   <td>{{ "%.2f"|format(payment.amount) }} &#8362;</td>
   <td>-</td>
-  <td></td>
 </tr>
 {% endfor %}
 
 <tr class="completion-separator">
-  <td colspan="9">השלמות מחודשים קודמים</td>
+  <td colspan="8">השלמות מחודשים קודמים</td>
 </tr>
 {% endif %}
 <tr class="{% if shift.is_completion_apartment %}completion-row{% endif %}{% if shift.tagbor_group %} tagbor-group{% endif %}{% if shift.tagbor_first %} tagbor-first{% endif %}{% if shift.tagbor_last %} tagbor-last{% endif %}">
@@ -31,7 +30,6 @@
   <td>{{ shift.end_time }}</td>
   <td>{{ "%.2f"|format(shift.work_hours) }}</td>
   <td>{{ "%.2f"|format(shift.standby_hours) }}</td>
-  <td>{% if shift.note is defined and shift.note %}<span style="font-weight:600;">{{ shift.note }}</span>{% endif %}</td>
 </tr>
 {% endfor %}
 
@@ -46,7 +44,6 @@
   <td>-</td>
   <td>{{ "%.2f"|format(payment.amount) }} &#8362;</td>
   <td>-</td>
-  <td></td>
 </tr>
 {% endfor %}
 {% endif %}
@@ -61,7 +58,6 @@
   <td>-</td>
   <td>{{ "%.2f"|format(payment.amount) }} &#8362;</td>
   <td>-</td>
-  <td></td>
 </tr>
 {% endfor %}
 {% endmacro %}

@@ -5,9 +5,10 @@ Contains routes for viewing guide details and summaries.
 from __future__ import annotations
 
 import calendar
+import html
 import time
 import logging
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Optional, Dict, List
 
 from fastapi import Request, HTTPException
@@ -59,6 +60,37 @@ templates.env.globals["app_version"] = config.VERSION
 
 COMPLETION_APARTMENT_NAME = "השלמות"
 GENERIC_ERROR = "שגיאת מערכת. נסי שוב מאוחר יותר"
+
+
+def _format_shifts_email_text(template: str, person_name: str, year: int, month: int) -> str:
+    """Apply the small set of placeholders allowed in shift report emails."""
+    return (
+        (template or "")
+        .replace("{name}", person_name)
+        .replace("{month}", f"{month:02d}")
+        .replace("{year}", str(year))
+    )
+
+
+def _sanitize_email_subject(subject: str) -> str:
+    return " ".join((subject or "").split())
+
+
+def _build_shifts_email_body(person_name: str, year: int, month: int, extra_message: str = "") -> str:
+    formatted_extra = _format_shifts_email_text(extra_message, person_name, year, month).strip()
+    safe_extra = html.escape(formatted_extra).replace("\n", "<br>")
+    extra_block = f"\n{safe_extra}\n" if safe_extra else ""
+    return f"""שלום {html.escape(person_name)},
+
+מצורף דוח המשמרות שלך לחודש {month:02d}/{year}.
+{extra_block}
+בברכה,
+מדור שכר
+צהר הלב
+
+<span style="color: #888; font-size: 11px;">─────────────────────────────</span>
+<span style="color: red; font-size: 11px;">הודעה זו נשלחה באופן אוטומטי. אין להשיב למייל זה.</span>
+"""
 
 
 def _is_completion_apartment(apartment_id: Optional[int] = None, apartment_name: Optional[str] = None) -> bool:
@@ -291,7 +323,10 @@ def _sort_shift_rows_for_display(shifts_data: list[dict]) -> list[dict]:
     ordered_rows: list[dict] = []
     for idx, shift in enumerate(shifts_data):
         row = dict(shift)
-        row["is_completion_apartment"] = _is_completion_apartment(apartment_id=row.get("apartment_id"))
+        row["is_completion_apartment"] = _is_completion_apartment(
+            apartment_id=row.get("apartment_id"),
+            apartment_name=row.get("apartment"),
+        )
         row["_display_order"] = idx
         if row["is_completion_apartment"]:
             row["date"] = ""
@@ -309,6 +344,212 @@ def _sort_shift_rows_for_display(shifts_data: list[dict]) -> list[dict]:
         row.pop("_display_order", None)
 
     return ordered_rows
+
+
+def _parse_hhmm_to_minutes(value: str) -> int:
+    hours, minutes = map(int, str(value)[:5].split(":"))
+    return hours * 60 + minutes
+
+
+def _workday_axis_interval(start_time: str, end_time: str) -> tuple[int, int]:
+    """המרת שעות לציר יום עבודה 08:00-08:00 לצורך התאמת שורות הדוח לחישוב."""
+    start = _parse_hhmm_to_minutes(start_time)
+    end = _parse_hhmm_to_minutes(end_time)
+
+    if start < 480:
+        start += 1440
+    if end <= start:
+        end += 1440
+    elif end <= 480:
+        end += 1440
+
+    return start, end
+
+
+def _allocation_windows_for_report(report_date: date, start_time: str, end_time: str) -> list[tuple[date, int, int]]:
+    start, end = _workday_axis_interval(start_time, end_time)
+    if end <= 1920:
+        return [(report_date, start, end)]
+    return [
+        (report_date, start, 1920),
+        (report_date + timedelta(days=1), 480, end - 1440),
+    ]
+
+
+def _chain_paid_minutes(chain: dict) -> tuple[float, float]:
+    """מחזיר (דקות עבודה לתצוגה, דקות כוננות לתצוגה) לפי מקור החישוב."""
+    total_minutes = chain.get("total_minutes", 0) or 0
+    chain_type = chain.get("type", "work")
+
+    if chain_type == "standby":
+        return 0.0, float(total_minutes)
+    if chain_type == "sick":
+        sick_rate = (chain.get("sick_rate_percent", 100) or 0) / 100
+        return float(total_minutes) * sick_rate, 0.0
+    return float(total_minutes), 0.0
+
+
+def _apply_calculated_hours_to_shift_rows(shifts_data: list[dict], daily_segments: list[dict]) -> tuple[float, int]:
+    """
+    התאמת עמודות עבודה/כוננות בשורות דוח המשמרות למנוע החישוב בלי לשנות את מבנה הדוח.
+
+    השורות נשארות שורות דיווח. ההקצאה נעשית לפי חפיפת זמן מול רצפי החישוב של אותו יום עבודה.
+    """
+    rows_by_day: dict[date, list[dict]] = {}
+    for row in shifts_data:
+        row["_calc_by_day"] = {}
+        windows = row.get("_allocation_windows", [])
+        if windows:
+            for day, _start, _end in windows:
+                rows_by_day.setdefault(day, []).append(row)
+        elif row.get("_allocation_no_time_day") is not None:
+            rows_by_day.setdefault(row["_allocation_no_time_day"], []).append(row)
+
+    for day in daily_segments:
+        day_date = day.get("date_obj")
+        if day_date is None:
+            continue
+        day_rows = rows_by_day.get(day_date, [])
+        if not day_rows:
+            continue
+
+        def add_row_minutes(row: dict, work_minutes: float = 0.0, standby_minutes: float = 0.0) -> None:
+            day_alloc = row["_calc_by_day"].setdefault(day_date, {"work": 0.0, "standby": 0.0})
+            day_alloc["work"] += work_minutes
+            day_alloc["standby"] += standby_minutes
+
+        for chain in day.get("chains", []):
+            chain_start = chain.get("start_time")
+            chain_end = chain.get("end_time")
+            if not chain_start or not chain_end:
+                continue
+
+            calc_work_minutes, calc_standby_minutes = _chain_paid_minutes(chain)
+            calc_minutes = calc_work_minutes + calc_standby_minutes
+            if calc_minutes <= 0:
+                continue
+
+            chain_axis_start, chain_axis_end = _workday_axis_interval(chain_start, chain_end)
+            chain_duration = max(0, chain_axis_end - chain_axis_start)
+            if chain_duration <= 0:
+                continue
+
+            overlaps: list[tuple[dict, int]] = []
+            for row in day_rows:
+                overlap = 0
+                for window_day, row_start, row_end in row.get("_allocation_windows", []):
+                    if window_day != day_date:
+                        continue
+                    overlap += max(0, min(chain_axis_end, row_end) - max(chain_axis_start, row_start))
+                if overlap > 0:
+                    overlaps.append((row, overlap))
+
+            if not overlaps:
+                chain_type = chain.get("type", "work")
+                candidate_rows = [
+                    row for row in day_rows
+                    if not row.get("_allocation_windows")
+                    and (
+                        chain_type == "work"
+                        or (chain_type == "sick" and "מחלה" in (row.get("shift_type") or ""))
+                        or (chain_type == "vacation" and "חופשה" in (row.get("shift_type") or ""))
+                    )
+                ]
+                if not candidate_rows:
+                    continue
+
+                target_row = candidate_rows[0]
+                add_row_minutes(target_row, calc_work_minutes, calc_standby_minutes)
+                continue
+
+            total_overlap = sum(overlap for _row, overlap in overlaps)
+            if total_overlap <= 0:
+                continue
+
+            work_ratio = calc_work_minutes / chain_duration
+            standby_ratio = calc_standby_minutes / chain_duration
+            for row, overlap in overlaps:
+                weight = overlap / total_overlap
+                add_row_minutes(
+                    row,
+                    calc_work_minutes * weight if total_overlap != chain_duration else overlap * work_ratio,
+                    calc_standby_minutes * weight if total_overlap != chain_duration else overlap * standby_ratio,
+                )
+
+        target_work_minutes = day.get("total_minutes_no_standby", 0) or 0
+        for chain in day.get("chains", []):
+            if chain.get("type") == "sick":
+                sick_rate = (chain.get("sick_rate_percent", 100) or 0) / 100
+                target_work_minutes -= (chain.get("total_minutes", 0) or 0) * (1 - sick_rate)
+
+        current_work_minutes = sum(
+            (row.get("_calc_by_day", {}).get(day_date, {}) or {}).get("work", 0.0)
+            for row in day_rows
+        )
+        work_diff = round(target_work_minutes - current_work_minutes, 6)
+        if abs(work_diff) > 0.000001:
+            adjustable_rows = [
+                row for row in day_rows
+                if ((row.get("_calc_by_day", {}).get(day_date, {}) or {}).get("work", 0.0) > 0)
+            ]
+            if work_diff > 0:
+                target_row = adjustable_rows[-1] if adjustable_rows else day_rows[-1]
+                add_row_minutes(target_row, work_diff, 0.0)
+            else:
+                remaining_reduction = abs(work_diff)
+                for row in reversed(adjustable_rows):
+                    current = (row.get("_calc_by_day", {}).get(day_date, {}) or {}).get("work", 0.0)
+                    reduction = min(current, remaining_reduction)
+                    row["_calc_by_day"][day_date]["work"] = current - reduction
+                    remaining_reduction -= reduction
+                    if remaining_reduction <= 0.000001:
+                        break
+
+    total_work_hours = 0.0
+    standby_count = 0
+    for row in shifts_data:
+        row_work_minutes = sum(day_alloc.get("work", 0.0) for day_alloc in row.get("_calc_by_day", {}).values())
+        row_standby_minutes = sum(day_alloc.get("standby", 0.0) for day_alloc in row.get("_calc_by_day", {}).values())
+        work_hours = round(row_work_minutes / 60, 2)
+        standby_hours = round(row_standby_minutes / 60, 2)
+        row["work_hours"] = work_hours
+        row["standby_hours"] = standby_hours
+        total_work_hours += work_hours
+        if standby_hours > 0:
+            standby_count += 1
+
+    target_work_hours = 0.0
+    target_standby_hours = 0.0
+    for day in daily_segments:
+        target_work_minutes = day.get("total_minutes_no_standby", 0) or 0
+        for chain in day.get("chains", []):
+            if chain.get("type") == "sick":
+                sick_rate = (chain.get("sick_rate_percent", 100) or 0) / 100
+                target_work_minutes -= (chain.get("total_minutes", 0) or 0) * (1 - sick_rate)
+            elif chain.get("type") == "standby":
+                target_standby_hours += (chain.get("total_minutes", 0) or 0) / 60
+        target_work_hours += target_work_minutes / 60
+
+    def close_rounding_gap(field: str, target_hours: float) -> None:
+        current_hours = round(sum(row.get(field, 0.0) or 0.0 for row in shifts_data), 2)
+        diff = round(round(target_hours, 2) - current_hours, 2)
+        if diff == 0:
+            return
+        for row in reversed(shifts_data):
+            if row.get(field, 0.0) > 0:
+                row[field] = round((row.get(field, 0.0) or 0.0) + diff, 2)
+                return
+
+    close_rounding_gap("work_hours", target_work_hours)
+    close_rounding_gap("standby_hours", target_standby_hours)
+    total_work_hours = round(sum(row.get("work_hours", 0.0) or 0.0 for row in shifts_data), 2)
+    standby_count = sum(1 for row in shifts_data if (row.get("standby_hours", 0.0) or 0.0) > 0)
+
+    for key in ("_calc_by_day", "_allocation_windows", "_allocation_no_time_day"):
+        for row in shifts_data:
+            row.pop(key, None)
+
+    return round(total_work_hours, 2), standby_count
 
 
 def _summarize_display_chains(chains: list[dict]) -> dict:
@@ -848,6 +1089,8 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
         for seg in segments:
             segments_by_shift.setdefault(seg["shift_type_id"], []).append(seg)
 
+    shabbat_cache = get_shabbat_times_cache(conn.conn if hasattr(conn, "conn") else conn)
+
     # בניית שורות הדוח
     shifts_data = []
     total_work_hours = 0.0
@@ -908,11 +1151,18 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
             from core.shift_hours import calculate_tagbur_segments
             tagbur_segs = calculate_tagbur_segments(
                 r["start_time"], r["end_time"],
-                r["shift_type_id"], segments_by_shift
+                r["shift_type_id"], segments_by_shift,
+                report_date=r_date,
+                year=year,
+                month=month,
+                shabbat_cache=shabbat_cache,
             )
             for seg_data in tagbur_segs:
                 work_hours = seg_data["work_hours"]
                 standby_hours = seg_data["standby_hours"]
+                alloc_start, alloc_end = _workday_axis_interval(
+                    seg_data["display_start"], seg_data["display_end"]
+                )
                 total_work_hours += work_hours
                 if standby_hours > 0:
                     standby_count += 1
@@ -931,6 +1181,7 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
                     "tagbor_group": True,
                     "tagbor_first": seg_data["is_first"],
                     "tagbor_last": seg_data["is_last"],
+                    "_allocation_windows": [(r_date, alloc_start, alloc_end)],
                 })
         else:
             # חישוב שעות - פונקציה מרכזית (לילה/רגיל/ASD)
@@ -947,6 +1198,9 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
             total_work_hours += work_hours
             if standby_hours > 0:
                 standby_count += 1
+            allocation_windows = []
+            if r["start_time"] and r["end_time"]:
+                allocation_windows = _allocation_windows_for_report(r_date, r["start_time"], r["end_time"])
 
             shifts_data.append({
                 "date": r_date.strftime("%d/%m/%y"),
@@ -959,6 +1213,8 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
                 "work_hours": round(work_hours, 2),
                 "standby_hours": round(standby_hours, 2),
                 "note": _compose_shift_note(r),
+                "_allocation_windows": allocation_windows,
+                "_allocation_no_time_day": r_date if not allocation_windows else None,
             })
 
     # שליפת תשלומים נוספים (לפי דירות במערך כשמוגדר פילטר)
@@ -1039,6 +1295,9 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
         conn, monthly_totals, person_id,
         year, month, shabbat_cache,
         MINIMUM_WAGE, housing_filter,
+    )
+    total_work_hours, standby_count = _apply_calculated_hours_to_shift_rows(
+        shifts_data, daily_segments
     )
 
     # הוספת שורת תשלום חג לטבלת התשלומים
@@ -1339,11 +1598,15 @@ async def shifts_report_email(
         housing_filter = get_housing_array_filter()
         _validate_guide_access(person_id, housing_filter)
 
-        # קבלת מייל מותאם אישית מה-body
+        # קבלת פרטי מייל מותאמים מה-body
         custom_email = None
+        custom_subject = ""
+        extra_message = ""
         try:
             body = await request.json()
             custom_email = body.get('email')
+            custom_subject = body.get('subject') or ""
+            extra_message = body.get('extra_message') or ""
         except Exception:
             pass
 
@@ -1355,7 +1618,14 @@ async def shifts_report_email(
 
     array_filter_for_thread = housing_filter
 
-    def send_email_task(pid: int, y: int, m: int, email: Optional[str]) -> dict:
+    def send_email_task(
+        pid: int,
+        y: int,
+        m: int,
+        email: Optional[str],
+        subject_template: str,
+        message_template: str,
+    ) -> dict:
         """
         רץ בתהליכון: חובה לקבע את פילטר מערך הדיור ב-ContextVar
         (אחרת מנהל מסגרת לא מקבל את אותו חישוב כמו בבקשת HTTP).
@@ -1384,19 +1654,15 @@ async def shifts_report_email(
                 if not pdf_bytes:
                     return {"success": False, "error": "שגיאה ביצירת PDF"}
 
-                # הכנת תוכן המייל
-                subject = f"דוח משמרות - {person['name']} - {m:02d}/{y}"
-                body_text = f"""שלום {person['name']},
-
-מצורף דוח המשמרות שלך לחודש {m:02d}/{y}.
-
-בברכה,
-מדור שכר
-צהר הלב
-
-<span style="color: #888; font-size: 11px;">─────────────────────────────</span>
-<span style="color: red; font-size: 11px;">הודעה זו נשלחה באופן אוטומטי. אין להשיב למייל זה.</span>
-"""
+                default_subject = f"דוח משמרות - {person['name']} - {m:02d}/{y}"
+                formatted_subject = _format_shifts_email_text(
+                    subject_template,
+                    person['name'],
+                    y,
+                    m,
+                )
+                subject = _sanitize_email_subject(formatted_subject) or default_subject
+                body_text = _build_shifts_email_body(person['name'], y, m, message_template)
                 pdf_filename = f"דוח_משמרות_{person['name']}_{m:02d}_{y}.pdf"
 
                 result = send_email_with_pdf(
@@ -1420,7 +1686,15 @@ async def shifts_report_email(
             set_housing_array_filter(None)
 
     try:
-        result = await asyncio.to_thread(send_email_task, person_id, year, month, custom_email)
+        result = await asyncio.to_thread(
+            send_email_task,
+            person_id,
+            year,
+            month,
+            custom_email,
+            custom_subject,
+            extra_message,
+        )
         return JSONResponse(result)
     except Exception as e:
         logger.error(f"Error in shifts_report_email execution: {e}", exc_info=True)
