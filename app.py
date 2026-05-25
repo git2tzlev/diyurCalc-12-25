@@ -53,6 +53,10 @@ from routes.export import (
     update_gesher_archive_note,
     update_gesher_archive_status,
 )
+from routes.completions import (
+    completions_page,
+    completion_difference_report,
+)
 from routes.email import (
     email_settings_page,
     update_email_settings,
@@ -617,6 +621,23 @@ async def update_gesher_archive_note_route(request: Request, file_id: int):
 async def update_gesher_archive_status_route(request: Request, file_id: int):
     """Update archived Gesher file status."""
     return await update_gesher_archive_status(request, file_id)
+
+
+@app.get("/completions", response_class=HTMLResponse)
+def completions_route(request: Request, year: int = None, month: int = None):
+    """Retroactive completions page."""
+    return completions_page(request, year, month)
+
+
+@app.get("/completions/difference/{file_id}")
+def completion_difference_route(
+    request: Request,
+    file_id: int,
+    payment_year: int,
+    payment_month: int,
+):
+    """Generate completion differences against an archived final Gesher file."""
+    return completion_difference_report(request, file_id, payment_year, payment_month)
 
 
 # Statistics routes

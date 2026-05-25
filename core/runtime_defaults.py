@@ -14,6 +14,7 @@ from core.logic import (
     ensure_sick_payment_code,
 )
 from core.time_reports_audit import ensure_time_reports_audit_columns
+from core.payment_period import ensure_payment_period_columns
 from services.email_service import ensure_email_logs_table
 from services.gesher_archive import ensure_gesher_export_files_table
 
@@ -31,6 +32,7 @@ def ensure_runtime_defaults_for_current_database() -> None:
         ensure_email_logs_table(conn.conn)
         ensure_gesher_export_files_table(conn.conn)
         ensure_time_reports_audit_columns(conn.conn)
+        ensure_payment_period_columns(conn.conn)
 
 
 def ensure_runtime_defaults(include_demo: bool = True) -> None:

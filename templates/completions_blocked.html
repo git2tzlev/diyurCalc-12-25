@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="header-line">
+    <div>
+      <h2 class="section-title">דוח הפרשים נעצר</h2>
+      <div class="muted">
+        נמצאו שינויים בחודש העבודה שלא נובעים מההשלמות שסומנו לתשלום ב-{{ "%02d"|format(payment_month) }}/{{ payment_year }}.
+      </div>
+    </div>
+    <a href="/completions?year={{ payment_year }}&month={{ payment_month }}" class="nav-link">חזרה להשלמות</a>
+  </div>
+
+  <section style="margin-top: 14px;">
+    <div><strong>קובץ בסיס:</strong> {{ file.filename }}</div>
+    <div class="muted">
+      חודש עבודה {{ "%02d"|format(file.month) }}/{{ file.year }}
+      {% if file.company_code %} · מפעל {{ file.company_code }}{% endif %}
+      {% if file.housing_array_name %} · {{ file.housing_array_name }}{% endif %}
+    </div>
+  </section>
+
+  <section style="margin-top: 18px;">
+    <h3 style="margin: 0 0 8px;">שינויים שצריך לבדוק</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>מדריך</th>
+          <th>קוד מירב</th>
+          <th>סמל</th>
+          <th>רכיב</th>
+          <th>תעריף</th>
+          <th>כמות ששולמה</th>
+          <th>כמות בלי השלמות</th>
+          <th>סכום ששולם</th>
+          <th>סכום בלי השלמות</th>
+          <th>הפרש</th>
+          <th>סוג שינוי</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for diff in diffs %}
+        <tr>
+          <td>{{ diff.person_name or "" }}</td>
+          <td>{{ diff.employee_code }}</td>
+          <td>{{ diff.symbol }}</td>
+          <td>{{ diff.display_name }}</td>
+          <td>{{ "%.2f"|format(diff.rate or 0) }}</td>
+          <td>{{ "%.2f"|format(diff.paid_quantity or 0) }}</td>
+          <td>{{ "%.2f"|format(diff.current_quantity or 0) }}</td>
+          <td>{{ "%.2f"|format(diff.paid_amount or 0) }}</td>
+          <td>{{ "%.2f"|format(diff.current_amount or 0) }}</td>
+          <td>{{ "%.2f"|format(diff.amount_diff or 0) }}</td>
+          <td>{{ diff.diff_type }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section style="margin-top: 18px;">
+    <h3 style="margin: 0 0 8px;">השלמות שסומנו לחודש זה</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>סוג</th>
+          <th>מדריך</th>
+          <th>תאריך עבודה</th>
+          <th>דירה</th>
+          <th>משמרת/רכיב</th>
+          <th>הערה</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in completions %}
+        <tr>
+          <td>{{ "משמרת" if item.item_type == "time_report" else "רכיב תשלום" }}</td>
+          <td>{{ item.person_name }}</td>
+          <td>{{ item.date.strftime("%d/%m/%Y") if item.date else "" }}</td>
+          <td>{{ item.apartment_name }}</td>
+          <td>{{ item.shift_name if item.item_type == "time_report" else item.component_name }}</td>
+          <td>{{ item.payment_note or "" }}</td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="6" class="muted">לא נמצאו השלמות לחודש העבודה של קובץ הבסיס</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+{% endblock %}

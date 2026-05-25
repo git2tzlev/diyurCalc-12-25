@@ -353,7 +353,14 @@ def calculate_person_monthly_totals(
 # and app_utils.aggregate_daily_segments_to_monthly (source of truth).
 
 
-def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], Dict]:
+def calculate_monthly_summary(
+    conn,
+    year: int,
+    month: int,
+    *,
+    excluded_time_report_ids: Optional[set[int]] = None,
+    excluded_payment_component_ids: Optional[set[int]] = None,
+) -> Tuple[List[Dict], Dict]:
     """
     Calculate monthly summary for all active people.
 
@@ -378,6 +385,8 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
 
     payment_codes = get_payment_codes(conn)
     housing_filter = get_housing_array_filter()
+    excluded_time_report_ids = excluded_time_report_ids or set()
+    excluded_payment_component_ids = excluded_payment_component_ids or set()
 
     # שליפת אנשים - עם סינון לפי מערך דיור אם מוגדר
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
@@ -473,6 +482,11 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
             ORDER BY tr.person_id, tr.date, tr.start_time
         """, (person_ids, start_date, end_date))
     all_reports = cursor.fetchall()
+    if excluded_time_report_ids:
+        all_reports = [
+            report for report in all_reports
+            if report.get("id") not in excluded_time_report_ids
+        ]
     all_reports = [
         report for report in all_reports
         if not should_exclude_asd_completion_report(
@@ -552,7 +566,7 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
     month_end = end_dt
     if housing_filter is not None:
         cursor.execute("""
-            SELECT pc.person_id, (pc.quantity * pc.rate) as total_amount, pc.component_type_id,
+            SELECT pc.id, pc.person_id, (pc.quantity * pc.rate) as total_amount, pc.component_type_id,
                    COALESCE(pct.for_pension, FALSE) as for_pension
             FROM payment_components pc
             JOIN apartments ap ON ap.id = pc.apartment_id
@@ -562,13 +576,18 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
         """, (person_ids, month_start, month_end, housing_filter))
     else:
         cursor.execute("""
-            SELECT pc.person_id, (pc.quantity * pc.rate) as total_amount, pc.component_type_id,
+            SELECT pc.id, pc.person_id, (pc.quantity * pc.rate) as total_amount, pc.component_type_id,
                    COALESCE(pct.for_pension, FALSE) as for_pension
             FROM payment_components pc
             LEFT JOIN payment_component_types pct ON pc.component_type_id = pct.id
             WHERE pc.person_id = ANY(%s) AND pc.date >= %s AND pc.date < %s
         """, (person_ids, month_start, month_end))
     all_payment_comps = cursor.fetchall()
+    if excluded_payment_component_ids:
+        all_payment_comps = [
+            pc for pc in all_payment_comps
+            if pc.get("id") not in excluded_payment_component_ids
+        ]
 
     # Group payment_components by person_id
     payment_comps_by_person = {}
