@@ -398,9 +398,9 @@ def _get_apartment_work_minutes(
     if (year, month) < (2026, 2):
         return {apt_id: global_minutes for apt_id in apartment_ids}
 
-    from app_utils import _fetch_weekday_overrides, _build_sick_vacation_segments
+    from app_utils import _fetch_weekday_overrides_for_month, _build_sick_vacation_segments
 
-    apt_overrides, ha_defaults = _fetch_weekday_overrides(conn)
+    apt_overrides, ha_defaults = _fetch_weekday_overrides_for_month(conn, year, month)
 
     result: Dict[int, int] = {}
     for apt_id in apartment_ids:
@@ -463,7 +463,7 @@ def _calculate_special_holiday_day_pay(
         return 0.0
 
     from app_utils import (
-        _fetch_weekday_overrides,
+        _fetch_weekday_overrides_for_month,
         _build_weekday_shift_overrides,
         _calculate_special_absence_segment_payment,
     )
@@ -471,7 +471,7 @@ def _calculate_special_holiday_day_pay(
 
     segments = None
     if shift_type_id == WEEKDAY_SHIFT_TYPE_ID and apartment_id is not None and (year, month) >= (2026, 2):
-        apt_overrides, ha_defaults = _fetch_weekday_overrides(conn)
+        apt_overrides, ha_defaults = _fetch_weekday_overrides_for_month(conn, year, month)
         base_segments = _get_shift_segments(conn, WEEKDAY_SHIFT_TYPE_ID)
         full_overrides = _build_weekday_shift_overrides(
             {apartment_id},

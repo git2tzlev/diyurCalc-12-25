@@ -611,7 +611,7 @@ class TestHolidayPayPerApartmentOverride(unittest.TestCase):
 
         self.minimum_wage = 33.49
 
-    @patch("app_utils._fetch_weekday_overrides")
+    @patch("app_utils._fetch_weekday_overrides_for_month")
     @patch("app_utils._build_sick_vacation_segments")
     def test_apartment_with_override_gets_more_hours(
         self, mock_build_segs, mock_fetch_overrides
@@ -665,7 +665,7 @@ class TestHolidayPayPerApartmentOverride(unittest.TestCase):
         expected = round(480 / 60, 2) * round(self.minimum_wage, 2)
         self.assertAlmostEqual(_get_amount(result, 1), expected)
 
-    @patch("app_utils._fetch_weekday_overrides")
+    @patch("app_utils._fetch_weekday_overrides_for_month")
     @patch("app_utils._build_sick_vacation_segments")
     def test_two_apartments_different_overrides(
         self, mock_build_segs, mock_fetch_overrides
@@ -940,7 +940,7 @@ class TestAsdHolidayPayment(unittest.TestCase):
         self.assertAlmostEqual(_get_amount(result, 2), self.full_shift_pay)
         self.assertAlmostEqual(_get_amount(result, 3), self.full_shift_pay)
 
-    @patch("app_utils._fetch_weekday_overrides")
+    @patch("app_utils._fetch_weekday_overrides_for_month")
     @patch("app_utils._build_sick_vacation_segments")
     def test_asd_with_override_full_shift_custom_hours(
         self, mock_build_segs, mock_fetch_overrides

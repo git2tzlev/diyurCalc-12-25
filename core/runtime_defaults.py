@@ -8,6 +8,7 @@ from core.holiday_payment import (
     ensure_holiday_payment_assignments_table,
     ensure_special_days_holiday_payment_column,
 )
+from core.history import ensure_shift_time_overrides_history_table
 from core.logic import (
     ensure_holiday_payment_code,
     ensure_professional_support_code,
@@ -33,6 +34,7 @@ def ensure_runtime_defaults_for_current_database() -> None:
         ensure_gesher_export_files_table(conn.conn)
         ensure_time_reports_audit_columns(conn.conn)
         ensure_payment_period_columns(conn.conn)
+        ensure_shift_time_overrides_history_table(conn.conn)
 
 
 def ensure_runtime_defaults(include_demo: bool = True) -> None:

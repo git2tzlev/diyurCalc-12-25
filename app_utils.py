@@ -640,6 +640,97 @@ def _fetch_weekday_overrides(conn) -> tuple[dict[int, tuple[str, str]], dict[int
         cursor.close()
 
 
+def _override_identity(row: dict) -> tuple:
+    original_id = row.get("original_override_id")
+    if original_id is not None:
+        return ("id", original_id)
+    if row.get("apartment_id") is not None:
+        return ("apartment", row.get("shift_type_id"), row.get("apartment_id"))
+    if row.get("housing_array_id") is not None:
+        return ("housing", row.get("shift_type_id"), row.get("housing_array_id"))
+    return ("global", row.get("shift_type_id"))
+
+
+def _time_to_hhmm(value: Any) -> str:
+    if hasattr(value, "strftime"):
+        return value.strftime("%H:%M")
+    return str(value)[:5]
+
+
+def _rows_to_weekday_override_maps(
+    rows: list[dict],
+) -> tuple[dict[int, tuple[str, str]], dict[int, tuple[str, str]]]:
+    apt_overrides: dict[int, tuple[str, str]] = {}
+    ha_defaults: dict[int, tuple[str, str]] = {}
+    for row in rows:
+        if not row.get("is_active"):
+            continue
+        if row.get("start_time") is None or row.get("end_time") is None:
+            continue
+        value = (_time_to_hhmm(row["start_time"]), _time_to_hhmm(row["end_time"]))
+        if row.get("apartment_id") is not None:
+            apt_overrides[row["apartment_id"]] = value
+        elif row.get("housing_array_id") is not None:
+            ha_defaults[row["housing_array_id"]] = value
+    return apt_overrides, ha_defaults
+
+
+def _fetch_weekday_overrides_for_month(
+    conn,
+    year: int,
+    month: int,
+) -> tuple[dict[int, tuple[str, str]], dict[int, tuple[str, str]]]:
+    """
+    טעינת override שעות חול לפי חודש החישוב.
+
+    טבלת ההיסטוריה שומרת את הערך הישן עם חודש שממנו הוא הפסיק להיות תקף.
+    לכן בחישוב חודש מוקדם יותר משתמשים ברשומת ההיסטוריה העתידית הקרובה ביותר.
+    """
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    try:
+        cursor.execute("""
+            SELECT id AS original_override_id, shift_type_id, apartment_id,
+                   housing_array_id, start_time, end_time, is_active
+            FROM shift_time_overrides
+            WHERE shift_type_id = %s
+            ORDER BY id
+        """, (WEEKDAY_SHIFT_TYPE_ID,))
+        rows_by_identity = {
+            _override_identity(dict(row)): dict(row)
+            for row in cursor.fetchall()
+        }
+
+        cursor.execute("""
+            SELECT DISTINCT ON (
+                COALESCE(original_override_id, 0),
+                shift_type_id,
+                COALESCE(apartment_id, 0),
+                COALESCE(housing_array_id, 0)
+            )
+                original_override_id, shift_type_id, apartment_id, housing_array_id,
+                start_time, end_time, is_active, year, month, created_at, id
+            FROM shift_time_overrides_history
+            WHERE shift_type_id = %s
+              AND (year > %s OR (year = %s AND month > %s))
+            ORDER BY
+                COALESCE(original_override_id, 0),
+                shift_type_id,
+                COALESCE(apartment_id, 0),
+                COALESCE(housing_array_id, 0),
+                year ASC,
+                month ASC,
+                created_at DESC,
+                id DESC
+        """, (WEEKDAY_SHIFT_TYPE_ID, year, year, month))
+        for row in cursor.fetchall():
+            row_dict = dict(row)
+            rows_by_identity[_override_identity(row_dict)] = row_dict
+
+        return _rows_to_weekday_override_maps(list(rows_by_identity.values()))
+    finally:
+        cursor.close()
+
+
 def _resolve_override_for_apartment(
     apt_id: int,
     apt_overrides: dict[int, tuple[str, str]],
@@ -1860,7 +1951,7 @@ def get_daily_segments_data(
         if preloaded_weekday_overrides is not None:
             apt_overrides, ha_defaults = preloaded_weekday_overrides
         else:
-            apt_overrides, ha_defaults = _fetch_weekday_overrides(conn)
+            apt_overrides, ha_defaults = _fetch_weekday_overrides_for_month(conn, year, month)
         weekday_work_overrides = _build_weekday_work_overrides(
             apartment_ids, apartment_housing_map, apt_overrides, ha_defaults
         )

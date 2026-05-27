@@ -752,10 +752,11 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
                 summary="דיווח חופשה/מחלה ללא שעות מקבל שעות לפי מקטעי המשמרת או לפי override של משמרת חול.",
                 details=(
                     "מ-02/2026, אם יש override שעות חול לדירה/מערך, הוא משמש לחופשה/מחלה.",
+                    "דריסת שעות נקראת לפי חודש החישוב מתוך shift_time_overrides_history, אם קיימת היסטוריה.",
                     "אם אין override, משתמשים במקטעי shift_time_segments של סוג המשמרת.",
                     "חופשה/מחלה נספרות כימי עבודה בפועל לצבירות.",
                 ),
-                source=("app_utils.py:get_daily_segments_data", "app_utils.py:_build_weekday_work_overrides"),
+                source=("app_utils.py:get_daily_segments_data", "app_utils.py:_fetch_weekday_overrides_for_month", "app_utils.py:_build_weekday_work_overrides"),
                 tags=("חופשה", "מחלה", "שעות חול"),
                 effective_from="02/2026",
             ),
@@ -777,6 +778,7 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
                     "מקטעי עבודה מקבלים תעריף משמרת חול.",
                     f"מקטעי כוננות משלמים רק מעבר לקיזוז {MAX_CANCELLED_STANDBY_DEDUCTION:.0f} ש\"ח.",
                     "מ-02/2026 משמרת חול יכולה להגיע מ-override לפי דירה או מערך.",
+                    "אם קיימת היסטוריית דריסות, משתמשים בערך שהיה תקף בחודש המחושב.",
                 ),
                 source=("app_utils.py:_calculate_special_absence_segment_payment", "core/holiday_payment.py:_calculate_special_holiday_day_pay"),
                 tags=("כלניות", "חופשה", "מחלה", "חג"),
@@ -889,6 +891,7 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
                 summary="בדירה רגילה, חג שלם מחושב לפי דקות העבודה של הדירה כפול שכר מינימום; חצי חג לפי חצי דקות.",
                 details=(
                     "דקות עבודה מגיעות מ-override של הדירה/מערך או מברירת מחדל של 480 דקות.",
+                    "אם קיימת היסטוריית דריסות, משתמשים בערך שהיה תקף בחודש המחושב.",
                     "הסכום מחושב בשעות מעוגלות לשתי ספרות כפול שכר מינימום מעוגל.",
                 ),
                 source=("core/holiday_payment.py:_get_apartment_work_minutes", "core/holiday_payment.py:calculate_holiday_payments"),
@@ -900,6 +903,7 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
                 details=(
                     "כלניות: לפי משמרת חול והקיזוז על כוננות.",
                     "בראשית: לפי משמרת לילה והקיזוז על כוננות.",
+                    "בכלניות, דריסת שעות משמרת חול נקראת לפי חודש החישוב.",
                     "אם יש שני מדריכים, הסכום המיוחד נחצה, אלא אם מדובר ב-ASD.",
                 ),
                 source=("core/holiday_payment.py:_calculate_special_holiday_day_pay", "app_utils.py:_calculate_special_absence_segment_payment"),

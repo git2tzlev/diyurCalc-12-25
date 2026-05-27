@@ -377,7 +377,7 @@ def calculate_monthly_summary(
     )
     from core.database import PostgresConnection
     from app_utils import (
-        _fetch_weekday_overrides,
+        _fetch_weekday_overrides_for_month,
         aggregate_daily_segments_to_monthly,
         get_daily_segments_data,
     )
@@ -600,7 +600,11 @@ def calculate_monthly_summary(
     apartment_type_cache = get_all_apartment_types_for_month(conn, list(all_apartment_ids), year, month)
     housing_rates_cache = get_all_housing_rates_for_month(conn, year, month)
     prev_month_housing_rates_cache = get_all_housing_rates_for_month(conn, prev_year, prev_month)
-    weekday_overrides = _fetch_weekday_overrides(conn) if (year, month) >= (2026, 2) else None
+    weekday_overrides = (
+        _fetch_weekday_overrides_for_month(conn, year, month)
+        if (year, month) >= (2026, 2)
+        else None
+    )
 
     # Build person start_date map (already have this data from people query)
     person_start_dates = {p["id"]: p["start_date"] for p in people}
