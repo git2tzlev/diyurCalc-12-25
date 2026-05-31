@@ -30,6 +30,8 @@ from core.time_utils import span_minutes
 
 logger = logging.getLogger(__name__)
 
+GLOBAL_HOLIDAY_WORK_EXCLUSION_START = (2026, 5)
+
 # Cache for global weekday shift work minutes (fallback when no override)
 _weekday_shift_work_minutes_cache: int | None = None
 
@@ -751,6 +753,11 @@ def _has_sufficient_seniority(
     return start_date <= cutoff
 
 
+def _uses_global_holiday_work_exclusion(year: int, month: int) -> bool:
+    """מ-05/2026 עבודה בחג מבטלת תשלום חג לאותו מדריך בכל הדירות."""
+    return (year, month) >= GLOBAL_HOLIDAY_WORK_EXCLUSION_START
+
+
 def calculate_holiday_payments(
     conn,
     year: int,
@@ -804,6 +811,8 @@ def calculate_holiday_payments(
     apt_permanent_guides: Dict[int, Set[int]] = {}
     # {(apartment_id, holiday_date): set of person_ids who worked that day}
     apt_holiday_workers: Dict[Tuple[int, date], Set[int]] = {}
+    # {holiday_date: set of person_ids who worked in any apartment that holiday}
+    person_holiday_workers: Dict[date, Set[int]] = {}
     # מיפוי דירה -> מערך דיור (לצורך overrides + זיהוי ASD)
     apartment_housing_map: Dict[int, int | None] = {}
     apartment_type_map: Dict[int, int | None] = {}
@@ -852,6 +861,7 @@ def calculate_holiday_payments(
             if worked_on_regular_holiday or worked_in_special_window or worked_on_legacy_holiday_date:
                 key = (apartment_id, holiday_date)
                 apt_holiday_workers.setdefault(key, set()).add(person_id)
+                person_holiday_workers.setdefault(holiday_date, set()).add(person_id)
 
     unpaid_slot_by_apartment: Dict[int, bool] = {}
     if saved_assignments:
@@ -934,8 +944,10 @@ def calculate_holiday_payments(
         half_shift_pay = round(work_minutes / 2 / 60, 2) * round(minimum_wage, 2)
 
         for holiday_date in holiday_dates:
-            workers_on_holiday = apt_holiday_workers.get(
-                (apartment_id, holiday_date), set()
+            workers_on_holiday = (
+                person_holiday_workers.get(holiday_date, set())
+                if _uses_global_holiday_work_exclusion(year, month)
+                else apt_holiday_workers.get((apartment_id, holiday_date), set())
             )
             eligible = permanent_guides - workers_on_holiday
 
@@ -965,9 +977,15 @@ def calculate_holiday_payments(
                     )
                     pay = special_full_pay if num_permanent == 1 or is_asd else round(special_full_pay / 2, 2)
                 if person_id not in result:
-                    result[person_id] = {"amount": 0.0, "count": 0, "rate": pay}
+                    result[person_id] = {"amount": 0.0, "count": 0, "rate": pay, "details": []}
                 result[person_id]["amount"] += pay
                 result[person_id]["count"] += 1
+                result[person_id]["details"].append({
+                    "holiday_date": holiday_date,
+                    "apartment_id": apartment_id,
+                    "amount": pay,
+                    "hours": round(pay / round(minimum_wage, 2), 2) if minimum_wage else 0,
+                })
 
     return result
 

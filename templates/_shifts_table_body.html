@@ -8,11 +8,22 @@
 <tr class="travel-row">
   <td>-</td>
   <td>-</td>
-  <td>{{ payment.description }}</td>
+  <td>
+    {{ payment.description }}
+    {% if payment.detail is defined and payment.detail %}
+      <br><span style="color:#475569; font-size:11px;">{{ payment.detail }}</span>
+    {% endif %}
+  </td>
   <td>-</td>
   <td>-</td>
   <td>-</td>
-  <td>{{ "%.2f"|format(payment.amount) }} &#8362;</td>
+  <td>
+    {% if payment.work_hours is defined %}
+      {{ "%.2f"|format(payment.work_hours) }}
+      <span style="color:#64748b; font-size:11px;">שעות</span><br>
+    {% endif %}
+    {{ "%.2f"|format(payment.amount) }} &#8362;
+  </td>
   <td>-</td>
 </tr>
 {% endfor %}
@@ -38,11 +49,22 @@
 <tr class="travel-row">
   <td>-</td>
   <td>-</td>
-  <td>{{ payment.description }}</td>
+  <td>
+    {{ payment.description }}
+    {% if payment.detail is defined and payment.detail %}
+      <br><span style="color:#475569; font-size:11px;">{{ payment.detail }}</span>
+    {% endif %}
+  </td>
   <td>-</td>
   <td>-</td>
   <td>-</td>
-  <td>{{ "%.2f"|format(payment.amount) }} &#8362;</td>
+  <td>
+    {% if payment.work_hours is defined %}
+      {{ "%.2f"|format(payment.work_hours) }}
+      <span style="color:#64748b; font-size:11px;">שעות</span><br>
+    {% endif %}
+    {{ "%.2f"|format(payment.amount) }} &#8362;
+  </td>
   <td>-</td>
 </tr>
 {% endfor %}
@@ -52,7 +74,12 @@
 <tr class="travel-row completion-row">
   <td>-</td>
   <td>-</td>
-  <td>{{ payment.description }}</td>
+  <td>
+    {{ payment.description }}
+    {% if payment.detail is defined and payment.detail %}
+      <br><span style="color:#475569; font-size:11px;">{{ payment.detail }}</span>
+    {% endif %}
+  </td>
   <td>-</td>
   <td>-</td>
   <td>-</td>

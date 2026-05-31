@@ -51,6 +51,13 @@
   </div>
 
   <div style="display: flex; gap: 8px; margin-bottom: 15px; flex-wrap: wrap; align-items: center; padding: 12px; background: #f8f9fa; border-radius: 8px;">
+    {% if selected_month and selected_year %}
+    <a href="/reports/export-guide-reports-excel?year={{ selected_year }}&month={{ selected_month }}{% if selected_housing_array %}&housing_array_id={{ selected_housing_array }}{% endif %}"
+       style="padding: 8px 16px; background: #198754; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; text-decoration: none;">
+      הורד Excel למערכת השנייה
+    </a>
+    <span style="color: #999; margin: 0 4px;">|</span>
+    {% endif %}
     <button id="sendAllEmailBtn" onclick="openBulkDialog()" style="padding: 8px 16px; background: #6f42c1; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500;">
       📧 שלח דוחות לכל המדריכים
     </button>

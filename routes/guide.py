@@ -33,6 +33,7 @@ from app_utils import get_daily_segments_data, aggregate_daily_segments_to_month
 from core.constants import (
     PERMANENT_EMPLOYEE_TYPE,
     HIGH_FUNCTIONING_APT_TYPE, LOW_FUNCTIONING_APT_TYPE,
+    CLEANING_SHIFT_ID, MEDICAL_ESCORT_SHIFT_ID, NIGHT_WATCH_SHIFT_ID, WORK_HOUR_SHIFT_ID,
     COMPLETION_APARTMENT_IDS,
     is_asd_housing_array,
     should_exclude_asd_completion_report,
@@ -60,6 +61,12 @@ templates.env.globals["app_version"] = config.VERSION
 
 COMPLETION_APARTMENT_NAME = "השלמות"
 GENERIC_ERROR = "שגיאת מערכת. נסי שוב מאוחר יותר"
+DISPLAY_PRIORITY_SHIFT_IDS = {
+    WORK_HOUR_SHIFT_ID,
+    CLEANING_SHIFT_ID,
+    MEDICAL_ESCORT_SHIFT_ID,
+    NIGHT_WATCH_SHIFT_ID,
+}
 
 
 def _format_shifts_email_text(template: str, person_name: str, year: int, month: int) -> str:
@@ -131,6 +138,11 @@ def _inject_holiday_payment(
         monthly_totals["holiday_payment"] = hp
         monthly_totals["holiday_payment_count"] = hp_data["count"]
         monthly_totals["holiday_payment_rate"] = hp_data["rate"]
+        monthly_totals["holiday_payment_hours"] = (
+            round(hp / round(minimum_wage, 2), 2)
+            if minimum_wage else 0
+        )
+        monthly_totals["holiday_payment_details"] = hp_data.get("details", [])
         hp_rounded = round(round(hp, 2), 1)
         monthly_totals["total_payment"] = monthly_totals.get("total_payment", 0) + hp_rounded
         monthly_totals["gesher_total"] = monthly_totals.get("gesher_total", 0) + hp_rounded
@@ -389,6 +401,24 @@ def _chain_paid_minutes(chain: dict) -> tuple[float, float]:
     return float(total_minutes), 0.0
 
 
+def _prioritized_overlap_rows(chain: dict, overlaps: list[tuple[dict, int]]) -> list[tuple[dict, int]]:
+    """
+    בחפיפה בין משמרת ארוכה לשורה נקודתית, השורה הנקודתית מקבלת את השעות שלה.
+
+    זה משפיע רק על תצוגת שורות הדוח. סה"כ השעות נשאר לפי מנוע השכר.
+    """
+    chain_shift_id = chain.get("shift_id")
+    if chain_shift_id not in DISPLAY_PRIORITY_SHIFT_IDS:
+        return overlaps
+
+    priority_overlaps = [
+        (row, overlap)
+        for row, overlap in overlaps
+        if row.get("_allocation_shift_type_id") == chain_shift_id
+    ]
+    return priority_overlaps or overlaps
+
+
 def _apply_calculated_hours_to_shift_rows(shifts_data: list[dict], daily_segments: list[dict]) -> tuple[float, int]:
     """
     התאמת עמודות עבודה/כוננות בשורות דוח המשמרות למנוע החישוב בלי לשנות את מבנה הדוח.
@@ -462,13 +492,14 @@ def _apply_calculated_hours_to_shift_rows(shifts_data: list[dict], daily_segment
                 add_row_minutes(target_row, calc_work_minutes, calc_standby_minutes)
                 continue
 
-            total_overlap = sum(overlap for _row, overlap in overlaps)
+            allocation_overlaps = _prioritized_overlap_rows(chain, overlaps)
+            total_overlap = sum(overlap for _row, overlap in allocation_overlaps)
             if total_overlap <= 0:
                 continue
 
             work_ratio = calc_work_minutes / chain_duration
             standby_ratio = calc_standby_minutes / chain_duration
-            for row, overlap in overlaps:
+            for row, overlap in allocation_overlaps:
                 weight = overlap / total_overlap
                 add_row_minutes(
                     row,
@@ -545,7 +576,7 @@ def _apply_calculated_hours_to_shift_rows(shifts_data: list[dict], daily_segment
     total_work_hours = round(sum(row.get("work_hours", 0.0) or 0.0 for row in shifts_data), 2)
     standby_count = sum(1 for row in shifts_data if (row.get("standby_hours", 0.0) or 0.0) > 0)
 
-    for key in ("_calc_by_day", "_allocation_windows", "_allocation_no_time_day"):
+    for key in ("_calc_by_day", "_allocation_windows", "_allocation_no_time_day", "_allocation_shift_type_id"):
         for row in shifts_data:
             row.pop(key, None)
 
@@ -1182,6 +1213,7 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
                     "tagbor_first": seg_data["is_first"],
                     "tagbor_last": seg_data["is_last"],
                     "_allocation_windows": [(r_date, alloc_start, alloc_end)],
+                    "_allocation_shift_type_id": r["shift_type_id"],
                 })
         else:
             # חישוב שעות - פונקציה מרכזית (לילה/רגיל/ASD)
@@ -1215,6 +1247,7 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
                 "note": _compose_shift_note(r),
                 "_allocation_windows": allocation_windows,
                 "_allocation_no_time_day": r_date if not allocation_windows else None,
+                "_allocation_shift_type_id": r["shift_type_id"],
             })
 
     # שליפת תשלומים נוספים (לפי דירות במערך כשמוגדר פילטר)
@@ -1302,10 +1335,45 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
 
     # הוספת שורת תשלום חג לטבלת התשלומים
     if monthly_totals.get("holiday_payment"):
-        hp_count = monthly_totals.get("holiday_payment_count", 0)
+        hp_hours = monthly_totals.get("holiday_payment_hours", 0) or 0
+        holiday_dates, _holiday_work_dates = get_holiday_payment_dates_in_month(
+            conn.conn, year, month, shabbat_cache
+        )
+        holiday_count = len(holiday_dates)
+        hp_details = monthly_totals.get("holiday_payment_details", []) or []
+        apartment_ids = sorted({
+            detail.get("apartment_id")
+            for detail in hp_details
+            if detail.get("apartment_id")
+        })
+        apartment_names = {}
+        if apartment_ids:
+            apt_rows = conn.execute(
+                "SELECT id, name FROM apartments WHERE id = ANY(%s)",
+                (apartment_ids,),
+            ).fetchall()
+            apartment_names = {row["id"]: row["name"] for row in apt_rows}
+        hours_by_apartment = {}
+        for detail in hp_details:
+            apartment_id = detail.get("apartment_id")
+            if not apartment_id:
+                continue
+            hours_by_apartment[apartment_id] = (
+                hours_by_apartment.get(apartment_id, 0)
+                + (detail.get("hours") or 0)
+            )
+        holiday_detail = "; ".join(
+            f"{apartment_names.get(apartment_id, f'דירה {apartment_id}')}: {hours:.2f} שעות"
+            for apartment_id, hours in sorted(
+                hours_by_apartment.items(),
+                key=lambda item: apartment_names.get(item[0], ""),
+            )
+        )
         payments_data.append({
-            "description": f"תשלום חג ({hp_count} ימים)",
+            "description": f"תשלום חג ({holiday_count} חגים)",
+            "detail": holiday_detail,
             "amount": round(monthly_totals["holiday_payment"], 2),
+            "work_hours": round(hp_hours, 2),
         })
         total_additions += monthly_totals["holiday_payment"]
         total_additions_no_travel += monthly_totals["holiday_payment"]

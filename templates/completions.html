@@ -28,7 +28,7 @@
     <div class="header-line" style="align-items: flex-start; gap: 12px;">
       <div>
         <h3 style="margin: 0;">חודש עבודה {{ "%02d"|format(group.work_month) }}/{{ group.work_year }}</h3>
-        <div class="muted">{{ group.items|length }} השלמות</div>
+        <div class="muted">{{ group["items"]|length }} השלמות</div>
       </div>
       <div style="display: flex; gap: 8px; flex-wrap: wrap;">
         {% for file in group.final_files %}
@@ -58,7 +58,7 @@
         </tr>
       </thead>
       <tbody>
-        {% for item in group.items %}
+        {% for item in group["items"] %}
         <tr>
           <td>{{ "משמרת" if item.item_type == "time_report" else "רכיב תשלום" }}</td>
           <td>{{ item.person_name }}</td>

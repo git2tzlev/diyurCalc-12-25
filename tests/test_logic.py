@@ -24,6 +24,8 @@ from core.constants import (
     ASD_SENIORITY_SUPPLEMENT,
     TAGBUR_FRIDAY_SHIFT_ID,
     TAGBUR_SHABBAT_SHIFT_ID,
+    WEEKDAY_SHIFT_TYPE_ID,
+    WORK_HOUR_SHIFT_ID,
 )
 from core.shift_hours import calculate_tagbur_segments
 from routes.guide import _allocation_windows_for_report, _apply_calculated_hours_to_shift_rows
@@ -416,6 +418,72 @@ class TestShiftReportDisplayAllocation(unittest.TestCase):
         self.assertEqual(total_work_hours, 8.0)
         self.assertEqual(standby_count, 1)
         self.assertNotIn("_allocation_windows", rows[0])
+
+    def test_explicit_work_hour_row_gets_priority_inside_long_shift(self):
+        rows = [
+            {
+                "date": "20/04/26",
+                "day": "שני",
+                "apartment": "דירה",
+                "shift_type": "חול",
+                "start_time": "16:00",
+                "end_time": "08:00",
+                "work_hours": 0.0,
+                "standby_hours": 0.0,
+                "_allocation_windows": _allocation_windows_for_report(date(2026, 4, 20), "16:00", "08:00"),
+                "_allocation_shift_type_id": WEEKDAY_SHIFT_TYPE_ID,
+            },
+            {
+                "date": "20/04/26",
+                "day": "שני",
+                "apartment": "דירה",
+                "shift_type": "שעת עבודה",
+                "start_time": "22:00",
+                "end_time": "23:00",
+                "work_hours": 0.0,
+                "standby_hours": 0.0,
+                "_allocation_windows": _allocation_windows_for_report(date(2026, 4, 20), "22:00", "23:00"),
+                "_allocation_shift_type_id": WORK_HOUR_SHIFT_ID,
+            },
+        ]
+        daily_segments = [{
+            "date_obj": date(2026, 4, 20),
+            "total_minutes_no_standby": 510,
+            "chains": [
+                {
+                    "type": "work",
+                    "start_time": "16:00",
+                    "end_time": "22:00",
+                    "total_minutes": 360,
+                    "shift_id": WEEKDAY_SHIFT_TYPE_ID,
+                },
+                {
+                    "type": "work",
+                    "start_time": "22:00",
+                    "end_time": "23:00",
+                    "total_minutes": 60,
+                    "shift_id": WORK_HOUR_SHIFT_ID,
+                },
+                {"type": "standby", "start_time": "23:00", "end_time": "06:30", "total_minutes": 450},
+                {
+                    "type": "work",
+                    "start_time": "06:30",
+                    "end_time": "08:00",
+                    "total_minutes": 90,
+                    "shift_id": WEEKDAY_SHIFT_TYPE_ID,
+                },
+            ],
+        }]
+
+        total_work_hours, standby_count = _apply_calculated_hours_to_shift_rows(rows, daily_segments)
+
+        self.assertEqual(rows[0]["work_hours"], 7.5)
+        self.assertEqual(rows[0]["standby_hours"], 7.5)
+        self.assertEqual(rows[1]["work_hours"], 1.0)
+        self.assertEqual(rows[1]["standby_hours"], 0.0)
+        self.assertEqual(total_work_hours, 8.5)
+        self.assertEqual(standby_count, 1)
+        self.assertNotIn("_allocation_shift_type_id", rows[0])
 
     # def test_format_hours_minutes(self):
     #     """Test formatting minutes to HH:MM."""

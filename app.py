@@ -25,7 +25,7 @@ from core.database import (
 )
 from utils.utils import human_date, format_currency, format_currency_total
 from routes.home import home
-from routes.reports import reports_management
+from routes.reports import reports_management, export_guide_reports_excel
 from routes.guide import (
     simple_summary_view, guide_view,
     shifts_report_pdf, shifts_report_preview, shifts_report_email, chains_report_email,
@@ -372,6 +372,17 @@ def home_route(request: Request, month: int | None = None, year: int | None = No
 def reports_route(request: Request, month: int | None = None, year: int | None = None, housing_array_id: int | None = None):
     """Reports management page - send guide reports via email."""
     return reports_management(request, month, year, housing_array_id)
+
+
+@app.get("/reports/export-guide-reports-excel")
+def export_guide_reports_excel_route(
+    request: Request,
+    year: int,
+    month: int,
+    housing_array_id: int | None = None,
+):
+    """Export guide reports for external system import."""
+    return export_guide_reports_excel(request, year, month, housing_array_id)
 
 
 @app.get("/guide", include_in_schema=False)

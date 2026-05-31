@@ -535,6 +535,42 @@ class TestCalculateHolidayPayments(unittest.TestCase):
         self.assertEqual(_get_amount(result, 1), 0)
         self.assertAlmostEqual(_get_amount(result, 2), self.half_shift_pay)
 
+    def test_before_may_2026_working_holiday_blocks_only_same_apartment(self):
+        """עד 04/2026 עבודה בחג מבטלת תשלום רק בדירה שבה המדריך עבד."""
+        holiday = date(2026, 4, 2)
+        cache = _make_shabbat_cache_with_holiday([holiday])
+        reports = [
+            _make_report(1, 100, holiday, housing_array_id=1),
+            _make_report(1, 200, date(2026, 4, 5), housing_array_id=1),
+        ]
+        person_types = {1: PERMANENT_EMPLOYEE_TYPE}
+
+        result = calculate_holiday_payments(
+            self.conn, 2026, 4, cache, self.minimum_wage,
+            all_reports=reports, person_types=person_types,
+            person_start_dates=_start_dates(1),
+        )
+
+        self.assertAlmostEqual(_get_amount(result, 1), self.full_shift_pay)
+
+    def test_from_may_2026_working_holiday_blocks_all_apartments(self):
+        """מ-05/2026 מי שעבד בחג לא מקבל תשלום חג באף דירה באותו יום חג."""
+        holiday = date(2026, 5, 1)
+        cache = _make_shabbat_cache_with_holiday([holiday])
+        reports = [
+            _make_report(1, 100, holiday, housing_array_id=1),
+            _make_report(1, 200, date(2026, 5, 5), housing_array_id=1),
+        ]
+        person_types = {1: PERMANENT_EMPLOYEE_TYPE}
+
+        result = calculate_holiday_payments(
+            self.conn, 2026, 5, cache, self.minimum_wage,
+            all_reports=reports, person_types=person_types,
+            person_start_dates=_start_dates(1),
+        )
+
+        self.assertEqual(_get_amount(result, 1), 0)
+
     def test_multi_day_holiday_pays_per_day(self):
         """חג דו-יומי — תשלום נפרד לכל יום."""
         holidays = [date(2025, 10, 2), date(2025, 10, 3)]
