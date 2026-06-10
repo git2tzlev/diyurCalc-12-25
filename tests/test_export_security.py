@@ -11,6 +11,7 @@ from routes.export import (
     _filter_multi_housing_for_summary,
     _remove_blocked_preview_people,
 )
+from core.database import get_multi_housing_guides
 from services import gesher_exporter
 
 
@@ -63,6 +64,29 @@ class TestGesherMultiHousingBlockRule(unittest.TestCase):
         self.assertTrue(gesher_exporter.should_block_multi_housing_for_gesher(1))
         self.assertFalse(gesher_exporter.should_block_multi_housing_for_gesher(2))
         self.assertFalse(gesher_exporter.should_block_multi_housing_for_gesher(None))
+
+    def test_multi_housing_lookup_uses_employee_number_with_id_or_employer(self):
+        class FakeCursor:
+            def fetchall(self):
+                return [{"person_ids": [10, 20], "arrays": ["ASD", "צוהר הלב"]}]
+
+        class FakeConn:
+            query = ""
+
+            def execute(self, query, params):
+                self.query = query
+                self.params = params
+                return FakeCursor()
+
+        conn = FakeConn()
+
+        result = get_multi_housing_guides(conn, "2026-05-01", "2026-06-01")
+
+        self.assertEqual(result, {10: ["ASD", "צוהר הלב"], 20: ["ASD", "צוהר הלב"]})
+        self.assertIn("meirav_code", conn.query)
+        self.assertIn("id_number", conn.query)
+        self.assertIn("employers", conn.query)
+        self.assertIn("e.code", conn.query)
 
 
 if __name__ == "__main__":

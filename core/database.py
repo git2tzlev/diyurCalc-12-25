@@ -290,25 +290,62 @@ def get_current_db_name() -> str:
 def get_multi_housing_guides(conn: "PostgresConnection", start_date, end_date) -> dict[int, list[str]]:
     """מחזיר מדריכים שעובדים ביותר ממערך דיור אחד בתקופה נתונה.
 
-    מזהה לפי תעודת זהות (id_number) - גם אם המדריך מופיע כשני רשומות
-    שונות בטבלת people עם אותו מספר זהות.
+    מזהה לפי מספר עובד במירב (meirav_code) באותו מפעל, וגם לפי צירוף
+    תעודת זהות + מספר עובד. כך אותו מספר עובד במפעלים שונים לא ייחסם,
+    אבל אותו מספר עובד באותו מפעל או אותה תעודת זהות עם אותו מספר עובד
+    בכמה רשומות כן יזוהו כאותו עובד.
 
     Returns:
         dict מ-person_id לרשימת שמות מערכי דיור
     """
     rows = conn.execute(
         """
-        SELECT p.id_number,
-               array_agg(DISTINCT p.id) AS person_ids,
-               array_agg(DISTINCT ha.name ORDER BY ha.name) AS arrays
-        FROM time_reports tr
-        JOIN people p ON p.id = tr.person_id
-        JOIN apartments ap ON ap.id = tr.apartment_id
-        JOIN housing_arrays ha ON ha.id = ap.housing_array_id
-        WHERE tr.date >= %s AND tr.date < %s
-          AND p.id_number IS NOT NULL AND p.id_number != ''
-        GROUP BY p.id_number
-        HAVING COUNT(DISTINCT ap.housing_array_id) > 1
+        WITH report_scope AS (
+            SELECT p.id,
+                   p.id_number,
+                   regexp_replace(COALESCE(p.meirav_code, ''), '\\D', '', 'g') AS employee_code,
+                   COALESCE(e.code, '') AS employer_code,
+                   ap.housing_array_id,
+                   ha.name AS housing_array_name
+            FROM time_reports tr
+            JOIN people p ON p.id = tr.person_id
+            LEFT JOIN employers e ON e.id = p.employer_id
+            JOIN apartments ap ON ap.id = tr.apartment_id
+            JOIN housing_arrays ha ON ha.id = ap.housing_array_id
+            WHERE tr.date >= %s AND tr.date < %s
+              AND regexp_replace(COALESCE(p.meirav_code, ''), '\\D', '', 'g') != ''
+        ),
+        duplicate_keys AS (
+            SELECT 'employee_employer' AS key_type,
+                   employee_code AS key_employee_code,
+                   employer_code AS key_employer_code,
+                   NULL::text AS key_id_number
+            FROM report_scope
+            GROUP BY employee_code, employer_code
+            HAVING COUNT(DISTINCT housing_array_id) > 1
+
+            UNION
+
+            SELECT 'id_employee' AS key_type,
+                   employee_code AS key_employee_code,
+                   NULL::text AS key_employer_code,
+                   id_number AS key_id_number
+            FROM report_scope
+            WHERE id_number IS NOT NULL AND id_number != ''
+            GROUP BY id_number, employee_code
+            HAVING COUNT(DISTINCT housing_array_id) > 1
+        )
+        SELECT array_agg(DISTINCT rs.id) AS person_ids,
+               array_agg(DISTINCT rs.housing_array_name ORDER BY rs.housing_array_name) AS arrays
+        FROM duplicate_keys dk
+        JOIN report_scope rs
+          ON rs.employee_code = dk.key_employee_code
+         AND (
+             (dk.key_type = 'employee_employer' AND rs.employer_code = dk.key_employer_code)
+             OR
+             (dk.key_type = 'id_employee' AND rs.id_number = dk.key_id_number)
+         )
+        GROUP BY dk.key_type, dk.key_employee_code, dk.key_employer_code, dk.key_id_number
         """,
         (start_date, end_date),
     ).fetchall()
