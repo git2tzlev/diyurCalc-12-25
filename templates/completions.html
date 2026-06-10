@@ -31,6 +31,10 @@
         <div class="muted">{{ group["items"]|length }} השלמות</div>
       </div>
       <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+        <a href="/completions/impact/{{ group.work_year }}/{{ group.work_month }}?payment_year={{ selected_year }}&payment_month={{ selected_month }}"
+           style="text-decoration: none; padding: 6px 10px; border-radius: 6px; background: #0f766e; color: white;">
+          הצג השפעת השלמות
+        </a>
         {% for file in group.final_files %}
           <a href="/completions/difference/{{ file.id }}?payment_year={{ selected_year }}&payment_month={{ selected_month }}"
              style="text-decoration: none; padding: 6px 10px; border-radius: 6px; background: #1f6feb; color: white;">

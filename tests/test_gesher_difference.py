@@ -1,4 +1,8 @@
-from services.gesher_difference import compare_line_sets, parse_gesher_file_lines
+from services.gesher_difference import (
+    build_completion_impact_rows,
+    compare_line_sets,
+    parse_gesher_file_lines,
+)
 
 
 def test_parse_gesher_file_lines_skips_headers_and_invalid_rows():
@@ -52,3 +56,55 @@ def test_compare_line_sets_aggregates_by_employee_symbol_and_rate():
         ("000123", "101", 2.0, 80.0, "כמות השתנתה"),
         ("000123", "202", 1.0, 50.0, "שורה נוספה"),
     ]
+
+
+def test_build_completion_impact_rows_uses_before_and_after_labels():
+    before_lines = [
+        {"employee_code": "000123", "symbol": "101", "rate": 40.0, "quantity": 5.0, "amount": 200.0},
+    ]
+    after_lines = [
+        {"employee_code": "000123", "symbol": "101", "rate": 40.0, "quantity": 8.0, "amount": 320.0},
+    ]
+
+    rows = build_completion_impact_rows(before_lines, after_lines)
+
+    assert rows[0]["before_quantity"] == 5.0
+    assert rows[0]["after_quantity"] == 8.0
+    assert rows[0]["quantity_diff"] == 3.0
+    assert "paid_quantity" not in rows[0]
+    assert "current_quantity" not in rows[0]
+
+
+def test_build_completion_impact_rows_nets_same_symbol_rate_change():
+    before_lines = [
+        {
+            "employee_code": "000123",
+            "person_name": "מדריך בדיקה",
+            "symbol": "370",
+            "display_name": "נסיעות",
+            "rate": 96.0,
+            "quantity": 0.0,
+            "amount": 96.0,
+        },
+    ]
+    after_lines = [
+        {
+            "employee_code": "000123",
+            "person_name": "מדריך בדיקה",
+            "symbol": "370",
+            "display_name": "נסיעות",
+            "rate": 112.0,
+            "quantity": 0.0,
+            "amount": 112.0,
+        },
+    ]
+
+    rows = build_completion_impact_rows(before_lines, after_lines)
+
+    assert len(rows) == 1
+    assert rows[0]["symbol"] == "370"
+    assert rows[0]["rate_label"] == "96.00 -> 112.00"
+    assert rows[0]["before_amount"] == 96.0
+    assert rows[0]["after_amount"] == 112.0
+    assert rows[0]["amount_diff"] == 16.0
+    assert rows[0]["diff_type"] == "תעריף השתנה"

@@ -6,12 +6,52 @@ Uses "save on change" approach - current data is used unless there's a historica
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import Optional, List, Dict
 
 import psycopg2.extras
 from utils.cache_manager import cached
 
 logger = logging.getLogger(__name__)
+
+
+def _history_effective_date(row) -> date | None:
+    """Return the exact effective date, falling back to the first day of year/month."""
+    effective_date = row.get("effective_date") if hasattr(row, "get") else row["effective_date"]
+    if effective_date:
+        return effective_date
+    year = row.get("year") if hasattr(row, "get") else row["year"]
+    month = row.get("month") if hasattr(row, "get") else row["month"]
+    if year and month:
+        return date(int(year), int(month), 1)
+    return None
+
+
+def _status_dict_from_row(row) -> dict:
+    return {
+        "is_married": row["is_married"],
+        "employer_id": row["employer_id"],
+        "employee_type": row["employee_type"],
+    }
+
+
+def _resolve_person_status_for_date(current_status: dict, history_rows: list, target_date: date) -> dict:
+    """
+    Resolve person status for an exact work date.
+
+    person_status_history rows store the previous value that was valid until the
+    change date. Therefore, for a target date we use the earliest future change
+    row; if no future change exists, the current people row is the source.
+    """
+    future_rows = []
+    for row in history_rows:
+        effective_date = _history_effective_date(row)
+        if effective_date and target_date < effective_date:
+            future_rows.append((effective_date, row))
+    if future_rows:
+        future_rows.sort(key=lambda item: item[0])
+        return _status_dict_from_row(future_rows[0][1])
+    return dict(current_status)
 
 
 # ============================================================================
@@ -127,6 +167,39 @@ def get_person_status_for_month(conn, person_id: int, year: int, month: int) -> 
         cursor.close()
 
 
+def get_person_status_for_date(conn, person_id: int, target_date: date) -> dict:
+    """Get person status for an exact work date using effective_date when available."""
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    try:
+        cursor.execute("""
+            SELECT is_married, employer_id, type as employee_type
+            FROM people
+            WHERE id = %s
+        """, (person_id,))
+        person = cursor.fetchone()
+        if not person:
+            return {
+                "is_married": None,
+                "employer_id": None,
+                "employee_type": None,
+            }
+
+        cursor.execute("""
+            SELECT is_married, employer_id, employee_type, year, month, effective_date
+            FROM person_status_history
+            WHERE person_id = %s
+            ORDER BY COALESCE(effective_date, make_date(year, month, 1)) ASC
+        """, (person_id,))
+        history_rows = cursor.fetchall()
+        return _resolve_person_status_for_date(
+            _status_dict_from_row(person),
+            history_rows,
+            target_date,
+        )
+    finally:
+        cursor.close()
+
+
 def get_apartment_type_for_month(conn, apartment_id: int, year: int, month: int) -> Optional[int]:
     """
     Get apartment type ID for a specific month.
@@ -218,6 +291,62 @@ def get_all_person_statuses_for_month(
                 "employee_type": row["employee_type"]
             }
 
+        return result
+    finally:
+        cursor.close()
+
+
+def get_all_person_statuses_for_dates(
+    conn,
+    person_ids: List[int],
+    target_dates: List[date],
+) -> Dict[int, Dict[date, dict]]:
+    """Load person statuses for exact report dates in batch."""
+    if not person_ids or not target_dates:
+        return {}
+
+    unique_person_ids = sorted(set(person_ids))
+    unique_dates = sorted(set(target_dates))
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    try:
+        placeholders = ",".join(["%s"] * len(unique_person_ids))
+        cursor.execute(f"""
+            SELECT id as person_id, is_married, employer_id, type as employee_type
+            FROM people
+            WHERE id IN ({placeholders})
+        """, tuple(unique_person_ids))
+        current_by_person = {
+            row["person_id"]: _status_dict_from_row(row)
+            for row in cursor.fetchall()
+        }
+
+        cursor.execute(f"""
+            SELECT person_id, is_married, employer_id, employee_type,
+                   year, month, effective_date
+            FROM person_status_history
+            WHERE person_id IN ({placeholders})
+            ORDER BY person_id, COALESCE(effective_date, make_date(year, month, 1)) ASC
+        """, tuple(unique_person_ids))
+        history_by_person: Dict[int, list] = {}
+        for row in cursor.fetchall():
+            history_by_person.setdefault(row["person_id"], []).append(row)
+
+        result: Dict[int, Dict[date, dict]] = {}
+        for person_id in unique_person_ids:
+            current_status = current_by_person.get(person_id, {
+                "is_married": None,
+                "employer_id": None,
+                "employee_type": None,
+            })
+            history_rows = history_by_person.get(person_id, [])
+            result[person_id] = {
+                target_date: _resolve_person_status_for_date(
+                    current_status,
+                    history_rows,
+                    target_date,
+                )
+                for target_date in unique_dates
+            }
         return result
     finally:
         cursor.close()

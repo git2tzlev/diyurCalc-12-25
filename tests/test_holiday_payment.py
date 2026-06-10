@@ -515,6 +515,46 @@ class TestCalculateHolidayPayments(unittest.TestCase):
         self.assertAlmostEqual(_get_amount(result, 1), self.half_shift_pay)
         self.assertAlmostEqual(_get_amount(result, 2), self.half_shift_pay)
 
+    def test_saved_assignment_uses_employee_type_on_holiday_date(self):
+        """מדריך שמור שהיה מחליף בתאריך החג לא מחלק את תשלום החג."""
+        holiday = date(2026, 5, 22)
+        cache = _make_shabbat_cache_with_holiday([holiday])
+
+        reports = [
+            _make_report(1, 100, date(2026, 5, 5), housing_array_id=1),
+        ]
+        person_types = {1: PERMANENT_EMPLOYEE_TYPE, 2: PERMANENT_EMPLOYEE_TYPE}
+        dated_statuses = {
+            1: {
+                holiday: {"employee_type": PERMANENT_EMPLOYEE_TYPE, "is_married": False},
+                date(2026, 5, 5): {"employee_type": PERMANENT_EMPLOYEE_TYPE, "is_married": False},
+            },
+            2: {
+                holiday: {"employee_type": "substitute", "is_married": False},
+                date(2026, 5, 5): {"employee_type": "substitute", "is_married": False},
+            },
+        }
+
+        with patch("core.holiday_payment._load_saved_assignments", return_value={
+            100: {
+                "apartment_id": 100,
+                "guide_1_id": 1,
+                "guide_2_id": 2,
+                "guide_2_no_holiday_payment": False,
+            },
+        }), patch(
+            "core.history.get_all_person_statuses_for_dates",
+            return_value=dated_statuses,
+        ):
+            result = calculate_holiday_payments(
+                self.conn, 2026, 5, cache, self.minimum_wage,
+                all_reports=reports, person_types=person_types,
+                person_start_dates=_start_dates(1, 2),
+            )
+
+        self.assertAlmostEqual(_get_amount(result, 1), self.full_shift_pay)
+        self.assertEqual(_get_amount(result, 2), 0)
+
     def test_two_permanent_one_worked_other_gets_half(self):
         """2 קבועים, אחד עבד בחג → רק השני מקבל חצי."""
         holiday = date(2025, 10, 2)

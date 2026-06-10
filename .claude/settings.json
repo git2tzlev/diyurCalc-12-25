@@ -2,7 +2,15 @@
   "permissions": {
     "allow": [
       "Bash(curl:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "PowerShell(py -c \"import py_compile; py_compile.compile\\('routes/guide.py', doraise=True\\); print\\('guide.py OK'\\)\")",
+      "PowerShell(py -m pytest tests/test_holiday_payment_setup_security.py -v 2>&1)",
+      "PowerShell(py scripts/check_aricha_holiday_hours.py)",
+      "PowerShell(py scripts/check_weekday_standby_rates.py)",
+      "PowerShell(py -c \"import py_compile; py_compile.compile\\('core/holiday_payment.py', doraise=True\\); py_compile.compile\\('routes/guide.py', doraise=True\\); print\\('compile OK'\\)\")",
+      "PowerShell(py -m pytest tests/test_holiday_payment.py tests/test_holiday_payment_setup_security.py tests/test_logic.py -q 2>&1)",
+      "PowerShell(py -m pytest tests/test_salary_calculation.py -q 2>&1)",
+      "PowerShell(py scripts/check_nitzanim.py)"
     ]
   }
 }

@@ -372,6 +372,7 @@ def calculate_monthly_summary(
     from core.history import (
         get_minimum_wage_for_month,
         get_all_person_statuses_for_month,
+        get_all_person_statuses_for_dates,
         get_all_apartment_types_for_month,
         get_all_housing_rates_for_month,
     )
@@ -501,12 +502,20 @@ def calculate_monthly_summary(
     reports_by_person = {}
     all_shift_ids = set()
     all_apartment_ids = set()
+    all_report_dates = set()
     for r in all_reports:
         reports_by_person.setdefault(r["person_id"], []).append(r)
+        if r.get("date"):
+            all_report_dates.add(r["date"])
         if r["shift_type_id"]:
             all_shift_ids.add(r["shift_type_id"])
         if r["apartment_id"]:
             all_apartment_ids.add(r["apartment_id"])
+    person_status_date_cache = get_all_person_statuses_for_dates(
+        conn,
+        person_ids,
+        list(all_report_dates),
+    )
 
     # 1b. Load previous-month reports once for carryover + sick continuity
     prev_reports_by_person = {}
@@ -630,6 +639,7 @@ def calculate_monthly_summary(
         daily_segments, _ = get_daily_segments_data(
             conn_wrapper, pid, year, month, shabbat_cache, minimum_wage,
             person_status_cache=person_status_cache,
+            person_status_date_cache=person_status_date_cache.get(pid, {}),
             apartment_type_cache=apartment_type_cache,
             housing_rates_cache=housing_rates_cache,
             preloaded_reports=reports_by_person.get(pid, []),

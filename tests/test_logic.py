@@ -28,8 +28,14 @@ from core.constants import (
     WORK_HOUR_SHIFT_ID,
 )
 from core.shift_hours import calculate_tagbur_segments
-from routes.guide import _allocation_windows_for_report, _apply_calculated_hours_to_shift_rows
+from routes.guide import (
+    _allocation_windows_for_report,
+    _apply_calculated_hours_to_shift_rows,
+    _apply_payment_period_markers_to_chains,
+    _marked_payment_windows_for_report,
+)
 from core.sick_days import get_sick_payment_rate
+from core.history import _resolve_person_status_for_date
 from core.time_utils import (
     minutes_to_time_str,
     span_minutes,
@@ -48,6 +54,33 @@ from utils.utils import calculate_annual_vacation_quota, overlap_minutes
 #     calculate_overlap_percentage,
 #     ValidationError
 # )
+
+
+class TestPersonStatusEffectiveDate(unittest.TestCase):
+    """בדיקות תוקף יומי של סטטוס עובד."""
+
+    def test_effective_date_uses_old_status_before_change_and_current_from_change_day(self):
+        current = {
+            "is_married": True,
+            "employer_id": 2,
+            "employee_type": "permanent",
+        }
+        history_rows = [{
+            "is_married": False,
+            "employer_id": 2,
+            "employee_type": "substitute",
+            "year": 2026,
+            "month": 6,
+            "effective_date": date(2026, 6, 8),
+        }]
+
+        before = _resolve_person_status_for_date(current, history_rows, date(2026, 6, 7))
+        on_change = _resolve_person_status_for_date(current, history_rows, date(2026, 6, 8))
+
+        self.assertFalse(before["is_married"])
+        self.assertEqual(before["employee_type"], "substitute")
+        self.assertTrue(on_change["is_married"])
+        self.assertEqual(on_change["employee_type"], "permanent")
 
 
 class TestWageCalculations(unittest.TestCase):
@@ -484,6 +517,33 @@ class TestShiftReportDisplayAllocation(unittest.TestCase):
         self.assertEqual(total_work_hours, 8.5)
         self.assertEqual(standby_count, 1)
         self.assertNotIn("_allocation_shift_type_id", rows[0])
+
+    def test_payment_period_marker_marks_overlapping_chain_only(self):
+        markers = _marked_payment_windows_for_report(
+            {
+                "date": date(2026, 4, 20),
+                "start_time": "22:00",
+                "end_time": "23:00",
+                "payment_year": 2026,
+                "payment_month": 5,
+                "payment_note": "השלמה",
+            },
+            2026,
+            4,
+        )
+        daily_segments = [{
+            "date_obj": date(2026, 4, 20),
+            "chains": [
+                {"type": "work", "start_time": "16:00", "end_time": "22:00"},
+                {"type": "work", "start_time": "22:00", "end_time": "23:00"},
+            ],
+        }]
+
+        _apply_payment_period_markers_to_chains(daily_segments, markers)
+
+        self.assertNotIn("payment_period_label", daily_segments[0]["chains"][0])
+        self.assertEqual(daily_segments[0]["chains"][1]["payment_period_label"], "משולם ב-05/2026")
+        self.assertEqual(daily_segments[0]["chains"][1]["payment_period_note"], "השלמה")
 
     # def test_format_hours_minutes(self):
     #     """Test formatting minutes to HH:MM."""

@@ -56,6 +56,7 @@ from routes.export import (
 from routes.completions import (
     completions_page,
     completion_difference_report,
+    completion_impact_report,
 )
 from routes.email import (
     email_settings_page,
@@ -649,6 +650,18 @@ def completion_difference_route(
 ):
     """Generate completion differences against an archived final Gesher file."""
     return completion_difference_report(request, file_id, payment_year, payment_month)
+
+
+@app.get("/completions/impact/{work_year}/{work_month}", response_class=HTMLResponse)
+def completion_impact_route(
+    request: Request,
+    work_year: int,
+    work_month: int,
+    payment_year: int,
+    payment_month: int,
+):
+    """Show completion impact by guide and Gesher symbol."""
+    return completion_impact_report(request, work_year, work_month, payment_year, payment_month)
 
 
 # Statistics routes

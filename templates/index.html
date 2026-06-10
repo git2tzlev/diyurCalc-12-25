@@ -349,17 +349,25 @@
       });
     });
 
+    async function postSetup(force) {
+      const response = await fetch('/api/holiday-payment-setup', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({year: {{ selected_year or 0 }}, month: {{ selected_month or 0 }}, rows, force})
+      });
+      return response.json();
+    }
+
     if (saveBtn) {
       saveBtn.disabled = true;
       saveBtn.textContent = 'שומר...';
     }
     try {
-      const response = await fetch('/api/holiday-payment-setup', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({year: {{ selected_year or 0 }}, month: {{ selected_month or 0 }}, rows})
-      });
-      const data = await response.json();
+      let data = await postSetup(false);
+      if (!data.success && data.locked) {
+        if (!confirm('שים לב, החודש נעול. בכל זאת לעדכן?')) return;
+        data = await postSetup(true);
+      }
       if (!data.success) throw new Error(data.error || 'שגיאה בשמירה');
       location.reload();
     } catch (err) {

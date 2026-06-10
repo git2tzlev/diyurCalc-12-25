@@ -729,7 +729,7 @@
                 {% else %}
                 {% set rate_key = '100' %}
                 {% endif %}
-                {% set group_key = (chain.apartment_name or '-') ~ '|' ~ rate_key ~ '|' ~ (chain.shift_name or '-') ~ '|' ~ (chain.display_group_token or '') %}
+                {% set group_key = (chain.apartment_name or '-') ~ '|' ~ rate_key ~ '|' ~ (chain.shift_name or '-') ~ '|' ~ (chain.display_group_token or '') ~ '|' ~ (chain.payment_period_label or '') ~ '|' ~ (chain.payment_period_note or '') %}
 
                 {# בדיקה אם השורה האחרונה רציפה ועם אותו מפתח #}
                 {% set can_merge = false %}
@@ -792,6 +792,8 @@
                 'segments': (chain.segments or [])|list,
                 'break_reason': chain.break_reason if (chain.break_reason and chain.break_reason != 'כוננות' and
                 chain.break_reason != 'חופשה') else '',
+                'payment_period_label': chain.payment_period_label if chain.payment_period_label is defined else '',
+                'payment_period_note': chain.payment_period_note if chain.payment_period_note is defined else '',
                 'from_prev_day': chain.from_prev_day
                 } %}
                 {% set _ = ns.merged_chains.append(new_group) %}
@@ -886,7 +888,14 @@
                     %}</td>
                   {% endif %}
 
-                  <td>{% if chain.asd_night_label is defined and chain.asd_night_label %}<span style="color:#374151;font-weight:600;">{{ chain.asd_night_label }}</span>{% if chain.break_reason %} · {% endif %}{% endif %}{{ chain.break_reason or '' }}</td>
+                  <td>
+                    {% if chain.asd_night_label is defined and chain.asd_night_label %}<span style="color:#374151;font-weight:600;">{{ chain.asd_night_label }}</span>{% if chain.break_reason or chain.payment_period_label %}<br>{% endif %}{% endif %}
+                    {% if chain.break_reason %}{{ chain.break_reason }}{% if chain.payment_period_label %}<br>{% endif %}{% endif %}
+                    {% if chain.payment_period_label %}
+                    <span style="color:#92400e;font-weight:600;">{{ chain.payment_period_label }}</span>
+                    {% if chain.payment_period_note %}<br><span style="color:#6b7280;">{{ chain.payment_period_note }}</span>{% endif %}
+                    {% endif %}
+                  </td>
                 </tr>
                 {% endfor %}
                 <!-- שורת סיכום יומי -->
@@ -1179,7 +1188,7 @@
                     <br>
                     חישוב:
                     {% for detail in holiday_payment_chain_summary.payment_details %}
-                      {{ detail.count }} ימי חג × {{ "%.2f"|format(detail.hours) }} שעות × {{ "%.2f"|format(detail.rate) }} = {{ "%.2f"|format(detail.payment) }}{% if not loop.last %}; {% endif %}
+                      {{ detail.count }} ימי חג × {{ "%.2f"|format(detail.hours) }} שעות × {{ "%.2f"|format(detail.rate) }}{% if detail.standby_net %} + ({{ "%.2f"|format(detail.standby_gross) }} - {{ "%.2f"|format(detail.standby_deduction) }} = {{ "%.2f"|format(detail.standby_net) }}) כוננות{% endif %} = {{ "%.2f"|format(detail.payment) }}{% if not loop.last %}; {% endif %}
                     {% endfor %}
                     {% endif %}
                     {% if holiday_payment_chain_summary.holiday_dates %}

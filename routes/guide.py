@@ -215,7 +215,18 @@ def _build_holiday_payment_chain_summary(
         summary["calculation"] = (
             f"{summary['count']} ימי חג × {summary['rate']:.2f} ₪ = {summary['amount']:.2f} ₪"
         )
-        if minimum_wage > 0 and summary["rate"] > 0:
+        breakdown = hp_data.get("standby_breakdown") if hp_data else None
+        if breakdown:
+            summary["payment_details"].append({
+                "count": summary["count"],
+                "hours": breakdown["work_hours"],
+                "rate": breakdown["work_rate"],
+                "standby_gross": breakdown["standby_gross"],
+                "standby_deduction": breakdown["standby_deduction"],
+                "standby_net": breakdown["standby_net"],
+                "payment": summary["amount"],
+            })
+        elif minimum_wage > 0 and summary["rate"] > 0:
             summary["payment_details"].append({
                 "count": summary["count"],
                 "hours": round(summary["rate"] / round(minimum_wage, 2), 2),
@@ -386,6 +397,135 @@ def _allocation_windows_for_report(report_date: date, start_time: str, end_time:
         (report_date, start, 1920),
         (report_date + timedelta(days=1), 480, end - 1440),
     ]
+
+
+def _payment_marker_text(marker: dict) -> str:
+    payment_year = marker.get("payment_year")
+    payment_month = marker.get("payment_month")
+    if not payment_year or not payment_month:
+        return ""
+    return f"משולם ב-{int(payment_month):02d}/{int(payment_year)}"
+
+
+def _marked_payment_windows_for_report(report: dict, work_year: int, work_month: int) -> list[dict]:
+    payment_year = report.get("payment_year")
+    payment_month = report.get("payment_month")
+    if not payment_year or not payment_month:
+        return []
+    if int(payment_year) == work_year and int(payment_month) == work_month:
+        return []
+
+    report_date = report.get("date")
+    if isinstance(report_date, datetime):
+        report_date = report_date.date()
+    if not isinstance(report_date, date):
+        return []
+
+    base_marker = {
+        "payment_year": int(payment_year),
+        "payment_month": int(payment_month),
+        "payment_note": report.get("payment_note") or "",
+    }
+    start_time = report.get("start_time")
+    end_time = report.get("end_time")
+    if not start_time or not end_time:
+        marker = dict(base_marker)
+        marker.update({"day": report_date, "start": None, "end": None})
+        return [marker]
+
+    start, end = _workday_axis_interval(str(start_time), str(end_time))
+    if end <= 1920:
+        marker = dict(base_marker)
+        marker.update({"day": report_date, "start": start, "end": end})
+        return [marker]
+
+    first = dict(base_marker)
+    first.update({"day": report_date, "start": start, "end": 1920})
+    second = dict(base_marker)
+    second.update({"day": report_date + timedelta(days=1), "start": 480, "end": end - 1440})
+    return [first, second]
+
+
+def _apply_payment_period_markers_to_chains(daily_segments: list[dict], markers: list[dict]) -> None:
+    """סימון שורות רצפים שמקורן בדיווח שמשולם בחודש אחר, לתצוגה בלבד."""
+    markers_by_day: dict[date, list[dict]] = {}
+    for marker in markers:
+        marker_day = marker.get("day")
+        if isinstance(marker_day, date):
+            markers_by_day.setdefault(marker_day, []).append(marker)
+
+    for day in daily_segments:
+        day_date = day.get("date_obj")
+        if day_date is None:
+            continue
+        day_markers = markers_by_day.get(day_date, [])
+        if not day_markers:
+            continue
+
+        for chain in day.get("chains", []):
+            chain_start = chain.get("start_time")
+            chain_end = chain.get("end_time")
+            if not chain_start or not chain_end:
+                continue
+
+            chain_axis_start, chain_axis_end = _workday_axis_interval(chain_start, chain_end)
+            matched = []
+            for marker in day_markers:
+                marker_start = marker.get("start")
+                marker_end = marker.get("end")
+                if marker_start is None or marker_end is None:
+                    matched.append(marker)
+                    continue
+                if max(chain_axis_start, marker_start) < min(chain_axis_end, marker_end):
+                    matched.append(marker)
+
+            if not matched:
+                continue
+
+            labels = []
+            notes = []
+            for marker in matched:
+                label = _payment_marker_text(marker)
+                if label and label not in labels:
+                    labels.append(label)
+                note = (marker.get("payment_note") or "").strip()
+                if note and note not in notes:
+                    notes.append(note)
+
+            chain["payment_period_label"] = " | ".join(labels)
+            chain["payment_period_note"] = " | ".join(notes)
+
+
+def _load_payment_period_markers(conn, person_id: int, year: int, month: int, housing_filter: int | None) -> list[dict]:
+    params: list = [person_id, date(year, month, 1)]
+    if month == 12:
+        end_date = date(year + 1, 1, 1)
+    else:
+        end_date = date(year, month + 1, 1)
+    params.append(end_date)
+    housing_sql = ""
+    if housing_filter is not None:
+        housing_sql = " AND ap.housing_array_id = %s"
+        params.append(housing_filter)
+
+    rows = conn.execute(f"""
+        SELECT tr.date, tr.start_time, tr.end_time,
+               tr.payment_year, tr.payment_month, tr.payment_note
+        FROM time_reports tr
+        JOIN apartments ap ON ap.id = tr.apartment_id
+        WHERE tr.person_id = %s
+          AND tr.date >= %s AND tr.date < %s
+          AND tr.payment_year IS NOT NULL
+          AND tr.payment_month IS NOT NULL
+          AND (tr.payment_year != EXTRACT(YEAR FROM tr.date)::int
+               OR tr.payment_month != EXTRACT(MONTH FROM tr.date)::int)
+          {housing_sql}
+    """, tuple(params)).fetchall()
+
+    markers = []
+    for row in rows:
+        markers.extend(_marked_payment_windows_for_report(dict(row), year, month))
+    return markers
 
 
 def _chain_paid_minutes(chain: dict) -> tuple[float, float]:
@@ -883,6 +1023,11 @@ def guide_view(
             # אישור אוטומטי של נסיעות מדריך מחליף
             start_dt, end_dt = month_range_ts(selected_year, selected_month)
             auto_approve_substitute_travel(conn.conn, person_id, start_dt.date(), end_dt.date())
+
+            payment_period_markers = _load_payment_period_markers(
+                conn, person_id, selected_year, selected_month, housing_filter
+            )
+            _apply_payment_period_markers_to_chains(daily_segments, payment_period_markers)
 
         daily_segments = _prepare_daily_segments_for_display(daily_segments)
         monthly_report = prepare_guide_pdf_data(
@@ -1796,6 +1941,8 @@ def _prepare_chains_pdf_data(conn, person_id: int, year: int, month: int) -> Opt
     holiday_payment_chain_summary = _build_holiday_payment_chain_summary(
         conn, person_id, year, month, shabbat_cache, MINIMUM_WAGE, hf,
     )
+    payment_period_markers = _load_payment_period_markers(conn, person_id, year, month, hf)
+    _apply_payment_period_markers_to_chains(daily_segments, payment_period_markers)
     daily_segments = _prepare_daily_segments_for_display(daily_segments)
     monthly_report = prepare_guide_pdf_data(conn, person_id, year, month, hf)
 
@@ -2096,6 +2243,7 @@ async def save_holiday_payment_setup_api(request: Request) -> JSONResponse:
     year = int(data.get("year") or 0)
     month = int(data.get("month") or 0)
     rows = data.get("rows") or []
+    force = bool(data.get("force"))
     if year <= 0 or month < 1 or month > 12:
         return JSONResponse({"success": False, "error": "חודש או שנה לא תקינים"}, status_code=400)
     if not isinstance(rows, list):
@@ -2104,9 +2252,9 @@ async def save_holiday_payment_setup_api(request: Request) -> JSONResponse:
     housing_filter = get_housing_array_filter()
     try:
         with get_conn() as conn:
-            if is_month_locked(conn.conn, year, month):
+            if not force and is_month_locked(conn.conn, year, month):
                 return JSONResponse(
-                    {"success": False, "error": "החודש נעול לעריכה"},
+                    {"success": False, "locked": True, "error": "החודש נעול לעריכה"},
                     status_code=400,
                 )
             save_holiday_payment_setup(conn.conn, year, month, rows, housing_filter)

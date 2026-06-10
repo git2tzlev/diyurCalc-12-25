@@ -23,7 +23,8 @@ import psycopg2.extras
 
 from core.history import (
     get_apartment_type_for_month, get_person_status_for_month,
-    get_all_housing_rates_for_month, get_all_apartment_type_change_dates
+    get_all_housing_rates_for_month, get_all_apartment_type_change_dates,
+    get_all_person_statuses_for_dates,
 )
 from core.database import get_housing_array_filter
 from core.sick_days import _identify_sick_day_sequences, get_sick_payment_rate
@@ -1777,6 +1778,7 @@ def _calculate_previous_month_carryover(
 def get_daily_segments_data(
     conn, person_id: int, year: int, month: int, shabbat_cache: Dict, minimum_wage: float,
     person_status_cache: Optional[Dict[int, dict]] = None,
+    person_status_date_cache: Optional[Dict[date, dict]] = None,
     apartment_type_cache: Optional[Dict[int, int]] = None,
     housing_rates_cache: Optional[Dict] = None,
     preloaded_reports: Optional[List] = None,
@@ -1792,6 +1794,7 @@ def get_daily_segments_data(
 
     Optional cache parameters for batch optimization:
     - person_status_cache: dict mapping person_id to status dict
+    - person_status_date_cache: dict mapping report date to status dict
     - apartment_type_cache: dict mapping apartment_id to apartment_type_id
     - housing_rates_cache: dict mapping (shift_type_id, housing_array_id) to rate info
     - preloaded_reports: pre-fetched reports for this person (skips DB query)
@@ -1891,6 +1894,16 @@ def get_daily_segments_data(
         historical_person = get_person_status_for_month(conn, person_id, year, month)
     historical_is_married = historical_person.get("is_married")
 
+    if person_status_date_cache is None:
+        report_dates = sorted({
+            r["date"].date() if hasattr(r["date"], "date") else r["date"]
+            for r in reports
+            if r.get("date")
+        })
+        person_status_date_cache = get_all_person_statuses_for_dates(
+            conn, [person_id], report_dates
+        ).get(person_id, {})
+
     # Build housing rates cache - use provided or fetch (with historical support)
     if housing_rates_cache is None:
         housing_rates_cache = get_all_housing_rates_for_month(conn, year, month)
@@ -1987,8 +2000,15 @@ def get_daily_segments_data(
                 r_dict["apartment_type_id"] = apartment_type_cache[apt_id]
         
         # Override is_married
-        if historical_is_married is not None:
-            r_dict["is_married"] = historical_is_married
+        report_date = r_dict.get("date")
+        if hasattr(report_date, "date"):
+            report_date = report_date.date()
+        report_status = person_status_date_cache.get(report_date, historical_person)
+        report_is_married = report_status.get("is_married")
+        if report_is_married is not None:
+            r_dict["is_married"] = report_is_married
+        r_dict["employee_type"] = report_status.get("employee_type")
+        r_dict["employer_id"] = report_status.get("employer_id")
 
         # Add apartment type change date
         apt_id = r_dict.get("apartment_id")
@@ -2007,6 +2027,7 @@ def get_daily_segments_data(
     sick_day_sequence = _identify_sick_day_sequences(reports, prev_month_sick_dates)
 
     # תוספת ותק ASD: +3₪ למדריך קבוע עם שנה+ ותק
+    # ברירת המחדל נשארת חודשית, אך בכל דיווח נחשב לפי הסטטוס בתאריך הדיווח.
     employee_type = historical_person.get("employee_type")
     person_start_date_row = conn.execute(
         "SELECT start_date FROM people WHERE id = %s", (person_id,)
@@ -2035,8 +2056,13 @@ def get_daily_segments_data(
             if rate_key not in shift_rates:
                 # תוספת ותק ASD: הזרקה לחישוב התעריף (חלה רק כש-fallback לשכר מינימום)
                 effective_supplement = r.get("hourly_wage_supplement") or 0
-                if asd_seniority_bonus and is_asd_housing_array(housing_array_id):
-                    effective_supplement += asd_seniority_bonus
+                report_asd_seniority_bonus = _get_asd_seniority_supplement(
+                    r.get("employee_type") or employee_type,
+                    person_start_date_row["start_date"] if person_start_date_row else None,
+                    year, month,
+                )
+                if report_asd_seniority_bonus and is_asd_housing_array(housing_array_id):
+                    effective_supplement += report_asd_seniority_bonus
                 rate_report = dict(r)
                 rate_report["hourly_wage_supplement"] = effective_supplement
                 weekday_rate = get_effective_hourly_rate(
@@ -2050,8 +2076,8 @@ def get_daily_segments_data(
                     "shabbat": shabbat_rate,
                     "supplement": effective_supplement,
                     "apartment_supplement": r.get("hourly_wage_supplement") or 0,
-                    "asd_seniority_supplement": asd_seniority_bonus if (
-                        asd_seniority_bonus and is_asd_housing_array(housing_array_id)
+                    "asd_seniority_supplement": report_asd_seniority_bonus if (
+                        report_asd_seniority_bonus and is_asd_housing_array(housing_array_id)
                     ) else 0,
                 }
             if shift_id not in shift_names_map:

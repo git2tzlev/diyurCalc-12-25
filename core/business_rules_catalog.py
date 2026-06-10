@@ -395,12 +395,13 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
             ),
             BusinessRule(
                 title="סטטוס מדריך היסטורי",
-                summary="נישואין, מעסיק וסוג עובד נקבעים לפי היסטוריה חודשית, ורק אם אין היסטוריה משתמשים בערך הנוכחי.",
+                summary="נישואין, מעסיק וסוג עובד נקבעים לפי תאריך הדיווח/החג כאשר קיים effective_date, אחרת לפי היסטוריה חודשית.",
                 details=(
-                    "רשומת היסטוריה נשמרת כ'תקף עד החודש הזה, לא כולל'.",
-                    "הכלל משפיע על תעריפי נשוי/רווק, על קוד מפעל בגשר ועל זכאות של קבוע/מחליף.",
+                    "רשומת היסטוריה שומרת את הערך הישן שהיה תקף עד תאריך השינוי; ביום effective_date עצמו כבר משתמשים בערך הנוכחי מטבלת people.",
+                    "כאשר אין effective_date, year/month נשארים fallback חודשי בשיטת 'תקף עד החודש הזה, לא כולל'.",
+                    "הכלל משפיע על תעריפי נשוי/רווק, תוספת ותק ASD, קוד מפעל/סוג עובד, וזכאות קבוע/מחליף לתשלום חג.",
                 ),
-                source=("core/history.py:get_person_status_for_month", "core/history.py:get_all_person_statuses_for_month"),
+                source=("core/history.py:get_person_status_for_date", "core/history.py:get_all_person_statuses_for_dates", "app_utils.py:get_daily_segments_data", "core/holiday_payment.py:calculate_holiday_payments"),
                 tags=("סטטוס עובד", "קבוע", "מחליף"),
             ),
             BusinessRule(

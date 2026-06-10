@@ -17,6 +17,7 @@ from core.database import (
 from core.payment_period import get_payment_period_completions
 from services.gesher_archive import get_gesher_export_file, list_gesher_export_files
 from services.gesher_difference import (
+    build_completion_impact_rows,
     build_current_gesher_lines,
     build_difference_excel,
     compare_line_sets,
@@ -93,6 +94,76 @@ def _file_person_ids(file_row: dict) -> Optional[set[int]]:
     if not person_ids:
         return None
     return {int(person_id) for person_id in person_ids if person_id}
+
+
+def _group_impact_by_person(diffs: list[dict]) -> list[dict]:
+    groups_by_key = {}
+    for diff in diffs:
+        key = (
+            diff.get("person_name") or "",
+            diff.get("employee_code") or "",
+        )
+        if key not in groups_by_key:
+            groups_by_key[key] = {
+                "person_name": key[0],
+                "employee_code": key[1],
+                "amount_diff": 0.0,
+                "rows": [],
+            }
+        groups_by_key[key]["rows"].append(diff)
+        groups_by_key[key]["amount_diff"] = round(
+            groups_by_key[key]["amount_diff"] + float(diff.get("amount_diff") or 0),
+            2,
+        )
+    return sorted(
+        groups_by_key.values(),
+        key=lambda group: (group["person_name"], group["employee_code"]),
+    )
+
+
+def completion_impact_report(
+    request: Request,
+    work_year: int,
+    work_month: int,
+    payment_year: int,
+    payment_month: int,
+) -> HTMLResponse:
+    """Show Gesher symbol impact of marked completions without requiring an archive file."""
+    housing_filter = get_housing_array_filter()
+    with get_conn() as conn:
+        completion_data = get_payment_period_completions(
+            conn, payment_year, payment_month, housing_array_id=housing_filter
+        )
+        report_ids, component_ids, completion_items = _completion_ids_for_work_month(
+            completion_data, work_year, work_month
+        )
+        before_lines = build_current_gesher_lines(
+            conn,
+            work_year,
+            work_month,
+            company_code=None,
+            excluded_time_report_ids=report_ids,
+            excluded_payment_component_ids=component_ids,
+        )
+        after_lines = build_current_gesher_lines(
+            conn,
+            work_year,
+            work_month,
+            company_code=None,
+        )
+        diffs = build_completion_impact_rows(before_lines, after_lines)
+
+    return templates.TemplateResponse("completions_impact.html", {
+        "request": request,
+        "work_year": work_year,
+        "work_month": work_month,
+        "payment_year": payment_year,
+        "payment_month": payment_month,
+        "completions": completion_items,
+        "groups": _group_impact_by_person(diffs),
+        "total_diffs": len(diffs),
+        "total_amount_diff": round(sum(float(diff.get("amount_diff") or 0) for diff in diffs), 2),
+    })
 
 
 def completion_difference_report(

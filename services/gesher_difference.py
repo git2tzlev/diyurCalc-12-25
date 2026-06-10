@@ -241,6 +241,80 @@ def compare_line_sets(
     return diffs
 
 
+def build_completion_impact_rows(
+    before_lines: list[dict[str, Any]],
+    after_lines: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Compare completion impact by employee and Gesher symbol."""
+
+    def aggregate_for_impact(lines: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, Any]]:
+        grouped: dict[tuple[str, str], dict[str, Any]] = {}
+        for line in lines:
+            key = (line["employee_code"], line["symbol"])
+            if key not in grouped:
+                grouped[key] = dict(line)
+                grouped[key]["quantity"] = 0.0
+                grouped[key]["amount"] = 0.0
+                grouped[key]["rates"] = set()
+            grouped[key]["quantity"] = round(grouped[key]["quantity"] + float(line.get("quantity") or 0), 2)
+            grouped[key]["amount"] = round(grouped[key]["amount"] + float(line.get("amount") or 0), 2)
+            grouped[key]["rates"].add(round(float(line.get("rate") or 0), 2))
+        return grouped
+
+    def format_rates(rates: set[float]) -> str:
+        return ", ".join(f"{rate:.2f}" for rate in sorted(rates))
+
+    before = aggregate_for_impact(before_lines)
+    after = aggregate_for_impact(after_lines)
+    rows = []
+    for key in sorted(set(before) | set(after)):
+        old = before.get(key)
+        new = after.get(key)
+        row = dict(new or old or {})
+        before_quantity = float(old.get("quantity") if old else 0)
+        before_amount = float(old.get("amount") if old else 0)
+        after_quantity = float(new.get("quantity") if new else 0)
+        after_amount = float(new.get("amount") if new else 0)
+        quantity_diff = round(after_quantity - before_quantity, 2)
+        amount_diff = round(after_amount - before_amount, 2)
+        if abs(quantity_diff) < QUANTITY_EPSILON and abs(amount_diff) < MONEY_EPSILON:
+            continue
+
+        before_rates = old.get("rates", set()) if old else set()
+        after_rates = new.get("rates", set()) if new else set()
+        before_rate_label = format_rates(before_rates)
+        after_rate_label = format_rates(after_rates)
+        rate_label = before_rate_label
+        if before_rate_label != after_rate_label:
+            rate_label = f"{before_rate_label or '0.00'} -> {after_rate_label or '0.00'}"
+
+        if old is None:
+            diff_type = "שורה נוספה"
+        elif new is None:
+            diff_type = "שורה ירדה"
+        elif before_rates != after_rates:
+            diff_type = "תעריף השתנה"
+        elif abs(quantity_diff) >= QUANTITY_EPSILON:
+            diff_type = "כמות השתנתה"
+        else:
+            diff_type = "סכום השתנה"
+
+        row.update({
+            "rate": next(iter(after_rates or before_rates or {0.0})),
+            "rate_label": rate_label,
+            "before_quantity": round(before_quantity, 2),
+            "before_amount": round(before_amount, 2),
+            "after_quantity": round(after_quantity, 2),
+            "after_amount": round(after_amount, 2),
+            "quantity_diff": quantity_diff,
+            "amount_diff": amount_diff,
+            "diff_type": diff_type,
+        })
+        row.pop("rates", None)
+        rows.append(row)
+    return rows
+
+
 def _diffs_to_rows(diffs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows = []
     for diff in diffs:

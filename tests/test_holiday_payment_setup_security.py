@@ -53,6 +53,21 @@ class TestHolidayPaymentSetupSecurity(unittest.TestCase):
         self.assertIn("נעול", payload["error"])
         mock_save.assert_not_called()
 
+    def test_save_holiday_payment_setup_allowed_when_locked_and_forced(self):
+        request = _FakeRequest({"year": 2026, "month": 4, "rows": [], "force": True})
+
+        with patch.object(guide_routes, "get_conn", return_value=_FakeConnectionManager(_FakeConnection())), \
+             patch.object(guide_routes, "get_housing_array_filter", return_value=None), \
+             patch("core.history.is_month_locked", return_value=True) as mock_locked, \
+             patch.object(guide_routes, "save_holiday_payment_setup") as mock_save:
+            response = asyncio.run(guide_routes.save_holiday_payment_setup_api(request))
+
+        payload = json.loads(response.body.decode("utf-8"))
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(payload["success"])
+        mock_save.assert_called_once()
+        mock_locked.assert_not_called()
+
     def test_save_holiday_payment_setup_allowed_when_month_open(self):
         request = _FakeRequest({"year": 2026, "month": 4, "rows": []})
 

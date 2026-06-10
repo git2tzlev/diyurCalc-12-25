@@ -447,6 +447,29 @@ def _get_special_absence_shift_id(apartment_type_id: int | None) -> int | None:
     return None
 
 
+def _empty_special_breakdown() -> Dict[str, float]:
+    """פירוק ריק לתשלום חג מיוחד (כשאין סוג משמרת מתאים)."""
+    return {
+        "total": 0.0, "work_hours": 0.0, "work_rate": 0.0, "work_pay": 0.0,
+        "standby_gross": 0.0, "standby_deduction": 0.0, "standby_net": 0.0,
+    }
+
+
+def _scale_special_breakdown(breakdown: Dict[str, float], factor: float) -> Dict[str, float]:
+    """הקטנת פירוק תשלום חג מיוחד לפי מקדם (חצי משמרת ל-2+ מדריכים שאינם ASD)."""
+    if factor == 1.0:
+        return dict(breakdown)
+    return {
+        "total": round(breakdown["total"] * factor, 2),
+        "work_hours": round(breakdown["work_hours"] * factor, 2),
+        "work_rate": breakdown["work_rate"],
+        "work_pay": round(breakdown["work_pay"] * factor, 2),
+        "standby_gross": round(breakdown["standby_gross"] * factor, 2),
+        "standby_deduction": round(breakdown["standby_deduction"] * factor, 2),
+        "standby_net": round(breakdown["standby_net"] * factor, 2),
+    }
+
+
 def _calculate_special_holiday_day_pay(
     conn,
     *,
@@ -458,11 +481,17 @@ def _calculate_special_holiday_day_pay(
     month: int,
     apartment_id: int | None = None,
     apartment_housing_map: Dict[int, int | None] | None = None,
-) -> float:
-    """תשלום חג מיוחד לסוגי דירה כלניות/בראשית: עבודה + כוננות פחות 70."""
+) -> Dict[str, float]:
+    """
+    תשלום חג מיוחד לסוגי דירה כלניות/בראשית: עבודה + כוננות פחות 70.
+
+    Returns:
+        פירוק התשלום: total, work_hours, work_rate, work_pay,
+        standby_gross, standby_deduction, standby_net
+    """
     shift_type_id = _get_special_absence_shift_id(apartment_type_id)
     if shift_type_id is None:
-        return 0.0
+        return _empty_special_breakdown()
 
     from app_utils import (
         _fetch_weekday_overrides_for_month,
@@ -487,12 +516,17 @@ def _calculate_special_holiday_day_pay(
         segments = _get_shift_segments(conn, shift_type_id)
 
     housing_rates_cache = get_all_housing_rates_for_month(conn, year, month)
-    total = 0.0
+    work_minutes = 0
+    work_pay = 0.0
+    work_rate = round(minimum_wage, 2)
+    standby_gross = 0.0
+    standby_net = 0.0
     for seg in segments:
         start, end = span_minutes(seg["start_time"], seg["end_time"])
-        pay, _paid_minutes, _rate = _calculate_special_absence_segment_payment(
+        segment_type = seg.get("segment_type") or "work"
+        pay, _paid_minutes, rate = _calculate_special_absence_segment_payment(
             conn,
-            segment_type=seg.get("segment_type") or "work",
+            segment_type=segment_type,
             duration=end - start,
             shift_type_id=shift_type_id,
             segment_id=seg.get("id"),
@@ -504,8 +538,22 @@ def _calculate_special_holiday_day_pay(
             month=month,
             housing_rates_cache=housing_rates_cache,
         )
-        total += pay
-    return round(total, 2)
+        if segment_type == "standby":
+            standby_gross += rate
+            standby_net += pay
+        else:
+            work_minutes += end - start
+            work_pay += pay
+            work_rate = round(rate, 2)
+    return {
+        "total": round(work_pay + standby_net, 2),
+        "work_hours": round(work_minutes / 60, 2),
+        "work_rate": work_rate,
+        "work_pay": round(work_pay, 2),
+        "standby_gross": round(standby_gross, 2),
+        "standby_deduction": round(standby_gross - standby_net, 2),
+        "standby_net": round(standby_net, 2),
+    }
 
 
 def get_holiday_dates_in_month(
@@ -806,6 +854,50 @@ def calculate_holiday_payments(
     except Exception as exc:
         logger.debug("Could not load holiday payment assignments: %s", exc)
 
+    assigned_person_ids: Set[int] = set()
+    if saved_assignments:
+        for row in saved_assignments.values():
+            assigned_person_ids.update(
+                gid for gid in (row.get("guide_1_id"), row.get("guide_2_id"), row.get("guide_3_id"))
+                if gid
+            )
+
+    person_status_by_date: dict[int, dict[date, dict]] = {}
+    status_dates = set(holiday_dates)
+    status_person_ids = set(assigned_person_ids)
+    for report in all_reports:
+        pid = report.get("person_id")
+        report_date = report.get("date")
+        if pid:
+            status_person_ids.add(pid)
+        if report_date:
+            if hasattr(report_date, "date"):
+                report_date = report_date.date()
+            status_dates.add(report_date)
+    if status_person_ids and status_dates:
+        try:
+            from core.history import get_all_person_statuses_for_dates
+            person_status_by_date = get_all_person_statuses_for_dates(
+                conn,
+                list(status_person_ids),
+                list(status_dates),
+            )
+        except Exception as exc:
+            logger.debug("Could not load dated person statuses for holiday payment: %s", exc)
+
+    def _person_type_on(person_id: int, target_date: date) -> str | None:
+        return (
+            person_status_by_date.get(person_id, {})
+            .get(target_date, {})
+            .get("employee_type", person_types.get(person_id))
+        )
+
+    def _person_is_married_on(person_id: int, target_date: date) -> bool:
+        status = person_status_by_date.get(person_id, {}).get(target_date, {})
+        if status.get("is_married") is not None:
+            return bool(status["is_married"])
+        return bool(person_is_married.get(person_id))
+
     # בניית מיפויים
     # {apartment_id: set of permanent person_ids who worked this month}
     apt_permanent_guides: Dict[int, Set[int]] = {}
@@ -838,8 +930,8 @@ def calculate_holiday_payments(
         if apartment_id not in apartment_type_map:
             apartment_type_map[apartment_id] = r.get("rate_apartment_type_id") or r.get("apartment_type_id")
 
-        # רק מדריכים קבועים
-        if person_types.get(person_id) != PERMANENT_EMPLOYEE_TYPE:
+        # רק מדריכים שהיו קבועים בתאריך הדיווח עצמו
+        if _person_type_on(person_id, report_date) != PERMANENT_EMPLOYEE_TYPE:
             continue
 
         # מיפוי: קבועים שעבדו בדירה החודש
@@ -866,7 +958,6 @@ def calculate_holiday_payments(
     unpaid_slot_by_apartment: Dict[int, bool] = {}
     if saved_assignments:
         assigned_guides: Dict[int, Set[int]] = {}
-        assigned_person_ids: Set[int] = set()
         for apartment_id, row in saved_assignments.items():
             guide_ids = {
                 gid for gid in (row.get("guide_1_id"), row.get("guide_2_id"), row.get("guide_3_id"))
@@ -876,7 +967,6 @@ def calculate_holiday_payments(
             unpaid_slot_by_apartment[apartment_id] = bool(
                 row.get("guide_1_id") and row.get("guide_2_no_holiday_payment")
             )
-            assigned_person_ids.update(guide_ids)
 
         missing_people = [
             pid for pid in assigned_person_ids
@@ -900,10 +990,7 @@ def calculate_holiday_payments(
         # דירה בלי שורה שמורה ממשיכה להשתמש בזיהוי אוטומטי לפי דיווחים.
         # דירה עם שורה שמורה ושני שדות ריקים לא תשלם חג.
         for apartment_id, guide_ids in assigned_guides.items():
-            apt_permanent_guides[apartment_id] = {
-                pid for pid in guide_ids
-                if person_types.get(pid) == PERMANENT_EMPLOYEE_TYPE
-            }
+            apt_permanent_guides[apartment_id] = set(guide_ids)
 
         missing_apartment_ids = [
             apt_id for apt_id in apt_permanent_guides
@@ -934,50 +1021,61 @@ def calculate_holiday_payments(
     result: Dict[int, dict] = {}
 
     for apartment_id, permanent_guides in apt_permanent_guides.items():
-        num_permanent = len(permanent_guides) + (1 if unpaid_slot_by_apartment.get(apartment_id) else 0)
-        if num_permanent == 0:
-            continue
-
         work_minutes = apt_work_minutes.get(apartment_id, 480)
         apartment_type_id = apartment_type_map.get(apartment_id)
         full_shift_pay = round(work_minutes / 60, 2) * round(minimum_wage, 2)
         half_shift_pay = round(work_minutes / 2 / 60, 2) * round(minimum_wage, 2)
 
         for holiday_date in holiday_dates:
+            permanent_guides_on_date = {
+                person_id for person_id in permanent_guides
+                if _person_type_on(person_id, holiday_date) == PERMANENT_EMPLOYEE_TYPE
+            }
+            num_permanent = len(permanent_guides_on_date) + (1 if unpaid_slot_by_apartment.get(apartment_id) else 0)
+            if num_permanent == 0:
+                continue
+
             workers_on_holiday = (
                 person_holiday_workers.get(holiday_date, set())
                 if _uses_global_holiday_work_exclusion(year, month)
                 else apt_holiday_workers.get((apartment_id, holiday_date), set())
             )
-            eligible = permanent_guides - workers_on_holiday
+            eligible = permanent_guides_on_date - workers_on_holiday
 
             if not eligible:
                 continue
 
             # מערך דיור ASD → תמיד משמרת שלמה
             is_asd = is_asd_housing_array(apartment_housing_map.get(apartment_id))
-            pay = full_shift_pay if num_permanent == 1 or is_asd else half_shift_pay
+            is_full_shift = num_permanent == 1 or is_asd
+            pay = full_shift_pay if is_full_shift else half_shift_pay
 
             for person_id in eligible:
                 if not _has_sufficient_seniority(
                     person_start_dates.get(person_id), year, month,
                 ):
                     continue
+                day_breakdown = None
                 if apartment_type_id in SPECIAL_ABSENCE_PAYMENT_APT_TYPES:
-                    special_full_pay = _calculate_special_holiday_day_pay(
+                    full_breakdown = _calculate_special_holiday_day_pay(
                         conn,
                         apartment_type_id=apartment_type_id,
                         housing_array_id=apartment_housing_map.get(apartment_id),
-                        is_married=bool(person_is_married.get(person_id)),
+                        is_married=_person_is_married_on(person_id, holiday_date),
                         minimum_wage=minimum_wage,
                         year=year,
                         month=month,
                         apartment_id=apartment_id,
                         apartment_housing_map=apartment_housing_map,
                     )
-                    pay = special_full_pay if num_permanent == 1 or is_asd else round(special_full_pay / 2, 2)
+                    day_breakdown = _scale_special_breakdown(
+                        full_breakdown, 1.0 if is_full_shift else 0.5
+                    )
+                    pay = day_breakdown["total"]
                 if person_id not in result:
                     result[person_id] = {"amount": 0.0, "count": 0, "rate": pay, "details": []}
+                    if day_breakdown:
+                        result[person_id]["standby_breakdown"] = day_breakdown
                 result[person_id]["amount"] += pay
                 result[person_id]["count"] += 1
                 result[person_id]["details"].append({
