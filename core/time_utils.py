@@ -361,3 +361,31 @@ def classify_day_type(day_date: date, shabbat_cache: Dict[str, Dict[str, str]]) 
     if yesterday_enter > 0:
         return "holy"  # אתמול היה חג = היום יום ביניים (חג)
     return "eve"
+
+
+def calculate_seniority_months(
+    start_date: date | datetime | None, year: int, month: int,
+) -> int | None:
+    """
+    חישוב ותק בחודשים קלנדריים שלמים נכון ל-1 בחודש הנתון.
+
+    זהו החישוב היחיד לוותק במערכת - גם זכאות תשלום חג וגם התצוגה
+    בטבלת המדריכים משתמשות בו. חודש נספר רק אם המדריך התחיל
+    עד ה-1 בו (התחלה באמצע חודש לא נספרת כחודש מלא).
+
+    Args:
+        start_date: תאריך תחילת עבודה (date או datetime)
+        year: שנת הייחוס
+        month: חודש הייחוס (הוותק נמדד עד ה-1 בחודש זה)
+
+    Returns:
+        מספר חודשי ותק שלמים (0 ומעלה), או None אם אין תאריך התחלה
+    """
+    if start_date is None:
+        return None
+    if isinstance(start_date, datetime):
+        start_date = start_date.date()
+    months = (year * 12 + month) - (start_date.year * 12 + start_date.month)
+    if start_date.day > 1:
+        months -= 1
+    return max(months, 0)

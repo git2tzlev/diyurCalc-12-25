@@ -15,9 +15,9 @@ from core.config import config
 from core.database import get_conn, get_housing_array_filter, get_default_period, get_multi_housing_guides
 from core.logic import get_active_guides
 from core.report_presence import get_report_overlap_counts, get_report_presence_counts
-from core.time_utils import get_shabbat_times_cache
+from core.time_utils import calculate_seniority_months, get_shabbat_times_cache
 from core.holiday_payment import get_holiday_payment_setup
-from utils.utils import month_range_ts, available_months_from_db, format_currency, human_date
+from utils.utils import month_range_ts, available_months_from_db, format_currency, format_seniority_months, human_date
 
 logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory=str(config.TEMPLATES_DIR))
@@ -102,10 +102,11 @@ def home(
             )
         logger.info(f"Counts query took: {time.time() - counts_start:.4f}s")
 
-    # Calculate seniority years for each guide
-    reference_date = datetime.now(config.LOCAL_TZ).date()
+    # ותק בחודשים קלנדריים - אותו חישוב כמו זכאות תשלום חג (calculate_seniority_months)
+    now_local = datetime.now(config.LOCAL_TZ)
+    ref_year, ref_month = now_local.year, now_local.month
     if selected_year and selected_month:
-        reference_date = datetime(selected_year, selected_month, 1, tzinfo=config.LOCAL_TZ).date()
+        ref_year, ref_month = selected_year, selected_month
 
     allowed_types = {"permanent", "substitute"}
     guides_filtered = []
@@ -122,8 +123,7 @@ def home(
             if counts.get(g["id"], 0) < 1 and g["id"] not in has_payment_components:
                 continue
 
-        # Calculate seniority years
-        seniority_years = None
+        seniority_months = None
         if g.get("start_date"):
             try:
                 # Handle datetime, date objects (from psycopg2) and timestamp (int/float)
@@ -134,16 +134,13 @@ def home(
                 else:
                     # Assume it's a timestamp
                     start_dt = datetime.fromtimestamp(g["start_date"], config.LOCAL_TZ).date()
-                diff = reference_date - start_dt
-                seniority_years = diff.days / 365.25
-                if seniority_years < 0:
-                    seniority_years = 0
+                seniority_months = calculate_seniority_months(start_dt, ref_year, ref_month)
             except Exception as e:
                 logger.warning(f"Error calculating seniority for guide {g.get('id')} ({g.get('name')}): {e}, start_date type: {type(g.get('start_date'))}, value: {g.get('start_date')}")
-                seniority_years = None
 
         guide_dict = dict(g)
-        guide_dict["seniority_years"] = seniority_years
+        guide_dict["seniority_months"] = seniority_months
+        guide_dict["seniority_display"] = format_seniority_months(seniority_months)
         guides_filtered.append(guide_dict)
 
     render_start = time.time()

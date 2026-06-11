@@ -268,6 +268,30 @@ def format_currency_total(value: float | int | None) -> str:
     return f"{float(value):,.2f}"
 
 
+def format_seniority_months(months: int | None) -> str:
+    """
+    תצוגה קריאה של ותק מתוך מספר חודשים שלמים.
+
+    דוגמאות: 0 -> 'פחות מחודש', 8 -> '8 חודשים', 20 -> 'שנה ו-8 חודשים'
+    """
+    if months is None:
+        return "-"
+    if months == 0:
+        return "פחות מחודש"
+    years, rem = divmod(months, 12)
+    month_words = {1: "חודש", 2: "חודשיים"}
+    months_text = month_words.get(rem, f"{rem} חודשים")
+    if years == 0:
+        return months_text
+    year_words = {1: "שנה", 2: "שנתיים"}
+    years_text = year_words.get(years, f"{years} שנים")
+    if rem == 0:
+        return years_text
+    if rem in month_words:
+        return f"{years_text} ו{months_text}"
+    return f"{years_text} ו-{rem} חודשים"
+
+
 def human_date(ts: int | datetime | date | None) -> str:
     """Format epoch seconds, datetime, or date to dd/mm/yyyy in local timezone."""
     if ts is None:

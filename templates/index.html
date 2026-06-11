@@ -75,7 +75,7 @@
       <tr>
         <th class="sortable" data-sort="name" data-type="text">שם <span class="sort-indicator">⇅</span></th>
         <th class="sortable" data-sort="type" data-type="text">סוג <span class="sort-indicator">⇅</span></th>
-        <th class="sortable" data-sort="seniority" data-type="number">ותק (שנים) <span class="sort-indicator">⇅</span></th>
+        <th class="sortable" data-sort="seniority" data-type="number">ותק (חודשים) <span class="sort-indicator">⇅</span></th>
         <th class="sortable" data-sort="shifts" data-type="number">סה\"כ משמרות בחודש <span class="sort-indicator">⇅</span></th>
         <th class="sortable" data-sort="alerts" data-type="number">התראות <span class="sort-indicator">⇅</span></th>
         <th class="sortable" data-sort="notes" data-type="number">הערות <span class="sort-indicator">⇅</span></th>
@@ -98,9 +98,10 @@
           {% elif g['type'] == 'substitute' %}מחליף
           {% else %}{{ g['type'] or '-' }}{% endif %}
         </td>
-        <td data-sort-value="{{ g.get('seniority_years', '') if g.get('seniority_years') is not none else '' }}">
-          {% if g.get('seniority_years') is not none %}
-            {{ "%.1f"|format(g['seniority_years']) }}
+        <td data-sort-value="{{ g.get('seniority_months', '') if g.get('seniority_months') is not none else '' }}"
+            {% if g.get('seniority_months') is not none %}title="{{ g['seniority_display'] }}" style="cursor: help;"{% endif %}>
+          {% if g.get('seniority_months') is not none %}
+            {{ g['seniority_months'] }}
           {% else %}
             -
           {% endif %}

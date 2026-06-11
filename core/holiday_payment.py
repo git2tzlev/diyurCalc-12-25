@@ -26,7 +26,7 @@ from core.constants import (
     WEEKDAY_SHIFT_TYPE_ID,
     is_asd_housing_array,
 )
-from core.time_utils import span_minutes
+from core.time_utils import calculate_seniority_months, span_minutes
 
 logger = logging.getLogger(__name__)
 
@@ -788,17 +788,8 @@ def _has_sufficient_seniority(
     start_date: date | None, year: int, month: int,
 ) -> bool:
     """בדיקה שלמדריך יש ותק של 3+ חודשים נכון לתחילת חודש הדיווח."""
-    if start_date is None:
-        return False
-    if hasattr(start_date, "date"):
-        start_date = start_date.date()
-    ref_month = month - HOLIDAY_PAY_MIN_SENIORITY_MONTHS
-    ref_year = year
-    if ref_month <= 0:
-        ref_month += 12
-        ref_year -= 1
-    cutoff = date(ref_year, ref_month, 1)
-    return start_date <= cutoff
+    months = calculate_seniority_months(start_date, year, month)
+    return months is not None and months >= HOLIDAY_PAY_MIN_SENIORITY_MONTHS
 
 
 def _uses_global_holiday_work_exclusion(year: int, month: int) -> bool:
