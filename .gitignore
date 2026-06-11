@@ -15,8 +15,12 @@ _audit_snapshots/
 
 # Generated investigation/export artifacts
 *.pdf
-*.mrv
+*.mrv*
 *.xlsx
+
+# Payroll data with employee PII - never commit
+CSV/
+compare_*.csv
 t.txt
 scripts/tmp_names.txt
 scripts/payslip_page_*.png
