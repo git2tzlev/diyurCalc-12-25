@@ -1,7 +1,10 @@
 """Retroactive completion views and difference reports."""
 from __future__ import annotations
 
+from collections import defaultdict
+from io import BytesIO
 from typing import Optional
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
@@ -308,12 +311,43 @@ def completion_gesher_file_report(
             all_diffs.extend(build_completion_impact_rows(before_lines, after_lines))
 
         rows = build_completion_gesher_rows(all_diffs)
-        content = build_completion_gesher_file(rows, payment_year, payment_month)
+        rows_by_company = defaultdict(list)
+        for row in rows:
+            rows_by_company[row.get("employer_code") or "001"].append(row)
 
-    filename = f"completion_gesher_differences_{payment_year}_{payment_month:02d}.mrv"
+    if len(rows_by_company) <= 1:
+        company_code = next(iter(rows_by_company), "001")
+        content = build_completion_gesher_file(
+            rows_by_company.get(company_code, []),
+            payment_year,
+            payment_month,
+            company_code=company_code,
+        )
+        filename = f"completion_gesher_differences_{company_code}_{payment_year}_{payment_month:02d}.mrv"
+        return Response(
+            content=content.encode("ascii", errors="replace"),
+            media_type="application/octet-stream",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+
+    zip_buffer = BytesIO()
+    with ZipFile(zip_buffer, "w", compression=ZIP_DEFLATED) as zip_file:
+        for company_code, company_rows in sorted(rows_by_company.items()):
+            content = build_completion_gesher_file(
+                company_rows,
+                payment_year,
+                payment_month,
+                company_code=company_code,
+            )
+            zip_file.writestr(
+                f"completion_gesher_differences_{company_code}_{payment_year}_{payment_month:02d}.mrv",
+                content.encode("ascii", errors="replace"),
+            )
+    zip_buffer.seek(0)
+    filename = f"completion_gesher_differences_{payment_year}_{payment_month:02d}.zip"
     return Response(
-        content=content.encode("ascii", errors="replace"),
-        media_type="application/octet-stream",
+        content=zip_buffer.getvalue(),
+        media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
 

@@ -172,6 +172,7 @@ def build_current_gesher_lines(
                 "employee_code": employee_code,
                 "person_id": person_data.get("person_id"),
                 "person_name": person_data.get("name", ""),
+                "employer_code": person_meta.get("employer_code") or "001",
                 "symbol": symbol,
                 "internal_key": internal_key,
                 "display_name": display_name,
@@ -218,9 +219,11 @@ def build_completion_gesher_rows(diffs: list[dict[str, Any]]) -> list[dict[str, 
         if not employee_code:
             continue
 
-        key = (employee_code, target_symbol)
+        employer_code = str(diff.get("employer_code") or "001").strip() or "001"
+        key = (employer_code, employee_code, target_symbol)
         if key not in grouped:
             grouped[key] = {
+                "employer_code": employer_code,
                 "employee_code": employee_code,
                 "person_id": diff.get("person_id"),
                 "person_name": diff.get("person_name", ""),

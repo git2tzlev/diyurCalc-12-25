@@ -76,6 +76,49 @@ class TestGesherExportPreview(unittest.TestCase):
         self.assertEqual(line["quantity"], 8.0)
         self.assertEqual(line["payment"], 34.40)
 
+    @patch("core.logic.calculate_monthly_summary")
+    @patch.object(gesher_exporter, "get_minimum_wage", return_value=35.40)
+    @patch.object(
+        gesher_exporter,
+        "get_export_options",
+        return_value={"export_zero_values": False, "min_amount": 0.01},
+    )
+    @patch.object(gesher_exporter, "load_export_config", return_value={"254": ("holiday_payment", "money")})
+    @patch.object(gesher_exporter, "load_export_config_from_db", return_value={})
+    def test_single_person_export_uses_monthly_summary_with_holiday_payment(
+        self,
+        _mock_db_config,
+        _mock_file_config,
+        _mock_options,
+        _mock_minimum_wage,
+        mock_monthly_summary,
+    ):
+        class _Result:
+            def fetchone(self):
+                return {"id": 10, "name": "מדריך חג", "meirav_code": "1234", "employer_code": "001"}
+
+        class _Conn:
+            def execute(self, _query, _params=None):
+                return _Result()
+
+        mock_monthly_summary.return_value = (
+            [
+                {
+                    "person_id": 10,
+                    "totals": {"holiday_payment": 247.80},
+                }
+            ],
+            {},
+        )
+
+        content, company = gesher_exporter.generate_gesher_file_for_person(
+            _Conn(), person_id=10, year=2026, month=5
+        )
+
+        self.assertEqual(company, "001")
+        self.assertIn("001 26 05", content)
+        self.assertIn("001234 254 0000.00 00247.80", content)
+
 
 if __name__ == "__main__":
     unittest.main()

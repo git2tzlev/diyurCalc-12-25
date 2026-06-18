@@ -446,6 +446,8 @@ def calculate_monthly_summary(
                    ap.housing_array_id,
                    at.hourly_wage_supplement,
                    at.name AS apartment_type_name,
+                   rate_at.name AS rate_apartment_type_name,
+                   rate_at.hourly_wage_supplement AS rate_hourly_wage_supplement,
                    ha.name AS housing_array_name,
                    p.is_married,
                    p.name as person_name
@@ -453,6 +455,7 @@ def calculate_monthly_summary(
             LEFT JOIN shift_types st ON st.id = tr.shift_type_id
             JOIN apartments ap ON ap.id = tr.apartment_id
             LEFT JOIN apartment_types at ON at.id = ap.apartment_type_id
+            LEFT JOIN apartment_types rate_at ON rate_at.id = tr.rate_apartment_type_id
             LEFT JOIN housing_arrays ha ON ha.id = ap.housing_array_id
             LEFT JOIN people p ON p.id = tr.person_id
             WHERE tr.person_id = ANY(%s) AND tr.date >= %s AND tr.date < %s
@@ -470,6 +473,8 @@ def calculate_monthly_summary(
                    ap.housing_array_id,
                    at.hourly_wage_supplement,
                    at.name AS apartment_type_name,
+                   rate_at.name AS rate_apartment_type_name,
+                   rate_at.hourly_wage_supplement AS rate_hourly_wage_supplement,
                    ha.name AS housing_array_name,
                    p.is_married,
                    p.name as person_name
@@ -477,6 +482,7 @@ def calculate_monthly_summary(
             LEFT JOIN shift_types st ON st.id = tr.shift_type_id
             LEFT JOIN apartments ap ON ap.id = tr.apartment_id
             LEFT JOIN apartment_types at ON at.id = ap.apartment_type_id
+            LEFT JOIN apartment_types rate_at ON rate_at.id = tr.rate_apartment_type_id
             LEFT JOIN housing_arrays ha ON ha.id = ap.housing_array_id
             LEFT JOIN people p ON p.id = tr.person_id
             WHERE tr.person_id = ANY(%s) AND tr.date >= %s AND tr.date < %s
@@ -524,12 +530,17 @@ def calculate_monthly_summary(
         if housing_filter is not None:
             cursor.execute("""
                 SELECT tr.person_id, tr.date, tr.start_time, tr.end_time, tr.shift_type_id, tr.apartment_id,
+                       tr.rate_apartment_type_id,
                        st.name AS shift_name,
-                       ap.housing_array_id, at.hourly_wage_supplement, p.is_married
+                       ap.housing_array_id, at.hourly_wage_supplement,
+                       rate_at.name AS rate_apartment_type_name,
+                       rate_at.hourly_wage_supplement AS rate_hourly_wage_supplement,
+                       p.is_married
                 FROM time_reports tr
                 LEFT JOIN shift_types st ON st.id = tr.shift_type_id
                 JOIN apartments ap ON ap.id = tr.apartment_id
                 LEFT JOIN apartment_types at ON at.id = ap.apartment_type_id
+                LEFT JOIN apartment_types rate_at ON rate_at.id = tr.rate_apartment_type_id
                 LEFT JOIN people p ON p.id = tr.person_id
                 WHERE tr.person_id = ANY(%s) AND tr.date >= %s AND tr.date < %s
                   AND ap.housing_array_id = %s
@@ -538,12 +549,17 @@ def calculate_monthly_summary(
         else:
             cursor.execute("""
                 SELECT tr.person_id, tr.date, tr.start_time, tr.end_time, tr.shift_type_id, tr.apartment_id,
+                       tr.rate_apartment_type_id,
                        st.name AS shift_name,
-                       ap.housing_array_id, at.hourly_wage_supplement, p.is_married
+                       ap.housing_array_id, at.hourly_wage_supplement,
+                       rate_at.name AS rate_apartment_type_name,
+                       rate_at.hourly_wage_supplement AS rate_hourly_wage_supplement,
+                       p.is_married
                 FROM time_reports tr
                 LEFT JOIN shift_types st ON st.id = tr.shift_type_id
                 LEFT JOIN apartments ap ON ap.id = tr.apartment_id
                 LEFT JOIN apartment_types at ON at.id = ap.apartment_type_id
+                LEFT JOIN apartment_types rate_at ON rate_at.id = tr.rate_apartment_type_id
                 LEFT JOIN people p ON p.id = tr.person_id
                 WHERE tr.person_id = ANY(%s) AND tr.date >= %s AND tr.date < %s
                 ORDER BY tr.person_id, tr.date, tr.start_time

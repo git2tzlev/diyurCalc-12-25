@@ -115,19 +115,20 @@ def test_build_completion_impact_rows_nets_same_symbol_rate_change():
 def test_build_completion_gesher_rows_maps_source_symbols_to_target_symbols():
     diffs = [
         {"employee_code": "000123", "person_name": "מדריך", "symbol": "360", "amount_diff": 100.0},
-        {"employee_code": "000123", "person_name": "מדריך", "symbol": "362", "amount_diff": 25.5},
-        {"employee_code": "000123", "person_name": "מדריך", "symbol": "366", "amount_diff": 10.0},
-        {"employee_code": "000123", "person_name": "מדריך", "symbol": "370", "amount_diff": 32.0},
-        {"employee_code": "000123", "person_name": "מדריך", "symbol": "243", "amount_diff": 500.0},
-        {"employee_code": "000123", "person_name": "מדריך", "symbol": "767", "amount_diff": 900.0},
+        {"employee_code": "000123", "person_name": "מדריך", "symbol": "362", "amount_diff": 25.5, "employer_code": "400"},
+        {"employee_code": "000123", "person_name": "מדריך", "symbol": "366", "amount_diff": 10.0, "employer_code": "400"},
+        {"employee_code": "000123", "person_name": "מדריך", "symbol": "370", "amount_diff": 32.0, "employer_code": "400"},
+        {"employee_code": "000123", "person_name": "מדריך", "symbol": "243", "amount_diff": 500.0, "employer_code": "400"},
+        {"employee_code": "000123", "person_name": "מדריך", "symbol": "767", "amount_diff": 900.0, "employer_code": "400"},
     ]
 
     rows = build_completion_gesher_rows(diffs)
 
-    assert [(row["symbol"], row["amount"]) for row in rows] == [
-        ("243", 500.0),
-        ("253", 42.0),
-        ("317", 125.5),
+    assert [(row["employer_code"], row["symbol"], row["amount"]) for row in rows] == [
+        ("400", "243", 500.0),
+        ("400", "253", 42.0),
+        ("001", "317", 100.0),
+        ("400", "317", 25.5),
     ]
 
 
@@ -148,6 +149,7 @@ def test_completion_impact_treats_zero_quantity_rate_as_amount():
     gesher_rows = build_completion_gesher_rows(rows)
 
     assert gesher_rows == [{
+        "employer_code": "001",
         "employee_code": "000123",
         "person_id": None,
         "person_name": "מדריך",

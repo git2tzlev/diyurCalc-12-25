@@ -345,7 +345,7 @@ def generate_gesher_file_for_person(conn, person_id: int, year: int, month: int)
     Returns:
         Tuple[תוכן הקובץ, קוד מפעל]
     """
-    from core.logic import calculate_person_monthly_totals, get_shabbat_times_cache
+    from core.logic import calculate_monthly_summary
     
     # שליפת פרטי העובד כולל מפעל
     person = conn.execute("""
@@ -366,7 +366,6 @@ def generate_gesher_file_for_person(conn, person_id: int, year: int, month: int)
         export_codes = load_export_config()
     options = get_export_options()
     
-    shabbat_cache = get_shabbat_times_cache(conn)
     minimum_wage = get_minimum_wage(conn, year, month)
     
     # וידוא קוד מירב
@@ -378,15 +377,15 @@ def generate_gesher_file_for_person(conn, person_id: int, year: int, month: int)
     except ValueError:
         return ("", "")
     
-    # חישוב סיכומים
-    totals = calculate_person_monthly_totals(
-        conn=conn,
-        person_id=person_id,
-        year=year,
-        month=month,
-        shabbat_cache=shabbat_cache,
-        minimum_wage=minimum_wage
-    )
+    # חישוב דרך אותו מסלול של ייצוא גשר כללי כדי לכלול תשלום חג ורכיבים חודשיים זהים.
+    raw_conn = conn.conn if hasattr(conn, 'conn') else conn
+    summary_data, _ = calculate_monthly_summary(raw_conn, year, month)
+    totals = {}
+    for person_data in summary_data:
+        pid = person_data.get('person_id') or person_data.get('id')
+        if pid == person_id:
+            totals = person_data.get('totals', {}) or {}
+            break
     
     output = io.StringIO()
     
