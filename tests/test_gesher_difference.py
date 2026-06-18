@@ -1,4 +1,6 @@
 from services.gesher_difference import (
+    build_completion_gesher_file,
+    build_completion_gesher_rows,
     build_completion_impact_rows,
     compare_line_sets,
     parse_gesher_file_lines,
@@ -108,3 +110,63 @@ def test_build_completion_impact_rows_nets_same_symbol_rate_change():
     assert rows[0]["after_amount"] == 112.0
     assert rows[0]["amount_diff"] == 16.0
     assert rows[0]["diff_type"] == "תעריף השתנה"
+
+
+def test_build_completion_gesher_rows_maps_source_symbols_to_target_symbols():
+    diffs = [
+        {"employee_code": "000123", "person_name": "מדריך", "symbol": "360", "amount_diff": 100.0},
+        {"employee_code": "000123", "person_name": "מדריך", "symbol": "362", "amount_diff": 25.5},
+        {"employee_code": "000123", "person_name": "מדריך", "symbol": "366", "amount_diff": 10.0},
+        {"employee_code": "000123", "person_name": "מדריך", "symbol": "370", "amount_diff": 32.0},
+        {"employee_code": "000123", "person_name": "מדריך", "symbol": "243", "amount_diff": 500.0},
+        {"employee_code": "000123", "person_name": "מדריך", "symbol": "767", "amount_diff": 900.0},
+    ]
+
+    rows = build_completion_gesher_rows(diffs)
+
+    assert [(row["symbol"], row["amount"]) for row in rows] == [
+        ("243", 500.0),
+        ("253", 42.0),
+        ("317", 125.5),
+    ]
+
+
+def test_completion_impact_treats_zero_quantity_rate_as_amount():
+    rows = build_completion_impact_rows(
+        before_lines=[],
+        after_lines=[{
+            "employee_code": "000123",
+            "person_name": "מדריך",
+            "symbol": "370",
+            "display_name": "נסיעות",
+            "rate": 32.0,
+            "quantity": 0.0,
+            "amount": 32.0,
+        }],
+    )
+
+    gesher_rows = build_completion_gesher_rows(rows)
+
+    assert gesher_rows == [{
+        "employee_code": "000123",
+        "person_id": None,
+        "person_name": "מדריך",
+        "symbol": "253",
+        "amount": 32.0,
+        "source_symbols": "370",
+    }]
+
+
+def test_build_completion_gesher_file_uses_gesher_money_format():
+    rows = [
+        {"employee_code": "000123", "symbol": "317", "amount": -20.64},
+        {"employee_code": "000123", "symbol": "253", "amount": 32.0},
+    ]
+
+    content = build_completion_gesher_file(rows, 2026, 3, company_code="400")
+
+    assert content.splitlines() == [
+        "400 26 03      0",
+        "000123 317 0000.00 -0020.64          201",
+        "000123 253 0000.00 00032.00          201",
+    ]

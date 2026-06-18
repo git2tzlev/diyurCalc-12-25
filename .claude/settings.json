@@ -10,7 +10,30 @@
       "PowerShell(py -c \"import py_compile; py_compile.compile\\('core/holiday_payment.py', doraise=True\\); py_compile.compile\\('routes/guide.py', doraise=True\\); print\\('compile OK'\\)\")",
       "PowerShell(py -m pytest tests/test_holiday_payment.py tests/test_holiday_payment_setup_security.py tests/test_logic.py -q 2>&1)",
       "PowerShell(py -m pytest tests/test_salary_calculation.py -q 2>&1)",
-      "PowerShell(py scripts/check_nitzanim.py)"
+      "PowerShell(py scripts/check_nitzanim.py)",
+      "PowerShell(Get-ChildItem -File | Select-Object Name, @{N='KB';E={[math]::Round\\($_.Length/1KB\\)}} | Sort-Object KB -Descending | Select-Object -First 25; Write-Output '---DIRS---'; Get-ChildItem -Directory | Select-Object -ExpandProperty Name)",
+      "Bash(Get-ChildItem -Path \"F:\\\\DiyurClock\\\\104\\\\diyur003\" -Recurse -ErrorAction SilentlyContinue)",
+      "Bash(Get-ChildItem -Path . -Recurse -Directory -Name)",
+      "Bash(awk '/^def get_daily_segments_data\\\\\\(/{start=NR; next} start && /^def [^_]/{end=NR; exit} END{if\\(start\\) print end-start}' \"F:\\\\DiyurClock\\\\104\\\\diyur003\\\\app_utils.py\")",
+      "Bash(awk '{print $1}')",
+      "Bash(awk '{print \"Total lines:\", $1}')",
+      "Bash(awk '/^def /{if\\(last_def\\){print last_start\"-\"NR-1\", length: \"NR-last_start} last_def=$0; last_start=NR} END{if\\(last_def\\) print last_start\"-\"NR\", length: \"NR-last_start+1}' \"F:\\\\DiyurClock\\\\104\\\\diyur003\\\\app_utils.py\")",
+      "PowerShell(git rm --cached -r CSV)",
+      "PowerShell(py -m pytest tests/test_logic.py tests/test_salary_calculation.py -q 2>&1)",
+      "PowerShell(py -m pytest tests/ -q --ignore=tests/debug_payment_gap.py --ignore=tests/debug_2000_gap.py --ignore=tests/debug_dec_gap.py --ignore=tests/debug_dec_detailed.py --ignore=tests/debug_old_vs_new.py --ignore=tests/debug_payment_breakdown.py --ignore=tests/debug_extras.py 2>&1)",
+      "PowerShell(\\(Test-Path 'CSV\\\\400_11_2025_all.csv'\\) -and \\(Test-Path 'compare_3_26_tzohar_including_new_vs_gesher_400_2026_03_6_details.csv'\\); git ls-files | Select-String -Pattern '\\\\.csv$|\\\\.mrv' | Measure-Object -Line)",
+      "PowerShell(\\(Get-Content core\\\\time_utils.py | Measure-Object -Line\\).Lines; Get-Content core\\\\holiday_payment.py -TotalCount 35 -Encoding UTF8)",
+      "PowerShell(py -m pytest tests/test_seniority.py tests/test_holiday_payment.py -q 2>&1)",
+      "PowerShell(py -m pytest tests/test_seniority.py::TestFormatSeniorityMonths::test_years_and_months -q 2>&1)",
+      "PowerShell(py C:\\\\Users\\\\leahsc\\\\AppData\\\\Local\\\\Temp\\\\seniority_impact_analysis.py 2>&1)",
+      "PowerShell(Remove-Item C:\\\\Users\\\\leahsc\\\\AppData\\\\Local\\\\Temp\\\\seniority_impact_analysis.py -Confirm:$false)",
+      "PowerShell(py C:\\\\Users\\\\leahsc\\\\AppData\\\\Local\\\\Temp\\\\check_lock.py 2>&1)",
+      "PowerShell(Remove-Item C:\\\\Users\\\\leahsc\\\\AppData\\\\Local\\\\Temp\\\\check_lock.py -Confirm:$false)",
+      "WebFetch(domain:www.workrights.co.il)",
+      "WebFetch(domain:bazlaw.co.il)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\leahsc\\AppData\\Local\\Temp"
     ]
   }
 }

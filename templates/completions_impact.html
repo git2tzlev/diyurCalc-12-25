@@ -5,8 +5,13 @@
     <div>
       <h2 class="section-title">השפעת השלמות על גשר</h2>
       <div class="muted">
-        חודש עבודה {{ "%02d"|format(work_month) }}/{{ work_year }}
-        · חודש תשלום {{ "%02d"|format(payment_month) }}/{{ payment_year }}
+        {% if is_overall_payment_impact %}
+          כל חודשי העבודה
+          · חודש תשלום {{ "%02d"|format(payment_month) }}/{{ payment_year }}
+        {% else %}
+          חודש עבודה {{ "%02d"|format(work_month) }}/{{ work_year }}
+          · חודש תשלום {{ "%02d"|format(payment_month) }}/{{ payment_year }}
+        {% endif %}
       </div>
     </div>
     <a href="/completions?year={{ payment_year }}&month={{ payment_month }}" class="nav-link">חזרה להשלמות</a>
@@ -15,7 +20,8 @@
   <section style="margin-top: 14px; display: flex; gap: 18px; flex-wrap: wrap;">
     <div><strong>{{ completions|length }}</strong> השלמות שסומנו</div>
     <div><strong>{{ total_diffs }}</strong> שורות סמלי גשר שהשתנו</div>
-    <div><strong>{{ "%.2f"|format(total_amount_diff or 0) }} ₪</strong> הפרש כולל</div>
+    <div><strong>{{ "%.2f"|format(total_payable_amount_diff or 0) }} ₪</strong> סה"כ לתשלום</div>
+    <div class="muted"><strong>{{ "%.2f"|format(total_info_amount_diff or 0) }} ₪</strong> סמלי מידע</div>
   </section>
 
   <section style="margin-top: 18px;">
@@ -26,12 +32,20 @@
             <h3 style="margin: 0;">{{ group.person_name or "ללא שם" }}</h3>
             <div class="muted">קוד מירב {{ group.employee_code or "-" }}</div>
           </div>
-          <div><strong>{{ "%.2f"|format(group.amount_diff or 0) }} ₪</strong></div>
+          <div>
+            <strong>{{ "%.2f"|format(group.amount_diff or 0) }} ₪</strong>
+            {% if group.info_amount_diff %}
+              <div class="muted">סמלי מידע {{ "%.2f"|format(group.info_amount_diff or 0) }} ₪</div>
+            {% endif %}
+          </div>
         </div>
 
         <table style="margin-top: 10px;">
           <thead>
             <tr>
+              {% if is_overall_payment_impact %}
+                <th>חודש עבודה</th>
+              {% endif %}
               <th>סמל</th>
               <th>רכיב</th>
               <th>תעריף</th>
@@ -41,12 +55,16 @@
               <th>סכום לפני</th>
               <th>סכום אחרי</th>
               <th>שינוי סכום</th>
+              <th>נספר לתשלום</th>
               <th>סוג שינוי</th>
             </tr>
           </thead>
           <tbody>
             {% for diff in group.rows %}
             <tr>
+              {% if is_overall_payment_impact %}
+                <td>{{ "%02d"|format(diff.work_month) }}/{{ diff.work_year }}</td>
+              {% endif %}
               <td>{{ diff.symbol }}</td>
               <td>{{ diff.display_name }}</td>
               <td>{{ diff.rate_label or "%.2f"|format(diff.rate or 0) }}</td>
@@ -56,6 +74,15 @@
               <td>{{ "%.2f"|format(diff.before_amount or 0) }}</td>
               <td>{{ "%.2f"|format(diff.after_amount or 0) }}</td>
               <td>{{ "%.2f"|format(diff.amount_diff or 0) }}</td>
+              <td>
+                {% if diff.is_payable_completion_symbol %}
+                  כן
+                {% elif diff.is_info_completion_symbol %}
+                  לא - סמל מידע
+                {% else %}
+                  לא
+                {% endif %}
+              </td>
               <td>{{ diff.diff_type }}</td>
             </tr>
             {% endfor %}
@@ -74,6 +101,7 @@
         <tr>
           <th>סוג</th>
           <th>מדריך</th>
+          <th>מספר עובד</th>
           <th>תאריך עבודה</th>
           <th>דירה</th>
           <th>משמרת/רכיב</th>
@@ -86,6 +114,7 @@
         <tr>
           <td>{{ "משמרת" if item.item_type == "time_report" else "רכיב תשלום" }}</td>
           <td>{{ item.person_name }}</td>
+          <td>{{ item.meirav_code or "" }}</td>
           <td>{{ item.date.strftime("%d/%m/%Y") if item.date else "" }}</td>
           <td>{{ item.apartment_name }}</td>
           <td>{{ item.shift_name if item.item_type == "time_report" else item.component_name }}</td>
@@ -100,7 +129,7 @@
         </tr>
         {% else %}
         <tr>
-          <td colspan="7" class="muted">לא נמצאו השלמות לחודש העבודה הזה</td>
+          <td colspan="8" class="muted">לא נמצאו השלמות לחודש העבודה הזה</td>
         </tr>
         {% endfor %}
       </tbody>

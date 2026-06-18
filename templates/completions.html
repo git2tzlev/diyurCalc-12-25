@@ -20,6 +20,14 @@
       {% endfor %}
     </select>
     <button type="submit">טען</button>
+    <a href="/completions/gesher-file?payment_year={{ selected_year }}&payment_month={{ selected_month }}"
+       style="text-decoration: none; padding: 6px 10px; border-radius: 6px; background: #334155; color: white;">
+      הפק גשר הפרשי השלמות
+    </a>
+    <a href="/completions/impact-all?payment_year={{ selected_year }}&payment_month={{ selected_month }}"
+       style="text-decoration: none; padding: 6px 10px; border-radius: 6px; background: #0f766e; color: white;">
+      הצג השפעת כל ההשלמות
+    </a>
     <span class="muted">{{ total_items }} השלמות</span>
   </form>
 
@@ -53,6 +61,7 @@
         <tr>
           <th>סוג</th>
           <th>מדריך</th>
+          <th>מספר עובד</th>
           <th>תאריך עבודה</th>
           <th>דירה</th>
           <th>משמרת/רכיב</th>
@@ -66,6 +75,7 @@
         <tr>
           <td>{{ "משמרת" if item.item_type == "time_report" else "רכיב תשלום" }}</td>
           <td>{{ item.person_name }}</td>
+          <td>{{ item.meirav_code or "" }}</td>
           <td>{{ item.date.strftime("%d/%m/%Y") if item.date else "" }}</td>
           <td>{{ item.apartment_name }}</td>
           <td>{{ item.shift_name if item.item_type == "time_report" else item.component_name }}</td>

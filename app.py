@@ -56,7 +56,9 @@ from routes.export import (
 from routes.completions import (
     completions_page,
     completion_difference_report,
+    completion_gesher_file_report,
     completion_impact_report,
+    completion_overall_impact_report,
 )
 from routes.email import (
     email_settings_page,
@@ -662,6 +664,26 @@ def completion_impact_route(
 ):
     """Show completion impact by guide and Gesher symbol."""
     return completion_impact_report(request, work_year, work_month, payment_year, payment_month)
+
+
+@app.get("/completions/impact-all", response_class=HTMLResponse)
+def completion_overall_impact_route(
+    request: Request,
+    payment_year: int,
+    payment_month: int,
+):
+    """Show total completion impact for one payment month."""
+    return completion_overall_impact_report(request, payment_year, payment_month)
+
+
+@app.get("/completions/gesher-file")
+def completion_gesher_file_route(
+    request: Request,
+    payment_year: int,
+    payment_month: int,
+):
+    """Generate a Gesher file for payment-month completion differences."""
+    return completion_gesher_file_report(request, payment_year, payment_month)
 
 
 # Statistics routes

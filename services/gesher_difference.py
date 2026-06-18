@@ -13,6 +13,17 @@ from services import gesher_exporter
 
 MONEY_EPSILON = 0.01
 QUANTITY_EPSILON = 0.01
+COMPLETION_PENSION_SOURCE_SYMBOLS = {"360", "362", "363"}
+COMPLETION_NON_PENSION_SOURCE_SYMBOLS = {
+    "366", "368", "370", "371", "373", "374", "382", "434",
+}
+COMPLETION_PROFESSIONAL_SUPPORT_SYMBOLS = {"243"}
+COMPLETION_INFO_SOURCE_SYMBOLS = {"299", "698", "767"}
+COMPLETION_TARGET_SYMBOLS = {
+    "pension": "317",
+    "non_pension": "253",
+    "professional_support": "243",
+}
 
 
 def _amount_for_line(quantity: float, rate: float) -> float:
@@ -103,6 +114,7 @@ def build_current_gesher_lines(
     person_ids: Optional[set[int]] = None,
     excluded_time_report_ids: Optional[set[int]] = None,
     excluded_payment_component_ids: Optional[set[int]] = None,
+    include_negative_values: bool = False,
 ) -> list[dict[str, Any]]:
     """Build comparable Gesher lines from the current monthly calculation."""
     export_codes = gesher_exporter.load_export_config_from_db(conn)
@@ -146,11 +158,14 @@ def build_current_gesher_lines(
                 totals, internal_key, value_type, minimum_wage
             )
             if not options["export_zero_values"]:
-                if value_type.startswith("hours_") and quantity < options["min_amount"]:
+                if include_negative_values:
+                    if abs(quantity) < options["min_amount"] and abs(rate) < options["min_amount"]:
+                        continue
+                elif value_type.startswith("hours_") and quantity < options["min_amount"]:
                     continue
-                if value_type == "money" and rate < options["min_amount"]:
+                elif value_type == "money" and rate < options["min_amount"]:
                     continue
-                if quantity < options["min_amount"] and rate < options["min_amount"]:
+                elif quantity < options["min_amount"] and rate < options["min_amount"]:
                     continue
 
             result.append({
@@ -166,6 +181,78 @@ def build_current_gesher_lines(
                 "amount": _amount_for_line(quantity, rate),
             })
     return result
+
+
+def _completion_target_for_source_symbol(symbol: Any) -> Optional[str]:
+    source_symbol = str(symbol or "").strip()
+    if source_symbol in COMPLETION_PENSION_SOURCE_SYMBOLS:
+        return COMPLETION_TARGET_SYMBOLS["pension"]
+    if source_symbol in COMPLETION_NON_PENSION_SOURCE_SYMBOLS:
+        return COMPLETION_TARGET_SYMBOLS["non_pension"]
+    if source_symbol in COMPLETION_PROFESSIONAL_SUPPORT_SYMBOLS:
+        return COMPLETION_TARGET_SYMBOLS["professional_support"]
+    return None
+
+
+def is_completion_payable_source_symbol(symbol: Any) -> bool:
+    """Whether a source Gesher symbol should be counted as payable completion impact."""
+    return _completion_target_for_source_symbol(symbol) is not None
+
+
+def is_completion_info_source_symbol(symbol: Any) -> bool:
+    """Whether a source Gesher symbol is informational and not part of payable impact."""
+    return str(symbol or "").strip() in COMPLETION_INFO_SOURCE_SYMBOLS
+
+
+def build_completion_gesher_rows(diffs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Aggregate completion differences into the target Gesher symbols."""
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    for diff in diffs:
+        target_symbol = _completion_target_for_source_symbol(diff.get("symbol"))
+        if not target_symbol:
+            continue
+        amount_diff = round(float(diff.get("amount_diff") or 0), 2)
+        if abs(amount_diff) < MONEY_EPSILON:
+            continue
+        employee_code = _clean_employee_code(diff.get("employee_code"))
+        if not employee_code:
+            continue
+
+        key = (employee_code, target_symbol)
+        if key not in grouped:
+            grouped[key] = {
+                "employee_code": employee_code,
+                "person_id": diff.get("person_id"),
+                "person_name": diff.get("person_name", ""),
+                "symbol": target_symbol,
+                "amount": 0.0,
+                "source_symbols": set(),
+            }
+        grouped[key]["amount"] = round(grouped[key]["amount"] + amount_diff, 2)
+        grouped[key]["source_symbols"].add(str(diff.get("symbol") or ""))
+
+    rows = []
+    for row in grouped.values():
+        if abs(float(row["amount"])) < MONEY_EPSILON:
+            continue
+        row["source_symbols"] = ", ".join(sorted(row["source_symbols"]))
+        rows.append(row)
+
+    return sorted(rows, key=lambda row: (row["employee_code"], row["symbol"]))
+
+
+def build_completion_gesher_file(rows: list[dict[str, Any]], year: int, month: int, company_code: Optional[str] = None) -> str:
+    """Build a Gesher-format file for aggregated completion differences."""
+    company = company_code or gesher_exporter.get_export_options()["default_company"]
+    text = gesher_exporter.format_gesher_header(company, year, month) + "\r\n"
+    for row in rows:
+        text += gesher_exporter.format_gesher_line(
+            employee_code=int(row["employee_code"]),
+            symbol=row["symbol"],
+            quantity=0.0,
+            rate=round(float(row["amount"]), 2),
+        ) + "\r\n"
+    return text
 
 
 def enrich_paid_lines(conn, lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
