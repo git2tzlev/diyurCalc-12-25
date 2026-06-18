@@ -160,7 +160,10 @@ async def send_guide_email_route(request: Request, person_id: int, year: int, mo
 
         import asyncio
 
-        result = await asyncio.to_thread(send_guide_email, person_id, year, month, custom_email)
+        hid = get_user_housing_array(request)
+        result = await asyncio.to_thread(
+            send_guide_email, person_id, year, month, custom_email, None, hid
+        )
         return JSONResponse(result)
     except Exception as e:
         logger.error(f"Error in send_guide_email_route: {e}", exc_info=True)
@@ -355,7 +358,7 @@ async def send_bulk_stream(request: Request, year: int, month: int, token: str =
                     loop.run_in_executor(
                         executor,
                         process_guide_for_bulk,
-                        g, year, month, batch_id, settings, sent_by,
+                        g, year, month, batch_id, settings, sent_by, hid,
                     )
                     for g in batch
                 ]

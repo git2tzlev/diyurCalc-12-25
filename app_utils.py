@@ -1790,7 +1790,7 @@ def get_daily_segments_data(
 ):
     """
     Calculates detailed daily segments for a given employee and month.
-    Used by guide_view and simple_summary_view.
+    Used by guide_view and monthly summary calculations.
 
     Optional cache parameters for batch optimization:
     - person_status_cache: dict mapping person_id to status dict

@@ -191,7 +191,12 @@ def send_test_email(conn, to_email: str) -> Dict[str, Any]:
         return {"success": False, "error": GENERIC_ERROR}
 
 
-def generate_guide_pdf(person_id: int, year: int, month: int) -> Optional[bytes]:
+def generate_guide_pdf(
+    person_id: int,
+    year: int,
+    month: int,
+    housing_array_id: Optional[int] = None,
+) -> Optional[bytes]:
     """יצירת PDF לדוח מדריך באמצעות רינדור ישיר של התבנית ו-Edge/Chrome headless."""
     from jinja2 import Environment, FileSystemLoader
     from routes.guide import prepare_guide_pdf_data
@@ -199,7 +204,9 @@ def generate_guide_pdf(person_id: int, year: int, month: int) -> Optional[bytes]
     try:
         # 1. הכנת נתונים - חיבור DB קצר, משתחרר לפני יצירת PDF
         with get_conn() as conn:
-            pdf_data = prepare_guide_pdf_data(conn, person_id, year, month)
+            pdf_data = prepare_guide_pdf_data(
+                conn, person_id, year, month, housing_array_id
+            )
         if not pdf_data:
             raise ValueError(f"לא נמצאו נתונים למדריך {person_id}")
 
@@ -295,7 +302,14 @@ def send_email_with_pdf(
         return {"success": False, "error": GENERIC_ERROR}
 
 
-def send_guide_email(person_id: int, year: int, month: int, custom_email: Optional[str] = None, settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def send_guide_email(
+    person_id: int,
+    year: int,
+    month: int,
+    custom_email: Optional[str] = None,
+    settings: Optional[Dict[str, Any]] = None,
+    housing_array_id: Optional[int] = None,
+) -> Dict[str, Any]:
     """שליחת דוח מדריך במייל. מנהל חיבור DB בעצמו ומשחרר לפני עבודה כבדה."""
     try:
         # שליפת הגדרות ופרטי מדריך - חיבור DB קצר
@@ -320,7 +334,9 @@ def send_guide_email(person_id: int, year: int, month: int, custom_email: Option
 
         # יצירת PDF - generate_guide_pdf מנהל חיבור DB בעצמו
         try:
-            pdf_bytes = generate_guide_pdf(person_id, year, month)
+            pdf_bytes = generate_guide_pdf(
+                person_id, year, month, housing_array_id
+            )
         except Exception as pdf_err:
             logger.error(f"PDF generation failed for {person['name']}: {pdf_err}", exc_info=True)
             return {"success": False, "error": "שגיאה ביצירת PDF"}
@@ -412,7 +428,13 @@ def send_all_guides_email(
         results = {"success": [], "failed": []}
 
         for guide in guides:
-            result = send_guide_email(guide['id'], year, month, settings=settings)
+            result = send_guide_email(
+                guide['id'],
+                year,
+                month,
+                settings=settings,
+                housing_array_id=housing_array_id,
+            )
             if result.get('success'):
                 results['success'].append(guide['name'])
             else:
@@ -487,7 +509,7 @@ def send_all_guides_to_single_email(
 
         # יצירת PDF משולב - _generate_combined_guides_pdf מנהל חיבורים בעצמו
         pdf_bytes, guide_count, failed_guides = _generate_combined_guides_pdf(
-            guides, year, month
+            guides, year, month, housing_array_id
         )
 
         if not pdf_bytes:
@@ -581,7 +603,13 @@ def send_selected_guides_email(
             guide_email = guide['email']
             logger.info(f"[{idx}/{total}] שולח ל: {guide_name} ({guide_email})...")
 
-            result = send_guide_email(guide['id'], year, month, settings=settings)
+            result = send_guide_email(
+                guide['id'],
+                year,
+                month,
+                settings=settings,
+                housing_array_id=housing_array_id,
+            )
 
             if result.get('success'):
                 logger.info(f"[{idx}/{total}] נשלח בהצלחה: {guide_name} -> {guide_email}")
@@ -661,7 +689,7 @@ def send_selected_guides_to_single_email(
 
         # יצירת PDF משולב - _generate_combined_guides_pdf מנהל חיבורים בעצמו
         pdf_bytes, guide_count, failed_guides = _generate_combined_guides_pdf(
-            guides, year, month
+            guides, year, month, housing_array_id
         )
 
         if not pdf_bytes:
@@ -700,7 +728,12 @@ def send_selected_guides_to_single_email(
         return {"success": False, "error": GENERIC_ERROR}
 
 
-def _generate_combined_guides_pdf(guides, year: int, month: int):
+def _generate_combined_guides_pdf(
+    guides,
+    year: int,
+    month: int,
+    housing_array_id: Optional[int] = None,
+):
     """יצירת קובץ PDF אחד משולב עם כל המדריכים - כל מדריך בעמוד נפרד.
 
     משתמש ב-prepare_guide_pdf_data מ-routes.guide לקבלת נתונים זהים לדוח הבודד.
@@ -725,7 +758,9 @@ def _generate_combined_guides_pdf(guides, year: int, month: int):
 
                 # חיבור DB קצר לכל מדריך - משתחרר מיד
                 with get_conn() as conn:
-                    pdf_data = prepare_guide_pdf_data(conn, person_id, year, month)
+                    pdf_data = prepare_guide_pdf_data(
+                        conn, person_id, year, month, housing_array_id
+                    )
 
                 if not pdf_data:
                     failed_guides.append(person_name)
@@ -1083,6 +1118,7 @@ def process_guide_for_bulk(
     batch_id: str,
     settings: Dict[str, Any],
     sent_by: Optional[int] = None,
+    housing_array_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """עיבוד מדריך בודד בשליחה מרוכזת - שליחה + לוג."""
     guide_id = guide["id"]
@@ -1114,7 +1150,14 @@ def process_guide_for_bulk(
         }
 
     try:
-        result = send_guide_email(guide_id, year, month, guide_email, settings)
+        result = send_guide_email(
+            guide_id,
+            year,
+            month,
+            guide_email,
+            settings,
+            housing_array_id=housing_array_id,
+        )
 
         status = "sent" if result.get("success") else "failed"
         error_msg = None if result.get("success") else result.get("error", "שגיאה לא ידועה")

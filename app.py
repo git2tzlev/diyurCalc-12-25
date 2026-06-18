@@ -27,7 +27,7 @@ from utils.utils import human_date, format_currency, format_currency_total
 from routes.home import home
 from routes.reports import reports_management, export_guide_reports_excel
 from routes.guide import (
-    simple_summary_view, guide_view,
+    guide_view,
     shifts_report_pdf, shifts_report_preview, shifts_report_email, chains_report_email,
     get_guide_notes, add_guide_note, delete_guide_note,
     get_holiday_payment_setup_api, save_holiday_payment_setup_api,
@@ -393,12 +393,6 @@ def export_guide_reports_excel_route(
 def redirect_to_home():
     """Redirect /guide to home page."""
     return RedirectResponse(url="/")
-
-
-@app.get("/guide/{person_id}/simple", response_class=HTMLResponse)
-def simple_summary_route(request: Request, person_id: int, month: int | None = None, year: int | None = None):
-    """Simple summary view for a guide."""
-    return simple_summary_view(request, person_id, month, year)
 
 
 @app.get("/guide/{person_id}", response_class=HTMLResponse)

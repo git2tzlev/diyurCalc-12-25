@@ -64,6 +64,28 @@ def _generate_colors(count: int) -> List[str]:
     return (CHART_COLORS * ((count // len(CHART_COLORS)) + 1))[:count]
 
 
+def _time_text_to_minutes(value) -> Optional[int]:
+    """המרת טקסט HH:MM לדקות לצורך סטטיסטיקות תצוגה."""
+    if not value:
+        return None
+    try:
+        parts = str(value).split(":")
+        return int(parts[0]) * 60 + int(parts[1])
+    except (IndexError, TypeError, ValueError):
+        return None
+
+
+def _duration_minutes_from_text(start_time, end_time) -> int:
+    """משך משמרת בדקות, כולל משמרות שחוצות חצות."""
+    start_minutes = _time_text_to_minutes(start_time)
+    end_minutes = _time_text_to_minutes(end_time)
+    if start_minutes is None or end_minutes is None:
+        return 0
+    if end_minutes <= start_minutes:
+        end_minutes += 24 * 60
+    return max(0, end_minutes - start_minutes)
+
+
 def stats_page(
     request: Request,
     year: Optional[int] = None,
@@ -489,7 +511,7 @@ def get_all_stats(year: int, month: int) -> JSONResponse:
 
     return JSONResponse({
         "summary": {
-            "total_salary": sum(guides_data),
+            "total_salary": round(grand_totals.get("total_payment", 0), 2),
             "total_hours": sum(hours_data),
             "total_guides": len(summary_data),
             "total_standby": extras_data[0]
@@ -964,6 +986,8 @@ def get_apartment_details(
         apartment_id: מזהה דירה
     """
     hf = get_housing_array_filter()
+    shift_reports = []
+    person_apartment_counts = []
     with get_conn() as conn:
         # שליפת שם הדירה
         apt_row = conn.execute(
@@ -1000,17 +1024,40 @@ def get_apartment_details(
             """, (apartment_id, year, month)).fetchall()
 
             # שליפת סוגי משמרות בדירה
-            shift_types = conn.execute("""
-                SELECT st.id, st.name, COUNT(*) as count,
-                       SUM(EXTRACT(EPOCH FROM (tr.end_time - tr.start_time))/60) as total_minutes
+            shift_reports = conn.execute("""
+                SELECT st.id, st.name, tr.start_time, tr.end_time
                 FROM time_reports tr
                 JOIN shift_types st ON st.id = tr.shift_type_id
                 WHERE tr.apartment_id = %s
                   AND EXTRACT(YEAR FROM tr.date) = %s
                   AND EXTRACT(MONTH FROM tr.date) = %s
-                GROUP BY st.id, st.name
-                ORDER BY count DESC
             """, (apartment_id, year, month)).fetchall()
+
+            # מספר הדירות שבהן כל מדריך עבד בחודש, לצורך חלוקה יחסית של שכר חודשי.
+            person_apartment_counts = conn.execute("""
+                SELECT tr.person_id, COUNT(DISTINCT tr.apartment_id) AS apartment_count
+                FROM time_reports tr
+                WHERE EXTRACT(YEAR FROM tr.date) = %s
+                  AND EXTRACT(MONTH FROM tr.date) = %s
+                GROUP BY tr.person_id
+            """, (year, month)).fetchall()
+
+    shift_type_totals = {}
+    for report in shift_reports:
+        key = report["id"]
+        entry = shift_type_totals.setdefault(
+            key,
+            {"name": report["name"], "count": 0, "total_minutes": 0},
+        )
+        entry["count"] += 1
+        entry["total_minutes"] += _duration_minutes_from_text(
+            report.get("start_time"), report.get("end_time")
+        )
+    shift_types = sorted(
+        shift_type_totals.values(),
+        key=lambda item: item["count"],
+        reverse=True,
+    )
 
     # נתוני משמרות
     shift_labels = [s["name"] for s in shift_types]
@@ -1022,12 +1069,18 @@ def get_apartment_details(
     guide_salaries = []
 
     summary_data, _ = _get_cached_summary(year, month)
+    apartment_counts_by_person = {
+        row["person_id"]: int(row["apartment_count"] or 1)
+        for row in person_apartment_counts
+    }
 
     for guide in guides:
         for person in summary_data:
             if person["person_id"] == guide["id"]:
-                # הערכה - חלק יחסי מהשכר (אם עבד ביותר מדירה אחת)
-                guide_salaries.append(person["totals"].get("total_payment", 0))
+                apartment_count = max(apartment_counts_by_person.get(guide["id"], 1), 1)
+                guide_salaries.append(
+                    round(person["totals"].get("total_payment", 0) / apartment_count, 2)
+                )
                 break
         else:
             guide_salaries.append(0)
@@ -1083,11 +1136,6 @@ def get_guide_yearly(person_id: int, year: int) -> JSONResponse:
                 status_code=403,
             )
 
-    from app_utils import get_daily_segments_data, aggregate_daily_segments_to_monthly
-    from core.time_utils import get_shabbat_times_cache
-    from core.history import get_minimum_wage_for_month
-    from core.database import PostgresConnection
-
     labels = []
     salary_data = []
     hours_data = []
@@ -1103,9 +1151,6 @@ def get_guide_yearly(person_id: int, year: int) -> JSONResponse:
         ).fetchone()
         guide_name = guide_row["name"] if guide_row else f"מדריך {person_id}"
 
-        shabbat_cache = get_shabbat_times_cache(conn.conn)
-        conn_wrapper = PostgresConnection(conn.conn, use_pool=False)
-
         for i in range(11, -1, -1):
             target_month = current_month - i
             target_year = current_year
@@ -1114,19 +1159,17 @@ def get_guide_yearly(person_id: int, year: int) -> JSONResponse:
                 target_month += 12
                 target_year -= 1
 
-            minimum_wage = get_minimum_wage_for_month(conn.conn, target_year, target_month)
-
             try:
-                daily_segments, _ = get_daily_segments_data(
-                    conn_wrapper, person_id, target_year, target_month,
-                    shabbat_cache, minimum_wage
+                summary_data, _ = _get_cached_summary(target_year, target_month)
+                person_summary = next(
+                    (
+                        person
+                        for person in summary_data
+                        if person.get("person_id") == person_id
+                    ),
+                    None,
                 )
-                monthly_totals = aggregate_daily_segments_to_monthly(
-                    conn_wrapper, daily_segments, person_id,
-                    target_year, target_month, minimum_wage,
-                    housing_filter=hf,
-                )
-
+                monthly_totals = (person_summary or {}).get("totals") or {}
                 salary = monthly_totals.get("total_payment", 0)
                 hours = monthly_totals.get("total_hours", 0) / 60
             except Exception:

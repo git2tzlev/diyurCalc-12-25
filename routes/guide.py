@@ -31,7 +31,6 @@ from core.logic import (
 from core.history import get_minimum_wage_for_month
 from app_utils import get_daily_segments_data, aggregate_daily_segments_to_monthly
 from core.constants import (
-    PERMANENT_EMPLOYEE_TYPE,
     HIGH_FUNCTIONING_APT_TYPE, LOW_FUNCTIONING_APT_TYPE,
     CLEANING_SHIFT_ID, MEDICAL_ESCORT_SHIFT_ID, NIGHT_WATCH_SHIFT_ID, WORK_HOUR_SHIFT_ID,
     COMPLETION_APARTMENT_IDS,
@@ -122,12 +121,6 @@ def _inject_holiday_payment(
     minimum_wage: float, housing_filter: int | None,
 ) -> None:
     """הזרקת תשלום חג ל-monthly_totals (in-place)."""
-    person_type = conn.execute(
-        "SELECT type FROM people WHERE id = %s", (person_id,)
-    ).fetchone()
-    if not person_type or person_type["type"] != PERMANENT_EMPLOYEE_TYPE:
-        return
-
     hp_map = calculate_holiday_payments(
         conn.conn, year, month, shabbat_cache, minimum_wage,
         housing_filter=housing_filter,
@@ -190,12 +183,12 @@ def _build_holiday_payment_chain_summary(
         return summary
 
     person = conn.execute(
-        "SELECT id, type, start_date FROM people WHERE id = %s",
+        "SELECT id, start_date FROM people WHERE id = %s",
         (person_id,),
     ).fetchone()
-    if not person or person.get("type") != PERMANENT_EMPLOYEE_TYPE:
+    if not person:
         summary["status"] = "cancelled"
-        summary["notes"].append("לא שולם: העובד אינו מדריך קבוע.")
+        summary["notes"].append("לא שולם: העובד לא נמצא.")
         return summary
 
     start_date = _as_date(person.get("start_date"))
@@ -784,119 +777,6 @@ def _prepare_daily_segments_for_display(daily_segments: list[dict]) -> list[dict
         display_days.append(display_day)
 
     return display_days
-
-
-def simple_summary_view(
-    request: Request,
-    person_id: int,
-    month: Optional[int] = None,
-    year: Optional[int] = None
-) -> HTMLResponse:
-    """Simple summary view for a guide."""
-    # בדיקת הרשאה - מנהל מסגרת יכול לראות רק מדריכים מהמערך שלו
-    housing_filter = get_housing_array_filter()
-    _validate_guide_access(person_id, housing_filter)
-
-    start_time = time.time()
-    logger.info(f"Starting simple_summary_view for person_id={person_id}, {month}/{year}")
-
-    conn_start = time.time()
-    with get_conn() as conn:
-        conn_time = time.time() - conn_start
-        logger.info(f"Database connection took: {conn_time:.4f}s")
-        # Defaults
-        if month is None or year is None:
-            now = datetime.now(config.LOCAL_TZ)
-            year, month = now.year, now.month
-
-        # Minimum Wage (historical - for the selected month)
-        wage_start = time.time()
-        minimum_wage = get_minimum_wage_for_month(conn.conn, year, month)
-        logger.info(f"get_minimum_wage_for_month took: {time.time() - wage_start:.4f}s, value={minimum_wage} for {year}/{month}")
-
-        shabbat_start = time.time()
-        shabbat_cache = get_shabbat_times_cache(conn.conn)
-        logger.info(f"get_shabbat_times_cache took: {time.time() - shabbat_start:.4f}s")
-
-        # Get data
-        segments_start = time.time()
-        daily_segments, person_name = get_daily_segments_data(conn, person_id, year, month, shabbat_cache, minimum_wage)
-        logger.info(f"get_daily_segments_data took: {time.time() - segments_start:.4f}s")
-
-        person = conn.execute("SELECT * FROM people WHERE id = %s", (person_id,)).fetchone()
-
-        # Aggregate
-        summary = {
-            "weekday": {"count": 0, "payment": 0},
-            "friday": {"count": 0, "payment": 0},
-            "saturday": {"count": 0, "payment": 0},
-            "overtime": {"hours": 0, "payment": 0},
-            "total_payment": 0
-        }
-
-        for day in daily_segments:
-            # Skip if no work/vacation/sick (just empty day)
-            if not day.get("payment") and not day.get("has_work"):
-                continue
-
-            # Determine type
-            # Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
-            wd = day["date_obj"].weekday()
-            day_str = day["date_obj"].strftime("%Y-%m-%d")
-            day_info = shabbat_cache.get(day_str)
-
-            # זיהוי חג באמצע השבוע לפי טבלת shabbat_times
-            is_holiday = bool(day_info and (day_info.get("enter") or day_info.get("exit")) and wd != 4 and wd != 5)
-            is_friday = (wd == 4) or (is_holiday and day_info and day_info.get("enter") and not day_info.get("exit"))
-            is_saturday = (wd == 5) or (is_holiday and not is_friday)
-            is_weekday = not is_friday and not is_saturday
-
-            day_payment = day["payment"] or 0
-
-            # Calculate Overtime part (125% + 150% non-shabbat)
-            overtime_hours = 0
-            overtime_payment = 0
-
-            for seg in day["segments"]:
-                rate = seg.get("rate", 100)
-                if rate > 100 and not seg.get("is_shabbat", False):
-                    overtime_hours += seg["hours"]
-                    overtime_payment += seg["payment"]
-
-            # Accumulate
-            if is_weekday:
-                summary["weekday"]["count"] += 1
-                summary["weekday"]["payment"] += day_payment
-            elif is_friday:
-                summary["friday"]["count"] += 1
-                summary["friday"]["payment"] += day_payment
-            elif is_saturday:
-                summary["saturday"]["count"] += 1
-                summary["saturday"]["payment"] += day_payment
-
-            summary["overtime"]["hours"] += overtime_hours
-            summary["overtime"]["payment"] += overtime_payment
-            summary["total_payment"] += day_payment
-
-    render_start = time.time()
-    response = templates.TemplateResponse(
-        "simple_summary.html",
-        {
-            "request": request,
-            "person": person,
-            "summary": summary,
-            "year": year,
-            "month": month,
-            "person_name": person_name,
-        },
-    )
-    render_time = time.time() - render_start
-    logger.info(f"Template rendering took: {render_time:.4f}s")
-
-    total_time = time.time() - start_time
-    logger.info(f"Total simple_summary_view execution time: {total_time:.4f}s")
-
-    return response
 
 
 def guide_view(

@@ -228,6 +228,26 @@ def get_holiday_payment_setup(
     guides = _dict_rows(cursor.fetchall())
     cursor.close()
 
+    guide_ids = {row["id"] for row in guides}
+    saved_guide_ids = {
+        guide_id
+        for row in saved.values()
+        for guide_id in (row.get("guide_1_id"), row.get("guide_2_id"), row.get("guide_3_id"))
+        if guide_id is not None
+    }
+    missing_saved_guide_ids = sorted(saved_guide_ids - guide_ids)
+    if missing_saved_guide_ids:
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        cursor.execute("""
+            SELECT id, name
+            FROM people
+            WHERE id = ANY(%s)
+            ORDER BY name
+        """, (missing_saved_guide_ids,))
+        guides.extend(_dict_rows(cursor.fetchall()))
+        cursor.close()
+        guides.sort(key=lambda item: item.get("name") or "")
+
     rows = []
     for apt in apartments:
         apt_id = apt["id"]
@@ -307,6 +327,18 @@ def save_holiday_payment_setup(
             """, (list(selected_guide_ids), PERMANENT_EMPLOYEE_TYPE))
         allowed_guides = {row["id"] for row in cursor.fetchall()}
         cursor.close()
+        saved = _load_saved_assignments(conn, year, month, housing_filter)
+        saved_guide_ids = {
+            guide_id
+            for saved_row in saved.values()
+            for guide_id in (
+                saved_row.get("guide_1_id"),
+                saved_row.get("guide_2_id"),
+                saved_row.get("guide_3_id"),
+            )
+            if guide_id is not None
+        }
+        allowed_guides.update(saved_guide_ids)
         if selected_guide_ids - allowed_guides:
             raise ValueError("נבחר מדריך שלא שייך למערך הדיור או אינו מדריך קבוע פעיל")
 
