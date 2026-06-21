@@ -5,7 +5,7 @@
 {% set ns.completion_header_shown = true %}
 
 {% for payment in payments_data %}
-<tr class="travel-row">
+<tr class="travel-row{% if payment.is_payment_period_completion %} payment-period-completion-row{% endif %}">
   <td>-</td>
   <td>-</td>
   <td>
@@ -25,14 +25,15 @@
     {{ "%.2f"|format(payment.amount) }} &#8362;
   </td>
   <td>-</td>
+  <td>{{ payment.note or "-" }}</td>
 </tr>
 {% endfor %}
 
 <tr class="completion-separator">
-  <td colspan="8">השלמות מחודשים קודמים</td>
+  <td colspan="9">השלמות מחודשים קודמים</td>
 </tr>
 {% endif %}
-<tr class="{% if shift.is_completion_apartment %}completion-row{% endif %}{% if shift.tagbor_group %} tagbor-group{% endif %}{% if shift.tagbor_first %} tagbor-first{% endif %}{% if shift.tagbor_last %} tagbor-last{% endif %}">
+<tr class="{% if shift.is_completion_apartment %}completion-row{% endif %}{% if shift.is_payment_period_completion %} payment-period-completion-row{% endif %}{% if shift.tagbor_group %} tagbor-group{% endif %}{% if shift.tagbor_first %} tagbor-first{% endif %}{% if shift.tagbor_last %} tagbor-last{% endif %}">
   <td>{{ shift.date }}</td>
   <td>{{ shift.day }}</td>
   <td>{{ shift.apartment }}</td>
@@ -41,12 +42,13 @@
   <td>{{ shift.end_time }}</td>
   <td>{{ "%.2f"|format(shift.work_hours) }}</td>
   <td>{{ "%.2f"|format(shift.standby_hours) }}</td>
+  <td>{{ shift.note or "-" }}</td>
 </tr>
 {% endfor %}
 
 {% if not ns.completion_header_shown %}
 {% for payment in payments_data %}
-<tr class="travel-row">
+<tr class="travel-row{% if payment.is_payment_period_completion %} payment-period-completion-row{% endif %}">
   <td>-</td>
   <td>-</td>
   <td>
@@ -66,12 +68,13 @@
     {{ "%.2f"|format(payment.amount) }} &#8362;
   </td>
   <td>-</td>
+  <td>{{ payment.note or "-" }}</td>
 </tr>
 {% endfor %}
 {% endif %}
 
 {% for payment in completion_payments_data %}
-<tr class="travel-row completion-row">
+<tr class="travel-row completion-row{% if payment.is_payment_period_completion %} payment-period-completion-row{% endif %}">
   <td>-</td>
   <td>-</td>
   <td>
@@ -85,6 +88,7 @@
   <td>-</td>
   <td>{{ "%.2f"|format(payment.amount) }} &#8362;</td>
   <td>-</td>
+  <td>{{ payment.note or "-" }}</td>
 </tr>
 {% endfor %}
 {% endmacro %}

@@ -69,7 +69,7 @@ def get_payment_period_completions(
 
     time_reports = conn.execute(f"""
         SELECT 'time_report' AS item_type,
-               tr.id, tr.person_id, p.name AS person_name, p.meirav_code,
+               tr.id, tr.person_id, p.name AS person_name, p.email AS person_email, p.meirav_code,
                tr.date, tr.start_time, tr.end_time, tr.shift_type_id,
                st.name AS shift_name,
                tr.apartment_id, ap.name AS apartment_name, ap.housing_array_id,
@@ -93,7 +93,7 @@ def get_payment_period_completions(
         component_params.append(housing_array_id)
     payment_components = conn.execute(f"""
         SELECT 'payment_component' AS item_type,
-               pc.id, pc.person_id, p.name AS person_name, p.meirav_code,
+               pc.id, pc.person_id, p.name AS person_name, p.email AS person_email, p.meirav_code,
                pc.date, pc.quantity, pc.rate, pc.component_type_id,
                pct.name AS component_name,
                pc.apartment_id, ap.name AS apartment_name, ap.housing_array_id,

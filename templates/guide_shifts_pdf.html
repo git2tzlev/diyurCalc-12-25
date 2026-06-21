@@ -75,6 +75,23 @@
     .completion-row {
       background: #f5f9ff !important;
     }
+    .payment-period-completion-row {
+      background: #fff7ed !important;
+    }
+    .payment-period-completion-row td:last-child {
+      color: #92400e;
+      font-weight: 600;
+    }
+    .payment-period-legend {
+      margin: 10px 0;
+      padding: 8px 10px;
+      background: #fff7ed;
+      border: 1px solid #fed7aa;
+      color: #92400e;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: bold;
+    }
     /* הסרת הקו המפריד בין שורות תגבור */
     .tagbor-group:not(.tagbor-last) td {
       border-bottom: none;
@@ -123,6 +140,10 @@
     <div class="period">תקופה: {{ period_start }} - {{ period_end }}</div>
   </div>
 
+  {% if payment_period_legend %}
+  <div class="payment-period-legend">{{ payment_period_legend }}</div>
+  {% endif %}
+
   <table>
     <thead>
       <tr>
@@ -134,6 +155,7 @@
         <th>סיום</th>
         <th>עבודה</th>
         <th>כוננות</th>
+        <th>הערות</th>
       </tr>
     </thead>
     <tbody>

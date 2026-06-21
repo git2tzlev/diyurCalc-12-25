@@ -205,7 +205,7 @@ def generate_guide_pdf(
         # 1. הכנת נתונים - חיבור DB קצר, משתחרר לפני יצירת PDF
         with get_conn() as conn:
             pdf_data = prepare_guide_pdf_data(
-                conn, person_id, year, month, housing_array_id
+                conn, person_id, year, month, housing_array_id, public_report=True
             )
         if not pdf_data:
             raise ValueError(f"לא נמצאו נתונים למדריך {person_id}")
@@ -759,7 +759,7 @@ def _generate_combined_guides_pdf(
                 # חיבור DB קצר לכל מדריך - משתחרר מיד
                 with get_conn() as conn:
                     pdf_data = prepare_guide_pdf_data(
-                        conn, person_id, year, month, housing_array_id
+                        conn, person_id, year, month, housing_array_id, public_report=True
                     )
 
                 if not pdf_data:

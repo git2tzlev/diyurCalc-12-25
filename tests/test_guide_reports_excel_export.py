@@ -40,7 +40,8 @@ def test_build_guide_reports_excel_contains_display_rows_and_metadata():
                     "end_time": "08:00",
                     "work_hours": 7.5,
                     "standby_hours": 8.5,
-                    "note": "הערה",
+                    "note": "הערה | שולם ב-06/2026",
+                    "is_payment_period_completion": True,
                 }],
                 "payments_data": [{"description": "נסיעות", "amount": 50}],
                 "completion_payments_data": [],
@@ -68,4 +69,6 @@ def test_build_guide_reports_excel_contains_display_rows_and_metadata():
     assert sheets["guides"].iloc[0]["period_end_iso"] == "2026-05-31"
     assert list(sheets["report_rows"]["row_type"]) == ["shift", "payment"]
     assert sheets["report_rows"].iloc[0]["date_iso"] == "2026-05-01"
+    assert sheets["report_rows"].iloc[0]["description"] == "הערה | שולם ב-06/2026"
+    assert "payment-period-completion-row" in sheets["report_rows"].iloc[0]["css_class"]
     assert sheets["variable_rate_rows"].iloc[0]["shift_name"] == "תגבור"

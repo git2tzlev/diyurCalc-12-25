@@ -542,7 +542,7 @@ class TestShiftReportDisplayAllocation(unittest.TestCase):
         _apply_payment_period_markers_to_chains(daily_segments, markers)
 
         self.assertNotIn("payment_period_label", daily_segments[0]["chains"][0])
-        self.assertEqual(daily_segments[0]["chains"][1]["payment_period_label"], "משולם ב-05/2026")
+        self.assertEqual(daily_segments[0]["chains"][1]["payment_period_label"], "שולם ב-05/2026")
         self.assertEqual(daily_segments[0]["chains"][1]["payment_period_note"], "השלמה")
 
     # def test_format_hours_minutes(self):

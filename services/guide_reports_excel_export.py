@@ -72,6 +72,8 @@ def _shift_css_class(shift: dict[str, Any]) -> str:
     classes = []
     if shift.get("is_completion_apartment"):
         classes.append("completion-row")
+    if shift.get("is_payment_period_completion"):
+        classes.append("payment-period-completion-row")
     if shift.get("tagbor_group"):
         classes.append("tagbor-group")
     if shift.get("tagbor_first"):
@@ -89,6 +91,15 @@ def _payment_row(
     payment: dict[str, Any],
     is_completion: bool,
 ) -> dict[str, Any]:
+    classes = ["travel-row"]
+    if is_completion:
+        classes.append("completion-row")
+    if payment.get("is_payment_period_completion"):
+        classes.append("payment-period-completion-row")
+    description_parts = [
+        _value(payment, "detail", _value(payment, "description")),
+        _value(payment, "note"),
+    ]
     return {
         "guide_report_id": guide_report_id,
         "row_order": row_order,
@@ -103,9 +114,9 @@ def _payment_row(
         "work_hours": _value(payment, "work_hours", ""),
         "standby_hours": "",
         "amount": round(float(payment.get("amount") or 0), 2),
-        "description": _value(payment, "detail", _value(payment, "description")),
+        "description": " | ".join(str(part) for part in description_parts if part),
         "is_completion": is_completion,
-        "css_class": "travel-row completion-row" if is_completion else "travel-row",
+        "css_class": " ".join(classes),
     }
 
 

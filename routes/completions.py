@@ -3,20 +3,25 @@ from __future__ import annotations
 
 from collections import defaultdict
 from io import BytesIO
+import logging
 from typing import Optional
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
+from starlette.responses import StreamingResponse
 
 from core.config import config
 from core.database import (
     get_conn,
     get_default_period,
     get_housing_array_filter,
+    is_demo_mode,
+    set_demo_mode,
     set_housing_array_filter,
 )
+from core.auth import create_action_token, validate_action_token
 from core.payment_period import get_payment_period_completions
 from services.gesher_archive import get_gesher_export_file, list_gesher_export_files
 from services.gesher_difference import (
@@ -31,11 +36,50 @@ from services.gesher_difference import (
     is_completion_payable_source_symbol,
     parse_gesher_file_lines,
 )
+from services.email_service import (
+    generate_batch_id,
+    get_email_settings,
+    process_guide_for_bulk,
+)
 from utils.utils import human_date
 
 templates = Jinja2Templates(directory=str(config.TEMPLATES_DIR))
 templates.env.filters["human_date"] = human_date
 templates.env.globals["app_version"] = config.VERSION
+logger = logging.getLogger(__name__)
+
+
+def _sse_event(event: str, data: dict) -> str:
+    import json
+
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _completion_report_tasks(completion_data: dict) -> list[dict]:
+    """Build unique guide+work-month report tasks for marked completions."""
+    tasks_by_key = {}
+    for item in completion_data["items"]:
+        work_year = item.get("work_year")
+        work_month = item.get("work_month")
+        person_id = item.get("person_id")
+        if not work_year or not work_month or not person_id:
+            continue
+        key = (int(person_id), int(work_year), int(work_month))
+        if key not in tasks_by_key:
+            tasks_by_key[key] = {
+                "task_id": f"{person_id}-{work_year}-{work_month:02d}",
+                "id": int(person_id),
+                "name": item.get("person_name") or "",
+                "email": item.get("person_email") or "",
+                "work_year": int(work_year),
+                "work_month": int(work_month),
+                "items_count": 0,
+            }
+        tasks_by_key[key]["items_count"] += 1
+    return sorted(
+        tasks_by_key.values(),
+        key=lambda task: (task["work_year"], task["work_month"], task["name"]),
+    )
 
 
 def completions_page(
@@ -72,6 +116,7 @@ def completions_page(
                 "items": items,
                 "final_files": final_files,
             })
+        email_tasks = _completion_report_tasks(completion_data)
 
     return templates.TemplateResponse("completions.html", {
         "request": request,
@@ -80,7 +125,161 @@ def completions_page(
         "years": list(range(2023, 2028)),
         "groups": groups,
         "total_items": len(completion_data["items"]),
+        "email_tasks": email_tasks,
+        "email_tasks_with_email": sum(1 for task in email_tasks if task.get("email")),
+        "completion_bulk_send_token": create_action_token(request, "completion_bulk_send"),
+        "is_demo_mode": is_demo_mode(),
     })
+
+
+async def completion_reports_bulk_send_stream(
+    request: Request,
+    payment_year: int,
+    payment_month: int,
+    token: str = "",
+    demo_email: str = "",
+) -> StreamingResponse:
+    """Send one work-month shift report email for each guide completion task."""
+    import asyncio
+
+    if not validate_action_token(request, token, "completion_bulk_send"):
+        async def forbidden_stream():
+            yield _sse_event("error", {"message": "אין הרשאה להפעלת שליחה מרוכזת"})
+
+        return StreamingResponse(forbidden_stream(), media_type="text/event-stream")
+
+    housing_filter = get_housing_array_filter()
+    demo_mode = is_demo_mode()
+    demo_email = (demo_email or "").strip()
+    if demo_mode and not demo_email:
+        async def missing_demo_email_stream():
+            yield _sse_event("error", {"message": "במצב דמו יש להזין כתובת מייל לשליחה"})
+
+        return StreamingResponse(missing_demo_email_stream(), media_type="text/event-stream")
+
+    with get_conn() as conn:
+        settings = get_email_settings(conn)
+        if not settings:
+            async def settings_error_stream():
+                yield _sse_event("error", {"message": "הגדרות מייל לא נמצאו"})
+
+            return StreamingResponse(settings_error_stream(), media_type="text/event-stream")
+
+        completion_data = get_payment_period_completions(
+            conn, payment_year, payment_month, housing_array_id=housing_filter
+        )
+        tasks = _completion_report_tasks(completion_data)
+
+    if not tasks:
+        async def empty_stream():
+            yield _sse_event("error", {"message": "לא נמצאו דוחות השלמות לשליחה"})
+
+        return StreamingResponse(empty_stream(), media_type="text/event-stream")
+
+    batch_id = generate_batch_id()
+    current_user = getattr(request.state, "current_user", None)
+    sent_by = current_user.get("person_id") if current_user else None
+    concurrency = 3
+
+    def process_completion_report_task(task: dict) -> dict:
+        set_demo_mode(demo_mode)
+        set_housing_array_filter(housing_filter)
+        try:
+            return process_guide_for_bulk(
+                {
+                    "id": task["id"],
+                    "name": task["name"],
+                    "email": demo_email if demo_mode else task["email"],
+                },
+                task["work_year"],
+                task["work_month"],
+                batch_id,
+                settings,
+                sent_by,
+                housing_filter,
+            )
+        finally:
+            set_housing_array_filter(None)
+            set_demo_mode(False)
+
+    async def event_stream():
+        yield _sse_event("start", {
+            "total": len(tasks),
+            "batchId": batch_id,
+            "paymentYear": payment_year,
+            "paymentMonth": payment_month,
+        })
+
+        sent = []
+        skipped = []
+        processed = 0
+        loop = asyncio.get_event_loop()
+
+        for i in range(0, len(tasks), concurrency):
+            if await request.is_disconnected():
+                logger.info("Client disconnected during completion reports send batch %s", batch_id)
+                break
+
+            batch = tasks[i:i + concurrency]
+            for task in batch:
+                yield _sse_event("sending", task)
+
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=concurrency) as executor:
+                futures = [
+                    loop.run_in_executor(
+                        executor,
+                        process_completion_report_task,
+                        task,
+                    )
+                    for task in batch
+                ]
+                results = await asyncio.gather(*futures)
+
+            for task, result in zip(batch, results):
+                processed += 1
+                enriched = {
+                    **result,
+                    "task_id": task["task_id"],
+                    "work_year": task["work_year"],
+                    "work_month": task["work_month"],
+                    "items_count": task["items_count"],
+                }
+                if enriched["status"] == "sent":
+                    sent.append(enriched)
+                else:
+                    skipped.append(enriched)
+
+                yield _sse_event("progress", {
+                    "processed": processed,
+                    "total": len(tasks),
+                    "currentTaskId": task["task_id"],
+                    "currentId": task["id"],
+                    "currentName": task["name"],
+                    "workYear": task["work_year"],
+                    "workMonth": task["work_month"],
+                    "status": enriched["status"],
+                    "reason": enriched.get("reason"),
+                    "sent": len(sent),
+                    "skipped": len(skipped),
+                })
+
+        yield _sse_event("complete", {
+            "sent": sent,
+            "skipped": skipped,
+            "batchId": batch_id,
+        })
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 def _completion_ids_for_work_month(completion_data: dict, work_year: int, work_month: int) -> tuple[set[int], set[int], list[dict]]:

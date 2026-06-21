@@ -397,7 +397,7 @@ def _payment_marker_text(marker: dict) -> str:
     payment_month = marker.get("payment_month")
     if not payment_year or not payment_month:
         return ""
-    return f"משולם ב-{int(payment_month):02d}/{int(payment_year)}"
+    return f"שולם ב-{int(payment_month):02d}/{int(payment_year)}"
 
 
 def _marked_payment_windows_for_report(report: dict, work_year: int, work_month: int) -> list[dict]:
@@ -779,6 +779,14 @@ def _prepare_daily_segments_for_display(daily_segments: list[dict]) -> list[dict
     return display_days
 
 
+def _hide_public_payment_period_notes(daily_segments: list[dict]) -> None:
+    """בדוח רצפים שנשלח למדריך משאירים את חודש התשלום בלי הערת תשלום פנימית."""
+    for day in daily_segments:
+        for chain in day.get("chains", []):
+            if chain.get("payment_period_note"):
+                chain["payment_period_note"] = ""
+
+
 def guide_view(
     request: Request,
     person_id: int,
@@ -1047,7 +1055,14 @@ def shifts_report_pdf(
     )
 
 
-def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_filter: Optional[int] = None) -> Optional[Dict]:
+def prepare_guide_pdf_data(
+    conn,
+    person_id: int,
+    year: int,
+    month: int,
+    housing_filter: Optional[int] = None,
+    public_report: bool = True,
+) -> Optional[Dict]:
     """
     הכנת נתונים לדוח PDF של מדריך.
 
@@ -1057,6 +1072,7 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
         year: שנה
         month: חודש
         housing_filter: מזהה מערך דיור לסינון (None = ללא סינון)
+        public_report: מסנן הערות לפי רשימת ההערות המותרות בדוח משמרות
 
     Returns:
         Dict עם כל הנתונים הנדרשים לתבנית guide_shifts_pdf.html, או None אם המדריך לא נמצא
@@ -1086,6 +1102,7 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
                 tr.apartment_id,
                 tr.rate_apartment_type_id, tr.asd_night_marking,
                 tr.description,
+                tr.payment_year, tr.payment_month, tr.payment_note,
                 a.apartment_type_id,
                 a.housing_array_id,
                 st.name AS shift_type_name,
@@ -1107,6 +1124,7 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
                 tr.apartment_id,
                 tr.rate_apartment_type_id, tr.asd_night_marking,
                 tr.description,
+                tr.payment_year, tr.payment_month, tr.payment_note,
                 a.apartment_type_id,
                 a.housing_array_id,
                 st.name AS shift_type_name,
@@ -1171,18 +1189,48 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
             return "ערות בלילה"
         return ""
 
+    def _payment_period_label_for_report(r: dict) -> str:
+        payment_year = r.get("payment_year")
+        payment_month = r.get("payment_month")
+        if not payment_year or not payment_month:
+            return ""
+        report_date = r.get("date")
+        if isinstance(report_date, datetime):
+            report_date = report_date.date()
+        if not isinstance(report_date, date):
+            return ""
+        if int(payment_year) == report_date.year and int(payment_month) == report_date.month:
+            return ""
+        return f"שולם ב-{int(payment_month):02d}/{int(payment_year)}"
+
     def _compose_shift_note(r: dict) -> str:
-        """שילוב הערת הדיווח עם הערת ASD לעמודת ההערה בדוח."""
+        """שילוב הערת הדיווח, סימון חודש תשלום והערת ASD לעמודת ההערה בדוח."""
         note_parts: list[str] = []
         description = (r.get("description") or "").strip()
+        payment_period_label = _payment_period_label_for_report(r)
+        payment_note = (r.get("payment_note") or "").strip()
         asd_note = _asd_night_note_pdf(r)
 
+        if payment_period_label:
+            note_parts.append(payment_period_label)
+        if public_report:
+            public_note_parts = []
+            if payment_period_label:
+                public_note_parts.append(payment_period_label)
+            if asd_note:
+                public_note_parts.append(asd_note)
+            return " | ".join(public_note_parts)
         if description:
-            note_parts.append(description)
+            note_parts.insert(0, description)
+        if payment_note and payment_note not in note_parts:
+            note_parts.append(payment_note)
         if asd_note and asd_note not in note_parts:
             note_parts.append(asd_note)
 
         return " | ".join(note_parts)
+
+    def _is_payment_period_completion(r: dict) -> bool:
+        return bool(_payment_period_label_for_report(r))
 
     def _is_asd_apartment_pdf(r: dict) -> bool:
         """האם הדירה שייכת למערך ASD."""
@@ -1234,6 +1282,7 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
                     "work_hours": work_hours,
                     "standby_hours": standby_hours,
                     "note": _compose_shift_note(r) if seg_data["is_first"] else "",
+                    "is_payment_period_completion": _is_payment_period_completion(r),
                     "tagbor_group": True,
                     "tagbor_first": seg_data["is_first"],
                     "tagbor_last": seg_data["is_last"],
@@ -1270,6 +1319,7 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
                 "work_hours": round(work_hours, 2),
                 "standby_hours": round(standby_hours, 2),
                 "note": _compose_shift_note(r),
+                "is_payment_period_completion": _is_payment_period_completion(r),
                 "_allocation_windows": allocation_windows,
                 "_allocation_no_time_day": r_date if not allocation_windows else None,
                 "_allocation_shift_type_id": r["shift_type_id"],
@@ -1279,8 +1329,9 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
     if housing_filter is not None:
         payment_comps = conn.execute("""
             SELECT
-                pc.quantity, pc.rate, pc.description,
+                pc.quantity, pc.rate, pc.description, pc.date,
                 pc.apartment_id,
+                pc.payment_year, pc.payment_month, pc.payment_note,
                 pct.name AS component_type_name
             FROM payment_components pc
             LEFT JOIN payment_component_types pct ON pc.component_type_id = pct.id
@@ -1293,8 +1344,9 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
     else:
         payment_comps = conn.execute("""
             SELECT
-                pc.quantity, pc.rate, pc.description,
+                pc.quantity, pc.rate, pc.description, pc.date,
                 pc.apartment_id,
+                pc.payment_year, pc.payment_month, pc.payment_note,
                 pct.name AS component_type_name
             FROM payment_components pc
             LEFT JOIN payment_component_types pct ON pc.component_type_id = pct.id
@@ -1303,8 +1355,8 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
             ORDER BY pc.date
         """, (person_id, start_date, end_date)).fetchall()
 
-    payments_by_type: Dict[str, float] = {}
-    completion_payments_by_type: Dict[str, float] = {}
+    payments_by_type: Dict[tuple[str, str], dict] = {}
+    completion_payments_by_type: Dict[tuple[str, str], dict] = {}
     total_additions = 0.0
     total_additions_no_travel = 0.0
     for pc in payment_comps:
@@ -1322,20 +1374,52 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
             key = f"{type_name} - {pc['description']}"
         else:
             key = type_name
+        payment_period_label = _payment_period_label_for_report(pc)
+        payment_period_note = (pc.get("payment_note") or "").strip()
+        note_parts = []
+        if payment_period_label:
+            note_parts.append(payment_period_label)
+        if public_report:
+            note_parts = []
+            if payment_period_label:
+                note_parts.append(payment_period_label)
+            if payment_period_label and payment_period_note:
+                note_parts.append(payment_period_note)
+        elif payment_period_note:
+            note_parts.append(payment_period_note)
+        note = " | ".join(note_parts)
         # פיצול תשלומים: השלמות לחוד, רגילים לחוד
         target = completion_payments_by_type if _is_completion_apartment(apartment_id=pc.get("apartment_id")) else payments_by_type
-        target[key] = target.get(key, 0) + amount
+        target_key = (key, note)
+        if target_key not in target:
+            target[target_key] = {
+                "description": key,
+                "note": note,
+                "amount": 0.0,
+                "is_payment_period_completion": bool(payment_period_label),
+            }
+        target[target_key]["amount"] += amount
         # חישוב תוספות ללא נסיעות
         if not is_travel:
             total_additions_no_travel += amount
 
     payments_data = [
-        {"description": desc, "amount": round(amt, 2)}
-        for desc, amt in payments_by_type.items()
+        {
+            "description": item["description"],
+            "amount": round(item["amount"], 2),
+            "note": item["note"],
+            "is_payment_period_completion": item["is_payment_period_completion"],
+        }
+        for item in payments_by_type.values()
     ]
     completion_payments_data = [
-        {"description": desc, "amount": round(amt, 2)}
-        for desc, amt in completion_payments_by_type.items()
+        {
+            "description": item["description"],
+            "amount": round(item["amount"], 2),
+            "note": item["note"],
+            "is_payment_period_completion": item["is_payment_period_completion"],
+        }
+        for item in completion_payments_by_type.values()
     ]
 
     # חישוב תעריפים משתנים מ-daily_segments
@@ -1591,6 +1675,21 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
     # סה"כ תעריף משתנה - סכום הערכים המעוגלים המוצגים בטבלה
     variable_rate_total = round(variable_rate_total_from_rows, 1)
     shifts_data = _sort_shift_rows_for_display(shifts_data)
+    payment_period_labels = sorted({
+        (row.get("note") or "").split("|", 1)[0].strip()
+        for row in shifts_data
+        if row.get("is_payment_period_completion") and row.get("note")
+    })
+    for payment in payments_data + completion_payments_data:
+        if payment.get("is_payment_period_completion") and payment.get("note"):
+            label = (payment.get("note") or "").split("|", 1)[0].strip()
+            if label and label not in payment_period_labels:
+                payment_period_labels.append(label)
+    payment_period_months = [
+        label.replace("שולם ב-", "").strip()
+        for label in payment_period_labels
+        if label.startswith("שולם ב-")
+    ]
 
     return {
         "person": dict(person),
@@ -1608,6 +1707,10 @@ def prepare_guide_pdf_data(conn, person_id: int, year: int, month: int, housing_
         "variable_shifts": variable_shifts,
         "variable_rate_total": variable_rate_total,
         "is_asd_multi_rate": is_asd and show_asd_breakdown,
+        "payment_period_legend": (
+            f"השורות המסומנות בצבע כתום הן השלמות ששולמו בחודש התשלום {', '.join(payment_period_months)}"
+            if payment_period_months else ""
+        ),
     }
 
 
@@ -1626,7 +1729,9 @@ def shifts_report_preview(
         year, month = now.year, now.month
 
     with get_conn() as conn:
-        pdf_data = prepare_guide_pdf_data(conn, person_id, year, month, housing_filter)
+        pdf_data = prepare_guide_pdf_data(
+            conn, person_id, year, month, housing_filter, public_report=True
+        )
 
     if not pdf_data:
         raise HTTPException(status_code=404, detail="מדריך לא נמצא")
@@ -1657,7 +1762,9 @@ def _generate_shifts_pdf(person_id: int, year: int, month: int, session_token: O
         # הכנת נתונים באמצעות הפונקציה המשותפת
         with get_conn() as conn:
             hf = get_housing_array_filter()
-            pdf_data = prepare_guide_pdf_data(conn, person_id, year, month, hf)
+            pdf_data = prepare_guide_pdf_data(
+                conn, person_id, year, month, hf, public_report=True
+            )
 
         if not pdf_data:
             logger.error(f"Person not found: {person_id}")
@@ -1823,8 +1930,11 @@ def _prepare_chains_pdf_data(conn, person_id: int, year: int, month: int) -> Opt
     )
     payment_period_markers = _load_payment_period_markers(conn, person_id, year, month, hf)
     _apply_payment_period_markers_to_chains(daily_segments, payment_period_markers)
+    _hide_public_payment_period_notes(daily_segments)
     daily_segments = _prepare_daily_segments_for_display(daily_segments)
-    monthly_report = prepare_guide_pdf_data(conn, person_id, year, month, hf)
+    monthly_report = prepare_guide_pdf_data(
+        conn, person_id, year, month, hf, public_report=True
+    )
 
     return {
         "person": person,

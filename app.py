@@ -59,6 +59,7 @@ from routes.completions import (
     completion_gesher_file_report,
     completion_impact_report,
     completion_overall_impact_report,
+    completion_reports_bulk_send_stream,
 )
 from routes.email import (
     email_settings_page,
@@ -678,6 +679,20 @@ def completion_gesher_file_route(
 ):
     """Generate a Gesher file for payment-month completion differences."""
     return completion_gesher_file_report(request, payment_year, payment_month)
+
+
+@app.get("/api/completions/send-reports-stream")
+async def completion_reports_bulk_send_stream_route(
+    request: Request,
+    payment_year: int,
+    payment_month: int,
+    token: str = "",
+    demo_email: str = "",
+):
+    """Send work-month shift reports for guides with completions."""
+    return await completion_reports_bulk_send_stream(
+        request, payment_year, payment_month, token, demo_email
+    )
 
 
 # Statistics routes

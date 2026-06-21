@@ -394,6 +394,26 @@
     background: #f5f9ff !important;
   }
 
+  .monthly-guide-report .payment-period-completion-row {
+    background: #fff7ed !important;
+  }
+
+  .monthly-guide-report .payment-period-completion-row td:last-child {
+    color: #92400e;
+    font-weight: 600;
+  }
+
+  .monthly-guide-report .payment-period-legend {
+    margin: 10px 0;
+    padding: 8px 10px;
+    background: #fff7ed;
+    border: 1px solid #fed7aa;
+    color: #92400e;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
   .monthly-guide-report .tagbor-group:not(.tagbor-last) td {
     border-bottom: none;
   }
@@ -1361,6 +1381,10 @@
               monthly_report.period_end }}</div>
           </div>
 
+          {% if monthly_report.payment_period_legend %}
+          <div class="payment-period-legend">{{ monthly_report.payment_period_legend }}</div>
+          {% endif %}
+
           <table>
             <thead>
               <tr>
@@ -1372,12 +1396,13 @@
                 <th>סיום</th>
                 <th>עבודה</th>
                 <th>כוננות</th>
+                <th>הערות</th>
               </tr>
             </thead>
             <tbody>
               {% if not monthly_report.shifts_data and not monthly_report.payments_data %}
               <tr>
-                <td colspan="8" style="padding: 18px; color: #64748b; font-size: 13px;">
+                <td colspan="9" style="padding: 18px; color: #64748b; font-size: 13px;">
                   אין משמרות או תשלומים נוספים לחודש זה.
                 </td>
               </tr>

@@ -28,6 +28,10 @@
        style="text-decoration: none; padding: 6px 10px; border-radius: 6px; background: #0f766e; color: white;">
       הצג השפעת כל ההשלמות
     </a>
+    <button type="button" onclick="openCompletionEmailDialog()"
+       style="padding: 6px 10px; border: none; border-radius: 6px; background: #6f42c1; color: white; cursor: pointer;">
+      שלח דוחות למדריכים
+    </button>
     <span class="muted">{{ total_items }} השלמות</span>
   </form>
 
@@ -104,4 +108,363 @@
     <div class="muted" style="padding: 30px 0;">אין השלמות לחודש התשלום שנבחר</div>
   {% endfor %}
 </div>
+
+<div id="completionEmailDialog" class="completion-email-overlay" style="display: none;">
+  <div class="completion-email-dialog">
+    <div class="completion-email-header">
+      <h3>שליחת דוחות השלמות - <span id="completionEmailPeriod"></span></h3>
+      <p class="muted">כל דוח חודש עבודה נשלח במייל נפרד למדריך המתאים</p>
+    </div>
+
+    <div id="completionEmailPreSend" class="completion-email-summary">
+      <span class="completion-stat sent"><strong id="completionEmailWithEmail"></strong> דוחות עם מייל</span>
+      <span class="completion-stat skipped"><strong id="completionEmailWithoutEmail"></strong> דוחות ללא מייל</span>
+      <span class="completion-stat total">סה"כ <strong id="completionEmailTotal"></strong> דוחות</span>
+    </div>
+
+    {% if is_demo_mode %}
+    <div class="completion-demo-target">
+      <label for="completionDemoEmailInput">מצב דמו - שליחת כל הדוחות לכתובת:</label>
+      <input type="email" id="completionDemoEmailInput" placeholder="name@example.com">
+    </div>
+    {% endif %}
+
+    <div id="completionEmailProgressSection" style="display: none;">
+      <div class="completion-progress-container">
+        <div id="completionEmailProgressBar" class="completion-progress-fill"></div>
+      </div>
+      <div style="display:flex; justify-content:space-between; margin-top:6px; font-size:13px; color:#666;">
+        <span id="completionEmailProgressText">0%</span>
+        <span id="completionEmailTimeEstimate"></span>
+      </div>
+    </div>
+
+    <div id="completionEmailTaskList" class="completion-email-task-list"></div>
+
+    <div id="completionEmailFinalSummary" class="completion-email-final" style="display:none;">
+      <div id="completionEmailFinalSent" class="completion-stat sent"></div>
+      <div id="completionEmailFinalSkipped" class="completion-stat skipped"></div>
+    </div>
+
+    <div class="completion-email-footer">
+      <button type="button" id="completionEmailCancelBtn" onclick="closeCompletionEmailDialog()" class="completion-btn-cancel">ביטול</button>
+      <button type="button" id="completionEmailSendBtn" onclick="startCompletionEmailSend()" class="completion-btn-send">
+        <span id="completionEmailSendBtnText">שלח</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<style>
+  .completion-email-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .completion-email-dialog {
+    background: #fff;
+    border-radius: 12px;
+    width: 620px;
+    max-height: 82vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  }
+  .completion-email-header {
+    padding: 20px 24px 12px;
+    border-bottom: 1px solid #e2e8f0;
+  }
+  .completion-email-header h3 {
+    margin: 0;
+    font-size: 18px;
+    color: #1a202c;
+  }
+  .completion-email-header p {
+    margin: 6px 0 0;
+  }
+  .completion-email-summary {
+    display: flex;
+    gap: 16px;
+    padding: 12px 24px;
+    background: #f8fafc;
+    border-bottom: 1px solid #e2e8f0;
+    font-size: 14px;
+  }
+  .completion-demo-target {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 24px;
+    background: #fff7ed;
+    border-bottom: 1px solid #fed7aa;
+    font-size: 14px;
+  }
+  .completion-demo-target label {
+    font-weight: 600;
+    color: #92400e;
+  }
+  .completion-demo-target input {
+    flex: 1;
+    min-width: 220px;
+    padding: 7px 10px;
+    border: 1px solid #f59e0b;
+    border-radius: 6px;
+    font-size: 14px;
+  }
+  .completion-stat.sent { color: #16a34a; }
+  .completion-stat.skipped { color: #d97706; }
+  .completion-stat.failed { color: #dc2626; }
+  .completion-stat.total { color: #475569; margin-right: auto; }
+  .completion-progress-container {
+    height: 8px;
+    background: #e2e8f0;
+    border-radius: 4px;
+    margin: 16px 24px 0;
+    overflow: hidden;
+  }
+  .completion-progress-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #3b82f6, #6366f1);
+    transition: width 0.3s ease;
+  }
+  .completion-email-task-list {
+    flex: 1;
+    overflow-y: auto;
+    max-height: 360px;
+    padding: 8px 24px;
+  }
+  .completion-email-task {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 0;
+    border-bottom: 1px solid #f1f5f9;
+    font-size: 14px;
+  }
+  .completion-email-task:last-child { border-bottom: none; }
+  .completion-task-icon {
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    font-size: 12px;
+    flex-shrink: 0;
+  }
+  .completion-task-icon.pending { background: #f1f5f9; color: #94a3b8; }
+  .completion-task-icon.sending { background: #dbeafe; color: #3b82f6; }
+  .completion-task-icon.sent { background: #dcfce7; color: #16a34a; }
+  .completion-task-icon.skipped { background: #fef3c7; color: #d97706; }
+  .completion-task-icon.failed { background: #fee2e2; color: #dc2626; }
+  .completion-task-main { flex: 1; }
+  .completion-task-meta { font-size: 12px; color: #64748b; }
+  .completion-task-reason { font-size: 12px; color: #94a3b8; min-width: 90px; text-align: left; }
+  .completion-email-final {
+    padding: 12px 24px;
+    background: #f0fdf4;
+    border-top: 1px solid #bbf7d0;
+    display: flex;
+    gap: 16px;
+    font-size: 14px;
+  }
+  .completion-email-footer {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    padding: 16px 24px;
+    border-top: 1px solid #e2e8f0;
+  }
+  .completion-btn-cancel {
+    padding: 8px 20px;
+    border-radius: 6px;
+    border: 1px solid #d1d5db;
+    background: #fff;
+    color: #374151;
+    cursor: pointer;
+  }
+  .completion-btn-send {
+    padding: 8px 24px;
+    border-radius: 6px;
+    border: none;
+    background: #6f42c1;
+    color: #fff;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  .completion-btn-send:disabled {
+    background: #c4b5fd;
+    cursor: not-allowed;
+  }
+</style>
+
+<script>
+  const completionPaymentYear = {{ selected_year }};
+  const completionPaymentMonth = {{ selected_month }};
+  const completionEmailTasks = {{ email_tasks|tojson }};
+  const completionIsDemoMode = {{ 'true' if is_demo_mode else 'false' }};
+  let completionEmailEventSource = null;
+  let completionEmailStartTime = null;
+
+  function completionWorkPeriodLabel(task) {
+    return `${String(task.work_month).padStart(2, '0')}/${task.work_year}`;
+  }
+
+  function openCompletionEmailDialog() {
+    if (!completionEmailTasks.length) {
+      alert('אין דוחות השלמות לשליחה');
+      return;
+    }
+
+    const withEmail = completionIsDemoMode
+      ? completionEmailTasks.length
+      : completionEmailTasks.filter(task => task.email).length;
+    const withoutEmail = completionIsDemoMode ? 0 : completionEmailTasks.length - withEmail;
+    document.getElementById('completionEmailPeriod').textContent =
+      `${String(completionPaymentMonth).padStart(2, '0')}/${completionPaymentYear}`;
+    document.getElementById('completionEmailWithEmail').textContent = withEmail;
+    document.getElementById('completionEmailWithoutEmail').textContent = withoutEmail;
+    document.getElementById('completionEmailTotal').textContent = completionEmailTasks.length;
+    document.getElementById('completionEmailSendBtnText').textContent = `שלח ${withEmail} דוחות`;
+
+    const listEl = document.getElementById('completionEmailTaskList');
+    listEl.innerHTML = '';
+    completionEmailTasks.forEach(task => {
+      const hasTarget = completionIsDemoMode || task.email;
+      const status = hasTarget ? 'pending' : 'skipped';
+      const icon = hasTarget ? '·' : '!';
+      const reason = hasTarget ? (completionIsDemoMode ? 'יישלח לכתובת הדמו' : '') : 'חסר מייל';
+      listEl.innerHTML += `
+        <div class="completion-email-task" data-task-id="${task.task_id}">
+          <div class="completion-task-icon ${status}">${icon}</div>
+          <div class="completion-task-main">
+            <div>${task.name}</div>
+            <div class="completion-task-meta">דוח ${completionWorkPeriodLabel(task)} · ${task.items_count} השלמות</div>
+          </div>
+          <div class="completion-task-reason">${reason}</div>
+        </div>`;
+    });
+
+    document.getElementById('completionEmailProgressSection').style.display = 'none';
+    document.getElementById('completionEmailProgressBar').style.width = '0%';
+    document.getElementById('completionEmailProgressText').textContent = '0%';
+    document.getElementById('completionEmailTimeEstimate').textContent = '';
+    document.getElementById('completionEmailFinalSummary').style.display = 'none';
+    document.getElementById('completionEmailPreSend').style.display = 'flex';
+    document.getElementById('completionEmailSendBtn').style.display = '';
+    document.getElementById('completionEmailSendBtn').disabled = false;
+    document.getElementById('completionEmailCancelBtn').textContent = 'ביטול';
+    document.getElementById('completionEmailDialog').style.display = 'flex';
+  }
+
+  function closeCompletionEmailDialog() {
+    if (completionEmailEventSource) {
+      completionEmailEventSource.close();
+      completionEmailEventSource = null;
+    }
+    document.getElementById('completionEmailDialog').style.display = 'none';
+  }
+
+  function updateCompletionTask(taskId, status, reason) {
+    const item = document.querySelector(`.completion-email-task[data-task-id="${taskId}"]`);
+    if (!item) return;
+    const icon = item.querySelector('.completion-task-icon');
+    const reasonEl = item.querySelector('.completion-task-reason');
+    icon.className = `completion-task-icon ${status}`;
+    icon.textContent = status === 'sent' ? '✓' : (status === 'failed' ? '×' : (status === 'sending' ? '…' : '!'));
+    reasonEl.textContent = reason || (status === 'sending' ? 'שולח...' : '');
+    item.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  function startCompletionEmailSend() {
+    const sendBtn = document.getElementById('completionEmailSendBtn');
+    let demoEmail = '';
+    if (completionIsDemoMode) {
+      const demoEmailInput = document.getElementById('completionDemoEmailInput');
+      demoEmail = demoEmailInput ? demoEmailInput.value.trim() : '';
+      if (!demoEmail) {
+        alert('במצב דמו יש להזין כתובת מייל לשליחת הדוחות');
+        if (demoEmailInput) demoEmailInput.focus();
+        return;
+      }
+    }
+    sendBtn.disabled = true;
+    document.getElementById('completionEmailSendBtnText').textContent = 'שולח...';
+    document.getElementById('completionEmailProgressSection').style.display = 'block';
+    document.getElementById('completionEmailPreSend').style.display = 'none';
+    completionEmailStartTime = Date.now();
+
+    let url = `/api/completions/send-reports-stream?payment_year=${completionPaymentYear}&payment_month=${completionPaymentMonth}&token={{ completion_bulk_send_token|urlencode }}`;
+    if (completionIsDemoMode) {
+      url += `&demo_email=${encodeURIComponent(demoEmail)}`;
+    }
+    completionEmailEventSource = new EventSource(url);
+
+    completionEmailEventSource.addEventListener('sending', function(e) {
+      const task = JSON.parse(e.data);
+      updateCompletionTask(task.task_id, 'sending', 'שולח...');
+    });
+
+    completionEmailEventSource.addEventListener('progress', function(e) {
+      const data = JSON.parse(e.data);
+      const pct = Math.round((data.processed / data.total) * 100);
+      document.getElementById('completionEmailProgressBar').style.width = pct + '%';
+      document.getElementById('completionEmailProgressText').textContent = `${pct}% (${data.processed}/${data.total})`;
+
+      const elapsed = (Date.now() - completionEmailStartTime) / 1000;
+      const avg = elapsed / data.processed;
+      const remaining = Math.ceil(avg * (data.total - data.processed));
+      document.getElementById('completionEmailTimeEstimate').textContent =
+        remaining > 60 ? `~${Math.ceil(remaining / 60)} דקות` : (remaining > 0 ? `~${remaining} שניות` : '');
+
+      updateCompletionTask(data.currentTaskId, data.status, data.reason || '');
+    });
+
+    completionEmailEventSource.addEventListener('complete', function(e) {
+      const data = JSON.parse(e.data);
+      completionEmailEventSource.close();
+      completionEmailEventSource = null;
+      document.getElementById('completionEmailProgressBar').style.width = '100%';
+      document.getElementById('completionEmailProgressText').textContent = '100%';
+      document.getElementById('completionEmailTimeEstimate').textContent = 'הושלם';
+      document.getElementById('completionEmailFinalSent').innerHTML = `נשלחו בהצלחה: <strong>${data.sent.length}</strong>`;
+      document.getElementById('completionEmailFinalSkipped').innerHTML = `דולגו/נכשלו: <strong>${data.skipped.length}</strong>`;
+      document.getElementById('completionEmailFinalSummary').style.display = 'flex';
+      sendBtn.style.display = 'none';
+      document.getElementById('completionEmailCancelBtn').textContent = 'סגור';
+    });
+
+    completionEmailEventSource.addEventListener('error', function(e) {
+      const data = e.data ? JSON.parse(e.data) : {};
+      if (completionEmailEventSource) {
+        completionEmailEventSource.close();
+        completionEmailEventSource = null;
+      }
+      alert('שגיאה בשליחה: ' + (data.message || 'חיבור נותק'));
+      sendBtn.disabled = false;
+      document.getElementById('completionEmailSendBtnText').textContent = 'שלח שוב';
+    });
+
+    completionEmailEventSource.onerror = function() {
+      if (completionEmailEventSource) {
+        completionEmailEventSource.close();
+        completionEmailEventSource = null;
+        sendBtn.disabled = false;
+        document.getElementById('completionEmailSendBtnText').textContent = 'שלח שוב';
+      }
+    };
+  }
+
+  document.addEventListener('click', function(e) {
+    const dialog = document.getElementById('completionEmailDialog');
+    if (e.target === dialog && !completionEmailEventSource) {
+      closeCompletionEmailDialog();
+    }
+  });
+</script>
 {% endblock %}
