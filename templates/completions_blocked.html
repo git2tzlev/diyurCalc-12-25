@@ -8,7 +8,16 @@
         נמצאו שינויים בחודש העבודה שלא נובעים מההשלמות שסומנו לתשלום ב-{{ "%02d"|format(payment_month) }}/{{ payment_year }}.
       </div>
     </div>
-    <a href="/completions?year={{ payment_year }}&month={{ payment_month }}" class="nav-link">חזרה להשלמות</a>
+    <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+      {% if completions %}
+      <a
+        href="/completions/reports/{{ file.id }}?payment_year={{ payment_year }}&payment_month={{ payment_month }}"
+        class="nav-link"
+        style="background: #0f766e; color: #fff; border: 1px solid #0f766e; border-radius: 6px; padding: 7px 12px; text-decoration: none; font-weight: 700;"
+      >הפק דוח למדריכים שסומנו להשלמה</a>
+      {% endif %}
+      <a href="/completions?year={{ payment_year }}&month={{ payment_month }}" class="nav-link">חזרה להשלמות</a>
+    </div>
   </div>
 
   <section style="margin-top: 14px;">

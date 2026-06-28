@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 
+from core.audit import ensure_salary_audit_schema
 from core.database import get_conn, set_demo_mode
 from core.holiday_payment import (
     ensure_holiday_payment_assignments_table,
@@ -33,6 +34,7 @@ def ensure_runtime_defaults_for_current_database() -> None:
         ensure_email_logs_table(conn.conn)
         ensure_gesher_export_files_table(conn.conn)
         ensure_time_reports_audit_columns(conn.conn)
+        ensure_salary_audit_schema(conn.conn)
         ensure_payment_period_columns(conn.conn)
         ensure_shift_time_overrides_history_table(conn.conn)
 

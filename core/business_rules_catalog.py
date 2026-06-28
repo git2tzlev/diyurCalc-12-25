@@ -797,13 +797,15 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
             ),
             BusinessRule(
                 title="צבירות חופשה ומחלה",
-                summary="צבירת ימי חופשה ומחלה מחושבת לפי ימי עבודה בפועל ותאריך תחילת עבודה.",
+                summary="צבירת ימי חופשה ומחלה ניתנת רק למדריך קבוע לפי סטטוס חודש העבודה, ומחושבת לפי ימי עבודה בפועל ותאריך תחילת עבודה.",
                 details=(
+                    "סטטוס העובד נבדק לפי חודש העבודה ההיסטורי, לא לפי חודש התשלום או הסטטוס הנוכחי.",
+                    "מדריך מחליף באותו חודש אינו מקבל צבירת חופשה/מחלה גם אם הפך לקבוע בחודש מאוחר יותר.",
                     "ימי עבודה בפועל כוללים עבודה, חופשה ומחלה.",
                     "הפירוט נשמר בשדות vacation_details, sick_days_accrued ו-vacation_days_accrued.",
                     "פער תצוגה ידוע: שורת חופשה בדוח הרצפים מחשבת לעיתים דקות כפול שכר מינימום במקום להציג ישירות את vacation_payment המחושב.",
                 ),
-                source=("app_utils.py:aggregate_daily_segments_to_monthly", "utils/utils.py:calculate_accruals"),
+                source=("app_utils.py:aggregate_daily_segments_to_monthly", "core/history.py:get_person_status_for_month", "utils/utils.py:calculate_accruals"),
                 tags=("צבירה", "חופשה", "מחלה"),
             ),
         ),

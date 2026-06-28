@@ -4594,8 +4594,15 @@ def aggregate_daily_segments_to_monthly(
         ).fetchone()
         start_date_ts = person["start_date"] if person else None
 
-    # חישוב צבירות (מחלה וחופשה)
-    if start_date_ts is not None:
+    # חישוב צבירות (מחלה וחופשה) - רק למדריך קבוע לפי סטטוס חודש העבודה.
+    # חשוב במיוחד בגשר הפרשים: חודש התשלום יכול להיות אחרי שינוי סטטוס.
+    raw_conn = getattr(conn, "conn", conn)
+    if raw_conn is not None:
+        person_status_for_work_month = get_person_status_for_month(raw_conn, person_id, year, month)
+        employee_type_for_work_month = person_status_for_work_month.get("employee_type")
+    else:
+        employee_type_for_work_month = "permanent"
+    if start_date_ts is not None and employee_type_for_work_month == "permanent":
         accruals = calculate_accruals(
             actual_work_days=monthly_totals["actual_work_days"],
             start_date_ts=start_date_ts,

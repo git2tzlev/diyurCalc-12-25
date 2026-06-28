@@ -34,6 +34,7 @@ class TestRuntimeDefaults(unittest.TestCase):
             patch.object(runtime_defaults, "ensure_email_logs_table") as email_logs,
             patch.object(runtime_defaults, "ensure_gesher_export_files_table") as gesher_files,
             patch.object(runtime_defaults, "ensure_time_reports_audit_columns") as time_reports_audit,
+            patch.object(runtime_defaults, "ensure_salary_audit_schema") as salary_audit,
             patch.object(runtime_defaults, "ensure_payment_period_columns") as payment_period,
             patch.object(runtime_defaults, "ensure_shift_time_overrides_history_table") as shift_overrides_history,
         ):
@@ -41,7 +42,7 @@ class TestRuntimeDefaults(unittest.TestCase):
 
         for mock in (
             sick, support, holiday, assignments, special_day,
-            email_logs, gesher_files, time_reports_audit, payment_period,
+            email_logs, gesher_files, time_reports_audit, salary_audit, payment_period,
             shift_overrides_history,
         ):
             mock.assert_called_once_with("raw-connection")

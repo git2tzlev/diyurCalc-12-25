@@ -41,6 +41,8 @@ from services.email_service import (
     get_email_settings,
     process_guide_for_bulk,
 )
+from routes.guide import prepare_guide_pdf_data
+from services.guide_reports_excel_export import build_guide_reports_excel
 from utils.utils import human_date
 
 templates = Jinja2Templates(directory=str(config.TEMPLATES_DIR))
@@ -80,6 +82,22 @@ def _completion_report_tasks(completion_data: dict) -> list[dict]:
         tasks_by_key.values(),
         key=lambda task: (task["work_year"], task["work_month"], task["name"]),
     )
+
+
+def _unique_completion_person_ids(completion_items: list[dict]) -> list[int]:
+    person_ids_by_name: dict[int, str] = {}
+    for item in completion_items:
+        person_id = item.get("person_id")
+        if not person_id:
+            continue
+        person_ids_by_name[int(person_id)] = item.get("person_name") or ""
+    return [
+        person_id
+        for person_id, _name in sorted(
+            person_ids_by_name.items(),
+            key=lambda item: item[1],
+        )
+    ]
 
 
 def completions_page(
@@ -548,6 +566,95 @@ def completion_gesher_file_report(
         content=zip_buffer.getvalue(),
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+def completion_guides_report_excel(
+    request: Request,
+    file_id: int,
+    payment_year: int,
+    payment_month: int,
+) -> Response:
+    """Export guide reports only for guides marked as completions for the archived work month."""
+    current_filter = get_housing_array_filter()
+    with get_conn() as conn:
+        file_row = get_gesher_export_file(conn, file_id, housing_array_id=current_filter)
+        if not file_row:
+            raise HTTPException(status_code=404, detail="קובץ גשר לא נמצא")
+
+        work_year = int(file_row["year"])
+        work_month = int(file_row["month"])
+        file_housing_filter = file_row.get("housing_array_id")
+
+        old_filter = get_housing_array_filter()
+        if file_housing_filter != old_filter:
+            set_housing_array_filter(file_housing_filter)
+
+        try:
+            completion_data = get_payment_period_completions(
+                conn, payment_year, payment_month, housing_array_id=file_housing_filter
+            )
+            _report_ids, _component_ids, completion_items = _completion_ids_for_work_month(
+                completion_data, work_year, work_month
+            )
+            person_ids = _unique_completion_person_ids(completion_items)
+            if not person_ids:
+                raise HTTPException(status_code=404, detail="לא נמצאו מדריכים שסומנו להשלמה לחודש העבודה של הקובץ")
+
+            selected_housing_array_name = ""
+            if file_housing_filter is not None:
+                ha = conn.execute(
+                    "SELECT name FROM housing_arrays WHERE id = %s",
+                    (file_housing_filter,),
+                ).fetchone()
+                selected_housing_array_name = ha["name"] if ha else ""
+
+            current_user = getattr(request.state, "current_user", None)
+            exported_by = current_user.get("name") if current_user else ""
+            guide_reports = []
+            for person_id in person_ids:
+                person = conn.execute("""
+                    SELECT p.id, p.id_number, p.meirav_code, p.name, p.email, p.type,
+                           p.housing_array_id, ha.name AS housing_array_name
+                    FROM people p
+                    LEFT JOIN housing_arrays ha ON ha.id = p.housing_array_id
+                    WHERE p.id = %s
+                """, (person_id,)).fetchone()
+                if not person:
+                    continue
+
+                pdf_data = prepare_guide_pdf_data(
+                    conn, person_id, work_year, work_month, file_housing_filter
+                )
+                if not pdf_data:
+                    continue
+
+                guide_reports.append({
+                    "person": dict(person),
+                    "pdf_data": pdf_data,
+                })
+        finally:
+            if file_housing_filter != old_filter:
+                set_housing_array_filter(old_filter)
+
+    excel_bytes = build_guide_reports_excel(
+        year=work_year,
+        month=work_month,
+        exported_by=exported_by,
+        selected_housing_array_id=file_housing_filter,
+        selected_housing_array_name=selected_housing_array_name,
+        guide_reports=guide_reports,
+    )
+    filename = (
+        f"completion_guide_reports_{work_year}_{work_month:02d}_"
+        f"paid_{payment_year}_{payment_month:02d}.xlsx"
+    )
+    from urllib.parse import quote
+
+    return Response(
+        content=excel_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
     )
 
 

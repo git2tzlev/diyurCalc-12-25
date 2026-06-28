@@ -57,6 +57,7 @@ from routes.completions import (
     completions_page,
     completion_difference_report,
     completion_gesher_file_report,
+    completion_guides_report_excel,
     completion_impact_report,
     completion_overall_impact_report,
     completion_reports_bulk_send_stream,
@@ -679,6 +680,17 @@ def completion_gesher_file_route(
 ):
     """Generate a Gesher file for payment-month completion differences."""
     return completion_gesher_file_report(request, payment_year, payment_month)
+
+
+@app.get("/completions/reports/{file_id}")
+def completion_guides_report_excel_route(
+    request: Request,
+    file_id: int,
+    payment_year: int,
+    payment_month: int,
+):
+    """Export guide reports only for guides marked for completion."""
+    return completion_guides_report_excel(request, file_id, payment_year, payment_month)
 
 
 @app.get("/api/completions/send-reports-stream")
