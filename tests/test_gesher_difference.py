@@ -1,7 +1,7 @@
 from services.gesher_difference import (
+    _build_unverified_completion_diffs,
     build_completion_gesher_file,
     build_completion_gesher_rows,
-    build_completion_impact_rows,
     compare_line_sets,
     parse_gesher_file_lines,
 )
@@ -60,56 +60,30 @@ def test_compare_line_sets_aggregates_by_employee_symbol_and_rate():
     ]
 
 
-def test_build_completion_impact_rows_uses_before_and_after_labels():
-    before_lines = [
-        {"employee_code": "000123", "symbol": "101", "rate": 40.0, "quantity": 5.0, "amount": 200.0},
-    ]
-    after_lines = [
-        {"employee_code": "000123", "symbol": "101", "rate": 40.0, "quantity": 8.0, "amount": 320.0},
-    ]
+def test_compare_line_sets_hides_total_hours_as_display_rate():
+    base_lines = [{
+        "employee_code": "000123",
+        "symbol": "767",
+        "display_name": "ימי עבודה",
+        "value_type": "days_with_total_hours",
+        "rate": 151.45,
+        "quantity": 17.0,
+        "amount": 2574.65,
+    }]
+    current_lines = [{
+        "employee_code": "000123",
+        "symbol": "767",
+        "display_name": "ימי עבודה",
+        "value_type": "days_with_total_hours",
+        "rate": 146.45,
+        "quantity": 17.0,
+        "amount": 2489.65,
+    }]
 
-    rows = build_completion_impact_rows(before_lines, after_lines)
+    diffs = compare_line_sets(base_lines, current_lines)
 
-    assert rows[0]["before_quantity"] == 5.0
-    assert rows[0]["after_quantity"] == 8.0
-    assert rows[0]["quantity_diff"] == 3.0
-    assert "paid_quantity" not in rows[0]
-    assert "current_quantity" not in rows[0]
-
-
-def test_build_completion_impact_rows_nets_same_symbol_rate_change():
-    before_lines = [
-        {
-            "employee_code": "000123",
-            "person_name": "מדריך בדיקה",
-            "symbol": "370",
-            "display_name": "נסיעות",
-            "rate": 96.0,
-            "quantity": 0.0,
-            "amount": 96.0,
-        },
-    ]
-    after_lines = [
-        {
-            "employee_code": "000123",
-            "person_name": "מדריך בדיקה",
-            "symbol": "370",
-            "display_name": "נסיעות",
-            "rate": 112.0,
-            "quantity": 0.0,
-            "amount": 112.0,
-        },
-    ]
-
-    rows = build_completion_impact_rows(before_lines, after_lines)
-
-    assert len(rows) == 1
-    assert rows[0]["symbol"] == "370"
-    assert rows[0]["rate_label"] == "96.00 -> 112.00"
-    assert rows[0]["before_amount"] == 96.0
-    assert rows[0]["after_amount"] == 112.0
-    assert rows[0]["amount_diff"] == 16.0
-    assert rows[0]["diff_type"] == "תעריף השתנה"
+    assert len(diffs) == 2
+    assert all(diff["display_rate"] is None for diff in diffs)
 
 
 def test_build_completion_gesher_rows_maps_source_symbols_to_target_symbols():
@@ -132,10 +106,36 @@ def test_build_completion_gesher_rows_maps_source_symbols_to_target_symbols():
     ]
 
 
-def test_completion_impact_treats_zero_quantity_rate_as_amount():
-    rows = build_completion_impact_rows(
-        before_lines=[],
-        after_lines=[{
+def test_unverified_completion_diffs_net_by_employee_and_symbol():
+    before_lines = [{
+        "employee_code": "000123",
+        "person_name": "מדריך בדיקה",
+        "symbol": "370",
+        "display_name": "נסיעות",
+        "rate": 96.0,
+        "quantity": 0.0,
+        "amount": 96.0,
+    }]
+    after_lines = [{
+        "employee_code": "000123",
+        "person_name": "מדריך בדיקה",
+        "symbol": "370",
+        "display_name": "נסיעות",
+        "rate": 112.0,
+        "quantity": 0.0,
+        "amount": 112.0,
+    }]
+
+    rows = _build_unverified_completion_diffs(before_lines, after_lines)
+
+    assert len(rows) == 1
+    assert rows[0]["symbol"] == "370"
+    assert rows[0]["amount_diff"] == 16.0
+    assert rows[0]["diff_type"] == "השלמה ללא קובץ גשר סופי"
+
+
+def test_completion_gesher_rows_treats_zero_quantity_rate_as_amount_diff():
+    diffs = [{
             "employee_code": "000123",
             "person_name": "מדריך",
             "symbol": "370",
@@ -143,10 +143,10 @@ def test_completion_impact_treats_zero_quantity_rate_as_amount():
             "rate": 32.0,
             "quantity": 0.0,
             "amount": 32.0,
-        }],
-    )
+            "amount_diff": 32.0,
+        }]
 
-    gesher_rows = build_completion_gesher_rows(rows)
+    gesher_rows = build_completion_gesher_rows(diffs)
 
     assert gesher_rows == [{
         "employer_code": "001",

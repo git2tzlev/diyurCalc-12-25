@@ -20,14 +20,6 @@
       {% endfor %}
     </select>
     <button type="submit">טען</button>
-    <a href="/completions/gesher-file?payment_year={{ selected_year }}&payment_month={{ selected_month }}"
-       style="text-decoration: none; padding: 6px 10px; border-radius: 6px; background: #334155; color: white;">
-      הפק גשר הפרשי השלמות
-    </a>
-    <a href="/completions/impact-all?payment_year={{ selected_year }}&payment_month={{ selected_month }}"
-       style="text-decoration: none; padding: 6px 10px; border-radius: 6px; background: #0f766e; color: white;">
-      הצג השפעת כל ההשלמות
-    </a>
     <button type="button" onclick="openCompletionEmailDialog()"
        style="padding: 6px 10px; border: none; border-radius: 6px; background: #6f42c1; color: white; cursor: pointer;">
       שלח דוחות למדריכים
@@ -43,10 +35,6 @@
         <div class="muted">{{ group["items"]|length }} השלמות</div>
       </div>
       <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-        <a href="/completions/impact/{{ group.work_year }}/{{ group.work_month }}?payment_year={{ selected_year }}&payment_month={{ selected_month }}"
-           style="text-decoration: none; padding: 6px 10px; border-radius: 6px; background: #0f766e; color: white;">
-          הצג השפעת השלמות
-        </a>
         {% for file in group.final_files %}
           <a href="/completions/difference/{{ file.id }}?payment_year={{ selected_year }}&payment_month={{ selected_month }}"
              style="text-decoration: none; padding: 6px 10px; border-radius: 6px; background: #1f6feb; color: white;">

@@ -9,7 +9,7 @@ import html
 import time
 import logging
 from datetime import datetime, date, timedelta
-from typing import Optional, Dict, List
+from typing import Any, Optional, Dict, List
 
 from fastapi import Request, HTTPException
 from fastapi.responses import HTMLResponse, Response, JSONResponse
@@ -67,6 +67,58 @@ DISPLAY_PRIORITY_SHIFT_IDS = {
     NIGHT_WATCH_SHIFT_ID,
 }
 
+AUDIT_TABLE_LABELS = {
+    "payment_components": "רכיב תשלום",
+    "guide_fixed_payments": "תשלום קבוע",
+    "time_reports": "משמרת",
+}
+
+AUDIT_ACTION_LABELS = {
+    "INSERT": "יצירה",
+    "UPDATE": "עדכון",
+    "DELETE": "מחיקה",
+}
+
+AUDIT_FIELD_LABELS = {
+    "date": "תאריך",
+    "start_date": "מתאריך",
+    "end_date": "עד תאריך",
+    "component_type_id": "סוג רכיב",
+    "quantity": "כמות",
+    "rate": "תעריף/סכום",
+    "description": "תיאור",
+    "is_active": "פעיל",
+    "is_approved": "מאושר",
+    "for_pension": "לפנסיה",
+    "payment_year": "שנת תשלום",
+    "payment_month": "חודש תשלום",
+    "payment_note": "הערת תשלום",
+    "apartment_id": "דירה",
+    "shift_type_id": "סוג משמרת",
+    "start_time": "שעת התחלה",
+    "end_time": "שעת סיום",
+    "is_approved": "מאושר",
+    "approved_by": "אושר על ידי",
+    "approved_at": "אושר בתאריך",
+    "rate_apartment_type_id": "סוג דירה לתעריף",
+    "asd_night_marking": "סימון לילה ASD",
+    "exclude_standby": "לא לכלול כוננות",
+    "fixed_payment_id": "תשלום קבוע מקור",
+    "created_by": "נוצר על ידי",
+    "updated_by": "עודכן על ידי",
+    "created_at": "נוצר בתאריך",
+    "updated_at": "עודכן בתאריך",
+}
+
+AUDIT_DISPLAY_FIELDS = (
+    "date", "start_date", "end_date", "component_type_id", "quantity", "rate",
+    "description", "is_active", "is_approved", "for_pension",
+    "payment_year", "payment_month", "payment_note", "apartment_id",
+    "shift_type_id", "start_time", "end_time", "approved_by", "approved_at",
+    "rate_apartment_type_id", "asd_night_marking", "exclude_standby",
+    "fixed_payment_id",
+)
+
 
 def _format_shifts_email_text(template: str, person_name: str, year: int, month: int) -> str:
     """Apply the small set of placeholders allowed in shift report emails."""
@@ -113,6 +165,180 @@ def _is_completion_apartment(apartment_id: Optional[int] = None, apartment_name:
 def _validate_guide_access(person_id: int, housing_filter: Optional[int]) -> None:
     """בדיקת הרשאת צפייה במדריך לפי פילטר מערך דיור."""
     enforce_housing_filter_guide_access(person_id, housing_filter)
+
+
+def _audit_json(value: Any) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _audit_changed_fields(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return []
+
+
+def _audit_month_range(year: int, month: int) -> tuple[date, date]:
+    start = date(year, month, 1)
+    if month == 12:
+        return start, date(year + 1, 1, 1)
+    return start, date(year, month + 1, 1)
+
+
+def _format_audit_datetime(value: Any) -> str:
+    if not value:
+        return ""
+    if isinstance(value, datetime):
+        return value.strftime("%d/%m/%Y %H:%M")
+    return str(value)
+
+
+def _format_audit_value(field: str, value: Any, lookups: dict[str, dict[int, str]], table_name: str) -> str:
+    if value is None or value == "":
+        return "-"
+    if isinstance(value, bool):
+        return "כן" if value else "לא"
+    if field in {"created_at", "updated_at"}:
+        return _format_audit_datetime(value)
+    if field == "component_type_id":
+        try:
+            return lookups["components"].get(int(value), str(value))
+        except (TypeError, ValueError):
+            return str(value)
+    if field == "apartment_id":
+        try:
+            return lookups["apartments"].get(int(value), str(value))
+        except (TypeError, ValueError):
+            return str(value)
+    if field == "shift_type_id":
+        try:
+            return lookups["shift_types"].get(int(value), str(value))
+        except (TypeError, ValueError):
+            return str(value)
+    if field == "rate_apartment_type_id":
+        try:
+            return lookups["apartment_types"].get(int(value), str(value))
+        except (TypeError, ValueError):
+            return str(value)
+    if field in {"created_by", "updated_by"}:
+        try:
+            return lookups["people"].get(int(value), str(value))
+        except (TypeError, ValueError):
+            return str(value)
+    if field == "rate" and table_name in {"payment_components", "guide_fixed_payments"}:
+        try:
+            return f"{float(value) / 100:,.2f} ₪"
+        except (TypeError, ValueError):
+            return str(value)
+    return str(value)
+
+
+def _audit_record_title(row: dict, lookups: dict[str, dict[int, str]]) -> str:
+    data = _audit_json(row.get("new_data")) or _audit_json(row.get("old_data"))
+    table_name = row.get("table_name") or ""
+    if table_name in {"payment_components", "guide_fixed_payments"}:
+        component_name = _format_audit_value(
+            "component_type_id",
+            data.get("component_type_id"),
+            lookups,
+            table_name,
+        )
+        if table_name == "payment_components":
+            date_text = data.get("date") or ""
+            return f"{component_name} {date_text}".strip()
+        start_text = data.get("start_date") or ""
+        return f"{component_name} מתאריך {start_text}".strip()
+    return AUDIT_TABLE_LABELS.get(table_name, table_name)
+
+
+def _build_audit_details(row: dict, lookups: dict[str, dict[int, str]]) -> list[dict]:
+    table_name = row.get("table_name") or ""
+    action = row.get("action") or ""
+    old_data = _audit_json(row.get("old_data"))
+    new_data = _audit_json(row.get("new_data"))
+    changed_fields = _audit_changed_fields(row.get("changed_fields"))
+
+    if action == "UPDATE":
+        fields = [field for field in changed_fields if field in AUDIT_DISPLAY_FIELDS]
+    else:
+        source = new_data if action == "INSERT" else old_data
+        fields = [field for field in AUDIT_DISPLAY_FIELDS if field in source]
+
+    details = []
+    for field in fields:
+        before = old_data.get(field)
+        after = new_data.get(field)
+        details.append({
+            "field": AUDIT_FIELD_LABELS.get(field, field),
+            "before": _format_audit_value(field, before, lookups, table_name),
+            "after": _format_audit_value(field, after, lookups, table_name),
+        })
+    return details
+
+
+def _fetch_audit_lookups(conn) -> dict[str, dict[int, str]]:
+    component_rows = conn.execute("SELECT id, name FROM payment_component_types").fetchall()
+    apartment_rows = conn.execute("SELECT id, name FROM apartments").fetchall()
+    apartment_type_rows = conn.execute("SELECT id, name FROM apartment_types").fetchall()
+    shift_type_rows = conn.execute("SELECT id, name FROM shift_types").fetchall()
+    people_rows = conn.execute("SELECT id, name FROM people").fetchall()
+    return {
+        "components": {int(row["id"]): row["name"] for row in component_rows},
+        "apartments": {int(row["id"]): row["name"] for row in apartment_rows},
+        "apartment_types": {int(row["id"]): row["name"] for row in apartment_type_rows},
+        "shift_types": {int(row["id"]): row["name"] for row in shift_type_rows},
+        "people": {int(row["id"]): row["name"] for row in people_rows},
+    }
+
+
+def _fetch_guide_audit_events(conn, person_id: int, year: int, month: int) -> list[dict]:
+    start_date, end_date = _audit_month_range(year, month)
+    rows = conn.execute(
+        """
+        SELECT al.*, actor.name AS actor_name
+        FROM audit_log al
+        LEFT JOIN people actor ON actor.id = al.actor_person_id
+        WHERE al.table_name IN ('payment_components', 'guide_fixed_payments', 'time_reports')
+          AND (
+              (al.old_data->>'person_id')::int = %s
+              OR (al.new_data->>'person_id')::int = %s
+          )
+          AND (
+              (
+                  al.table_name = 'payment_components'
+                  AND COALESCE(al.new_data->>'date', al.old_data->>'date')::date >= %s
+                  AND COALESCE(al.new_data->>'date', al.old_data->>'date')::date < %s
+              )
+              OR (
+                  al.table_name = 'guide_fixed_payments'
+                  AND COALESCE(al.new_data->>'start_date', al.old_data->>'start_date')::date < %s
+                  AND COALESCE(
+                      NULLIF(COALESCE(al.new_data->>'end_date', al.old_data->>'end_date'), '')::date,
+                      DATE '9999-12-31'
+                  ) >= %s
+              )
+              OR (
+                  al.table_name = 'time_reports'
+                  AND COALESCE(al.new_data->>'date', al.old_data->>'date')::date >= %s
+                  AND COALESCE(al.new_data->>'date', al.old_data->>'date')::date < %s
+              )
+          )
+        ORDER BY al.changed_at DESC, al.id DESC
+        LIMIT 500
+        """,
+        (person_id, person_id, start_date, end_date, end_date, start_date, start_date, end_date),
+    ).fetchall()
+    lookups = _fetch_audit_lookups(conn)
+    events = []
+    for row in rows:
+        event = dict(row)
+        event["table_label"] = AUDIT_TABLE_LABELS.get(event.get("table_name"), event.get("table_name"))
+        event["action_label"] = AUDIT_ACTION_LABELS.get(event.get("action"), event.get("action"))
+        event["changed_at_label"] = _format_audit_datetime(event.get("changed_at"))
+        event["actor_label"] = event.get("actor_name") or "-"
+        event["record_title"] = _audit_record_title(event, lookups)
+        event["details"] = _build_audit_details(event, lookups)
+        events.append(event)
+    return events
 
 
 def _inject_holiday_payment(
@@ -1003,6 +1229,57 @@ def guide_view(
     logger.info(f"Total guide_view execution time: {total_time:.4f}s")
 
     return response
+
+
+def guide_history_view(
+    request: Request,
+    person_id: int,
+    month: Optional[int] = None,
+    year: Optional[int] = None,
+) -> HTMLResponse:
+    """Read-only audit history for a guide in the selected work month."""
+    housing_filter = get_housing_array_filter()
+    _validate_guide_access(person_id, housing_filter)
+
+    with get_conn() as conn:
+        person = conn.execute(
+            """
+            SELECT p.id, p.name, p.meirav_code, p.type,
+                   e.code AS employer_code, e.name AS employer_name
+            FROM people p
+            LEFT JOIN employers e ON p.employer_id = e.id
+            WHERE p.id = %s
+            """,
+            (person_id,),
+        ).fetchone()
+        if not person:
+            raise HTTPException(status_code=404, detail="מדריך לא נמצא")
+
+        months = get_available_months_for_person(conn.conn, person_id)
+        months_options = [{"year": y, "month": m, "label": f"{m:02d}/{y}"} for y, m in months]
+        if month is None or year is None:
+            if months:
+                selected_year, selected_month = months[-1]
+            else:
+                selected_year, selected_month = get_default_period(request)
+        else:
+            selected_year, selected_month = year, month
+
+        years = sorted(set(m["year"] for m in months_options), reverse=True) if months_options else [selected_year]
+        events = _fetch_guide_audit_events(conn, person_id, selected_year, selected_month)
+
+    return templates.TemplateResponse(
+        "guide_history.html",
+        {
+            "request": request,
+            "person": person,
+            "months": months_options,
+            "years": years,
+            "selected_year": selected_year,
+            "selected_month": selected_month,
+            "events": events,
+        },
+    )
 
 
 def _get_hebrew_day_name(date_obj: date) -> str:

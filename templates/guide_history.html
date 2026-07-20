@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .history-page {
+    max-width: 1280px;
+    margin: 0 auto;
+  }
+  .history-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: flex-start;
+    margin-bottom: 14px;
+  }
+  .history-title {
+    margin: 0;
+    font-size: 28px;
+    color: #0f172a;
+  }
+  .history-meta {
+    color: #64748b;
+    font-size: 14px;
+    margin-top: 4px;
+  }
+  .history-controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin: 12px 0 18px;
+  }
+  .history-controls select,
+  .history-controls button,
+  .history-link {
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid #cbd5e1;
+    font-size: 14px;
+  }
+  .history-controls button {
+    background: #0f766e;
+    color: #fff;
+    border-color: #0f766e;
+    cursor: pointer;
+    font-weight: 700;
+  }
+  .history-link {
+    background: #fff;
+    color: #2563eb;
+    text-decoration: none;
+  }
+  .history-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .history-table th {
+    background: #f1f5f9;
+    color: #0f172a;
+    padding: 9px 8px;
+    border-bottom: 1px solid #cbd5e1;
+    text-align: right;
+  }
+  .history-table td {
+    padding: 9px 8px;
+    border-bottom: 1px solid #e2e8f0;
+    vertical-align: top;
+  }
+  .history-table tbody tr:nth-child(even) {
+    background: #f8fafc;
+  }
+  .action-badge {
+    display: inline-block;
+    min-width: 58px;
+    text-align: center;
+    border-radius: 999px;
+    padding: 3px 8px;
+    font-weight: 700;
+    font-size: 12px;
+  }
+  .action-INSERT { background: #dcfce7; color: #166534; }
+  .action-UPDATE { background: #dbeafe; color: #1d4ed8; }
+  .action-DELETE { background: #fee2e2; color: #b91c1c; }
+  .details-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 6px;
+    font-size: 12px;
+  }
+  .details-table th,
+  .details-table td {
+    padding: 5px 6px;
+    border: 1px solid #e2e8f0;
+  }
+  .details-table th {
+    background: #f8fafc;
+  }
+  .empty-state {
+    padding: 26px;
+    text-align: center;
+    color: #64748b;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+  }
+</style>
+
+<div class="card history-page">
+  <div class="history-header">
+    <div>
+      <h2 class="history-title">היסטוריית שינויים</h2>
+      <div class="history-meta">
+        {{ person.name }} |
+        מירב: {{ person.meirav_code or '-' }} |
+        מפעל: {{ person.employer_code or '001' }}
+      </div>
+    </div>
+    <a class="history-link" href="/guide/{{ person.id }}?month={{ selected_month }}&year={{ selected_year }}">חזרה לדוח מדריך</a>
+  </div>
+
+  <form method="get" class="history-controls">
+    <label for="month">חודש:</label>
+    <select id="month" name="month">
+      {% for m in months %}
+      <option value="{{ m.month }}" {% if m.month == selected_month and m.year == selected_year %}selected{% endif %}>{{ m.label }}</option>
+      {% endfor %}
+      {% if not months %}
+      <option value="{{ selected_month }}" selected>{{ "%02d"|format(selected_month) }}/{{ selected_year }}</option>
+      {% endif %}
+    </select>
+    <label for="year">שנה:</label>
+    <select id="year" name="year">
+      {% for y in years %}
+      <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit">עדכן</button>
+    <span class="history-meta">חודש מוצג: {{ "%02d"|format(selected_month) }}/{{ selected_year }}</span>
+  </form>
+
+  {% if events %}
+  <table class="history-table">
+    <thead>
+      <tr>
+        <th style="width: 130px;">מתי</th>
+        <th style="width: 110px;">מי</th>
+        <th style="width: 80px;">פעולה</th>
+        <th style="width: 110px;">סוג</th>
+        <th style="width: 190px;">רשומה</th>
+        <th>מה השתנה</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for event in events %}
+      <tr>
+        <td>{{ event.changed_at_label }}</td>
+        <td>{{ event.actor_label }}</td>
+        <td><span class="action-badge action-{{ event.action }}">{{ event.action_label }}</span></td>
+        <td>{{ event.table_label }}</td>
+        <td>{{ event.record_title }}</td>
+        <td>
+          {% if event.details %}
+          <table class="details-table">
+            <thead>
+              <tr>
+                <th style="width: 22%;">שדה</th>
+                <th>לפני</th>
+                <th>אחרי</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for detail in event.details %}
+              <tr>
+                <td>{{ detail.field }}</td>
+                <td>{{ detail.before }}</td>
+                <td>{{ detail.after }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% else %}
+          <span class="history-meta">אין שדות תצוגה לשינוי זה</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">
+    לא נמצאו שינויי רכיבי שכר או תשלומים קבועים לחודש זה.
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

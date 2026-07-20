@@ -24,6 +24,10 @@ from services.gesher_archive import (
     set_gesher_export_status,
     update_gesher_export_note,
 )
+from services.gesher_difference import (
+    CompletionGesherBlockedError,
+    build_approved_completion_gesher_rows,
+)
 from utils.utils import format_currency, human_date
 
 
@@ -142,7 +146,8 @@ def export_gesher(
     month: int,
     company: Optional[str] = None,
     filter_name: Optional[str] = None,
-    encoding: str = "ascii"
+    encoding: str = "ascii",
+    allow_missing_final_completions: Optional[str] = None,
 ) -> Response:
     """
     ייצוא קובץ גשר למירב - לפי מפעל
@@ -151,9 +156,24 @@ def export_gesher(
     """
     if not company:
         raise HTTPException(status_code=400, detail="חובה לבחור מפעל")
+    allow_missing_final = allow_missing_final_completions == "1"
 
     with get_conn() as conn:
-        content = gesher_exporter.generate_gesher_file(conn, year, month, filter_name, company)
+        try:
+            content = gesher_exporter.generate_gesher_file(
+                conn,
+                year,
+                month,
+                filter_name,
+                company,
+                allow_unverified_missing_final_completions=allow_missing_final,
+            )
+        except CompletionGesherBlockedError as exc:
+            details = "; ".join(_completion_block_message(block) for block in exc.blocks[:5])
+            raise HTTPException(
+                status_code=400,
+                detail=f"לא ניתן להפיק גשר למפעל {company}: יש השלמות חסומות. {details}",
+            ) from exc
 
         # שם קובץ עם קוד מפעל
         filename = f"gesher_{company}_{year}_{month:02d}.mrv"
@@ -316,7 +336,8 @@ def export_gesher_preview(
     request: Request,
     year: Optional[int] = None,
     month: Optional[int] = None,
-    show_zero: Optional[str] = None
+    show_zero: Optional[str] = None,
+    allow_missing_final_completions: Optional[str] = None,
 ) -> HTMLResponse:
     """תצוגה מקדימה של ייצוא גשר"""
     if year is None or month is None:
@@ -327,8 +348,17 @@ def export_gesher_preview(
             month = default_month
 
     show_zero_flag = show_zero == "1"
+    allow_missing_final = allow_missing_final_completions == "1"
 
     with get_conn() as conn:
+        housing_filter = get_housing_array_filter()
+        completion_result = build_approved_completion_gesher_rows(
+            conn,
+            year,
+            month,
+            housing_array_id=housing_filter,
+            allow_unverified_missing_final=allow_missing_final,
+        )
         raw_conn = conn.conn if hasattr(conn, 'conn') else conn
         summary_data, _ = calculate_monthly_summary(raw_conn, year, month)
         preview = gesher_exporter.get_export_preview(
@@ -336,13 +366,14 @@ def export_gesher_preview(
             year,
             month,
             limit=100,
-            summary_data=summary_data
+            summary_data=summary_data,
+            completion_rows=completion_result["rows"],
         )
         export_codes = gesher_exporter.load_export_config_from_db(conn)
         if not export_codes:
             export_codes = gesher_exporter.load_export_config()
+        export_codes = gesher_exporter.with_completion_export_codes(export_codes)
         # שליפת מפעלים - רק אלו שיש להם עובדים במערך הנבחר
-        housing_filter = get_housing_array_filter()
         if housing_filter is not None:
             employers = conn.execute("""
                 SELECT DISTINCT e.code, e.name
@@ -364,6 +395,35 @@ def export_gesher_preview(
         multi_housing = _filter_multi_housing_for_summary(multi_housing, summary_data)
         blocked_multi_housing = gesher_exporter.get_blocked_multi_housing_for_gesher(conn, year, month)
         blocked_multi_housing = _filter_multi_housing_for_summary(blocked_multi_housing, summary_data)
+        completion_blocks = completion_result["blocks"]
+        completion_block_messages = [
+            _completion_block_message(block)
+            for block in completion_blocks
+        ]
+        completion_hard_blocked_companies = sorted({
+            str(block.get("company_code") or "001")
+            for block in completion_blocks
+            if block.get("reason") != "missing_final_file"
+        })
+        completion_missing_final_companies = sorted({
+            str(block.get("company_code") or "001")
+            for block in completion_blocks
+            if block.get("reason") == "missing_final_file"
+        })
+        completion_missing_final_only_companies = [
+            company
+            for company in completion_missing_final_companies
+            if company not in completion_hard_blocked_companies
+        ]
+        completion_blocked_companies = sorted({
+            str(block.get("company_code") or "001")
+            for block in completion_blocks
+        })
+        completion_rows_count = len(completion_result["rows"])
+        completion_rows_total = round(
+            sum(float(row.get("amount") or 0) for row in completion_result["rows"]),
+            2,
+        )
 
     missing_merav_list = []
     for person_data in summary_data:
@@ -382,8 +442,8 @@ def export_gesher_preview(
             # סינון שורות: לכסף - בודקים payment, לשאר - בודקים quantity
             non_zero_lines = [
                 line for line in person['lines']
-                if (line['type'] == 'money' and line['payment'] > 0) or
-                   (line['type'] != 'money' and line['quantity'] > 0)
+                if (line['type'] == 'money' and abs(line['payment']) > 0) or
+                   (line['type'] != 'money' and abs(line['quantity']) > 0)
             ]
             if non_zero_lines:
                 filtered_preview.append({
@@ -416,6 +476,13 @@ def export_gesher_preview(
         "missing_merav_list": missing_merav_list,
         "multi_housing": multi_housing,
         "blocked_gesher_list": blocked_gesher_list,
+        "completion_rows_count": completion_rows_count,
+        "completion_rows_total": completion_rows_total,
+        "completion_block_messages": completion_block_messages,
+        "completion_blocked_companies": completion_blocked_companies,
+        "completion_hard_blocked_companies": completion_hard_blocked_companies,
+        "completion_missing_final_only_companies": completion_missing_final_only_companies,
+        "allow_missing_final_completions": allow_missing_final,
     })
 
 
@@ -493,6 +560,13 @@ def export_excel(year: Optional[int] = None, month: Optional[int] = None) -> Res
             "Content-Disposition": f"attachment; filename={filename}"
         }
     )
+
+
+def _completion_block_message(block: dict) -> str:
+    period = f"{int(block.get('work_month') or 0):02d}/{block.get('work_year') or ''}"
+    company = block.get("company_code") or ""
+    message = block.get("message") or "השלמות חסומות"
+    return f"{company} {period}: {message}".strip()
 
 
 def gesher_archive_page(

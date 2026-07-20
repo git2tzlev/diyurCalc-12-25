@@ -103,6 +103,9 @@
                     <input type="checkbox" name="show_zero" value="1" {% if show_zero %}checked{% endif %} onchange="this.form.submit()">
                     הצג 0
                 </label>
+                {% if allow_missing_final_completions %}
+                <input type="hidden" name="allow_missing_final_completions" value="1">
+                {% endif %}
             </form>
             <button onclick="showLegend()" style="padding: 4px 10px; font-size: 12px; background: #6c757d;">מקרא סמלים</button>
             <a href="/summary?year={{ selected_year }}&month={{ selected_month }}" style="text-decoration: none; padding: 4px 10px; font-size: 12px; border: 1px solid #ccc; border-radius: 4px; color: #333;">חזרה לסיכום</a>
@@ -114,13 +117,55 @@
         <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: center;">
             <span style="color: white; font-weight: bold;">ייצוא כל המפעל:</span>
             {% for emp in employers %}
-            <a href="/export/gesher?year={{ selected_year }}&month={{ selected_month }}&company={{ emp.code }}"
+            {% if emp.code in (completion_hard_blocked_companies or []) %}
+            <span title="יש השלמות חסומות למפעל זה"
+               style="background: #fee2e2; color: #991b1b; padding: 8px 16px; border-radius: 6px; font-weight: bold; font-size: 13px;">
+                {{ emp.name }} ({{ emp.code }}) חסום
+            </span>
+            {% elif emp.code in (completion_missing_final_only_companies or []) %}
+            <a href="/export/gesher/preview?year={{ selected_year }}&month={{ selected_month }}&allow_missing_final_completions=1{% if show_zero %}&show_zero=1{% endif %}"
+               onclick="return confirm('אין קובץ גשר סופי לכל ההשלמות במפעל זה. להציג ולהכין להפקה בכל זאת בלי השוואה לארכיון?')"
+               style="background: #fef3c7; color: #92400e; text-decoration: none; padding: 8px 16px; border-radius: 6px; font-weight: bold; font-size: 13px;">
+                {{ emp.name }} ({{ emp.code }}) אשר והצג
+            </a>
+            {% else %}
+            <a href="/export/gesher?year={{ selected_year }}&month={{ selected_month }}&company={{ emp.code }}{% if allow_missing_final_completions %}&allow_missing_final_completions=1{% endif %}"
                style="background: white; color: #667eea; text-decoration: none; padding: 8px 16px; border-radius: 6px; font-weight: bold; font-size: 13px;">
                 {{ emp.name }} ({{ emp.code }})
             </a>
+            {% endif %}
             {% endfor %}
         </div>
     </div>
+
+    {% if completion_rows_count or completion_block_messages %}
+    <div style="margin-bottom: 10px; padding: 10px 15px; background: #eef6ff; border: 1px solid #93c5fd; border-radius: 6px; font-size: 13px; color: #1e3a8a;">
+        {% if completion_rows_count %}
+        <div>
+            לקובץ הגשר יתווספו <strong>{{ completion_rows_count }}</strong> שורות הפרשי השלמות מאושרות
+            בסך <strong>{{ "%.2f"|format(completion_rows_total or 0) }}</strong>.
+        </div>
+        {% endif %}
+        {% if completion_block_messages %}
+        <div style="margin-top: 6px; color: #991b1b;">
+            יש השלמות שדורשות טיפול או אישור:
+            {% for message in completion_block_messages %}
+            <div>{{ message }}</div>
+            {% endfor %}
+            {% if completion_missing_final_only_companies %}
+            <div style="margin-top: 6px; color: #92400e;">
+                כשחסר קובץ גשר סופי ניתן להפיק באישור, ואז ההשלמות ייכנסו בלי השוואה לארכיון.
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+        {% if allow_missing_final_completions %}
+        <div style="margin-top: 6px; color: #92400e; font-weight: bold;">
+            מצב אישור פעיל: השלמות ללא קובץ גשר סופי מוצגות בכרטיסי העובדים וייכנסו לקובץ.
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
 
     {% if missing_merav_count and missing_merav_count > 0 %}
     <!-- הודעה על עובדים ללא קוד מירב -->
@@ -225,7 +270,7 @@
                                 {% set found.rate = line.payment %}
                             {% endif %}
                         {% endfor %}
-                        {% if found.rate > 0 %}
+                        {% if found.rate|abs > 0 %}
                             {{ "%.1f"|format(found.rate) }}
                         {% else %}
                             <span style="color: #ddd;">-</span>
@@ -343,7 +388,7 @@
                 {% set usage_count = namespace(count=0) %}
                 {% for person in preview %}
                     {% for line in person.lines %}
-                        {% if line.symbol == symbol and ((line.type == 'money' and line.payment > 0) or (line.type != 'money' and line.quantity > 0)) %}
+                        {% if line.symbol == symbol and ((line.type == 'money' and line.payment|abs > 0) or (line.type != 'money' and line.quantity|abs > 0)) %}
                             {% set usage_count.count = usage_count.count + 1 %}
                         {% endif %}
                     {% endfor %}

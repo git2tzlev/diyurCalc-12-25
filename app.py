@@ -28,6 +28,7 @@ from routes.home import home
 from routes.reports import reports_management, export_guide_reports_excel
 from routes.guide import (
     guide_view,
+    guide_history_view,
     shifts_report_pdf, shifts_report_preview, shifts_report_email, chains_report_email,
     get_guide_notes, add_guide_note, delete_guide_note,
     get_holiday_payment_setup_api, save_holiday_payment_setup_api,
@@ -56,10 +57,7 @@ from routes.export import (
 from routes.completions import (
     completions_page,
     completion_difference_report,
-    completion_gesher_file_report,
     completion_guides_report_excel,
-    completion_impact_report,
-    completion_overall_impact_report,
     completion_reports_bulk_send_stream,
 )
 from routes.email import (
@@ -403,6 +401,12 @@ def guide_route(request: Request, person_id: int, month: int | None = None, year
     return guide_view(request, person_id, month, year)
 
 
+@app.get("/guide/{person_id}/history", response_class=HTMLResponse)
+def guide_history_route(request: Request, person_id: int, month: int | None = None, year: int | None = None):
+    """Read-only audit history for a guide."""
+    return guide_history_view(request, person_id, month, year)
+
+
 @app.get("/guide/{person_id}/shifts/preview", response_class=HTMLResponse)
 def shifts_report_preview_route(request: Request, person_id: int, month: int | None = None, year: int | None = None):
     """תצוגה מקדימה של הדוח שנשלח במייל."""
@@ -569,9 +573,25 @@ def general_summary_route(request: Request, year: int = None, month: int = None)
 
 
 @app.get("/export/gesher")
-def export_gesher_route(request: Request, year: int, month: int, company: str = None, filter_name: str = None, encoding: str = "ascii"):
+def export_gesher_route(
+    request: Request,
+    year: int,
+    month: int,
+    company: str = None,
+    filter_name: str = None,
+    encoding: str = "ascii",
+    allow_missing_final_completions: str = None,
+):
     """Export Gesher file by company."""
-    return export_gesher(request, year, month, company, filter_name, encoding)
+    return export_gesher(
+        request,
+        year,
+        month,
+        company,
+        filter_name,
+        encoding,
+        allow_missing_final_completions,
+    )
 
 
 @app.get("/export/gesher/person/{person_id}")
@@ -592,9 +612,15 @@ def export_gesher_multiple_route(request: Request, year: int, month: int, person
 
 
 @app.get("/export/gesher/preview")
-def export_gesher_preview_route(request: Request, year: int = None, month: int = None, show_zero: str = None):
+def export_gesher_preview_route(
+    request: Request,
+    year: int = None,
+    month: int = None,
+    show_zero: str = None,
+    allow_missing_final_completions: str = None,
+):
     """Gesher export preview."""
-    return export_gesher_preview(request, year, month, show_zero)
+    return export_gesher_preview(request, year, month, show_zero, allow_missing_final_completions)
 
 
 @app.get("/export/excel")
@@ -648,38 +674,6 @@ def completion_difference_route(
 ):
     """Generate completion differences against an archived final Gesher file."""
     return completion_difference_report(request, file_id, payment_year, payment_month)
-
-
-@app.get("/completions/impact/{work_year}/{work_month}", response_class=HTMLResponse)
-def completion_impact_route(
-    request: Request,
-    work_year: int,
-    work_month: int,
-    payment_year: int,
-    payment_month: int,
-):
-    """Show completion impact by guide and Gesher symbol."""
-    return completion_impact_report(request, work_year, work_month, payment_year, payment_month)
-
-
-@app.get("/completions/impact-all", response_class=HTMLResponse)
-def completion_overall_impact_route(
-    request: Request,
-    payment_year: int,
-    payment_month: int,
-):
-    """Show total completion impact for one payment month."""
-    return completion_overall_impact_report(request, payment_year, payment_month)
-
-
-@app.get("/completions/gesher-file")
-def completion_gesher_file_route(
-    request: Request,
-    payment_year: int,
-    payment_month: int,
-):
-    """Generate a Gesher file for payment-month completion differences."""
-    return completion_gesher_file_report(request, payment_year, payment_month)
 
 
 @app.get("/completions/reports/{file_id}")

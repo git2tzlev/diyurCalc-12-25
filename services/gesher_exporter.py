@@ -22,6 +22,68 @@ CONFIG_PATH = Path(__file__).parent / "gesher_config.ini"
 # קודים שלא לייצא לקובץ גשר בשום מצב
 EXCLUDED_EXPORT_CODES = {'130', '199'}
 
+COMPLETION_EXPORT_CODES = {
+    "243": ("completion_professional_support", "money", "הפרש תומך מקצועי"),
+    "253": ("completion_non_pension", "money", "הפרשי השלמות לא לפנסיה"),
+    "317": ("completion_pension", "money", "הפרשי השלמות לפנסיה"),
+}
+
+
+def with_completion_export_codes(export_codes: Dict[str, Tuple[str, str, str]]) -> Dict[str, Tuple[str, str, str]]:
+    """Return export codes with virtual completion-difference symbols for preview display."""
+    result = dict(export_codes)
+    for symbol, value_tuple in COMPLETION_EXPORT_CODES.items():
+        result.setdefault(symbol, value_tuple)
+    return result
+
+
+def append_completion_rows_to_preview(preview: List[Dict], completion_rows: List[Dict]) -> List[Dict]:
+    """Append approved completion Gesher rows to the per-person preview cards."""
+    if not completion_rows:
+        return preview
+
+    by_person_id = {
+        person.get("person_id"): person
+        for person in preview
+        if person.get("person_id") is not None
+    }
+    by_employee_code = {
+        "".join(ch for ch in str(person.get("meirav_code") or "") if ch.isdigit()).zfill(6): person
+        for person in preview
+        if person.get("meirav_code")
+    }
+
+    for row in completion_rows:
+        person = by_person_id.get(row.get("person_id"))
+        employee_code = "".join(ch for ch in str(row.get("employee_code") or "") if ch.isdigit()).zfill(6)
+        if person is None and employee_code:
+            person = by_employee_code.get(employee_code)
+        if person is None:
+            person = {
+                "person_id": row.get("person_id"),
+                "name": row.get("person_name") or "",
+                "meirav_code": employee_code,
+                "lines": [],
+            }
+            preview.append(person)
+            if row.get("person_id") is not None:
+                by_person_id[row.get("person_id")] = person
+            if employee_code:
+                by_employee_code[employee_code] = person
+
+        person.setdefault("lines", []).append({
+            "symbol": str(row.get("symbol") or ""),
+            "key": COMPLETION_EXPORT_CODES.get(str(row.get("symbol") or ""), ("completion_difference", "money", ""))[0],
+            "display_name": row.get("display_name") or "הפרשי השלמות",
+            "type": "money",
+            "quantity": 0.0,
+            "payment": round(float(row.get("amount") or 0), 2),
+            "is_completion_difference": True,
+            "source_symbols": row.get("source_symbols") or "",
+        })
+
+    return preview
+
 
 def should_block_multi_housing_for_gesher(housing_filter: int | None) -> bool:
     """בצוהר הלב לא מייצאים לגשר מדריך שפעיל ביותר ממערך דיור באותו חודש."""
@@ -431,7 +493,15 @@ def generate_gesher_file_for_person(conn, person_id: int, year: int, month: int)
     return (result, company)
 
 
-def generate_gesher_file(conn, year: int, month: int, filter_name: str = None, company: str = None) -> str:
+def generate_gesher_file(
+    conn,
+    year: int,
+    month: int,
+    filter_name: str = None,
+    company: str = None,
+    *,
+    allow_unverified_missing_final_completions: bool = False,
+) -> str:
     """
     מייצר קובץ גשר לייצוא למירב
     משתמש ב-calculate_monthly_summary לחישוב יעיל של כל העובדים בבת אחת
@@ -464,6 +534,18 @@ def generate_gesher_file(conn, year: int, month: int, filter_name: str = None, c
     minimum_wage = get_minimum_wage(conn, year, month)
     housing_filter = get_housing_array_filter()
     blocked_multi_housing = get_blocked_multi_housing_for_gesher(conn, year, month)
+    from services.gesher_difference import CompletionGesherBlockedError, build_approved_completion_gesher_rows
+
+    completion_result = build_approved_completion_gesher_rows(
+        conn,
+        year,
+        month,
+        company_code=company,
+        housing_array_id=housing_filter,
+        allow_unverified_missing_final=allow_unverified_missing_final_completions,
+    )
+    if completion_result["blocks"]:
+        raise CompletionGesherBlockedError(completion_result["blocks"])
 
     # שליפת מיפוי עובדים למפעלים - עם סינון לפי מערך דיור אם מוגדר
     if housing_filter is not None:
@@ -567,6 +649,20 @@ def generate_gesher_file(conn, year: int, month: int, filter_name: str = None, c
             )
             output.write(line + "\r\n")
             line_count += 1
+
+    for row in completion_result["rows"]:
+        person_name = row.get("person_name") or ""
+        if filter_name and filter_name.lower() not in person_name.lower():
+            continue
+        employee_code = int(row["employee_code"])
+        line = format_gesher_line(
+            employee_code=employee_code,
+            symbol=str(row["symbol"]),
+            quantity=0.0,
+            rate=round(float(row.get("amount") or 0), 2),
+        )
+        output.write(line + "\r\n")
+        line_count += 1
 
     result = output.getvalue()
     logger.info("Gesher export: %s lines for company %s", line_count, company)
@@ -714,7 +810,8 @@ def get_export_preview(
     year: int,
     month: int,
     limit: int = 50,
-    summary_data: List[Dict] | None = None
+    summary_data: List[Dict] | None = None,
+    completion_rows: List[Dict] | None = None,
 ) -> List[Dict]:
     """
     מחזיר תצוגה מקדימה של הייצוא
@@ -779,6 +876,7 @@ def get_export_preview(
                 'lines': person_lines
             })
 
+    append_completion_rows_to_preview(preview, completion_rows or [])
     return preview
 
 

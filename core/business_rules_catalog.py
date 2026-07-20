@@ -797,15 +797,13 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
             ),
             BusinessRule(
                 title="צבירות חופשה ומחלה",
-                summary="צבירת ימי חופשה ומחלה ניתנת רק למדריך קבוע לפי סטטוס חודש העבודה, ומחושבת לפי ימי עבודה בפועל ותאריך תחילת עבודה.",
+                summary="צבירת ימי חופשה ומחלה מחושבת לפי ימי עבודה בפועל ותאריך תחילת עבודה, גם למדריכים מחליפים.",
                 details=(
-                    "סטטוס העובד נבדק לפי חודש העבודה ההיסטורי, לא לפי חודש התשלום או הסטטוס הנוכחי.",
-                    "מדריך מחליף באותו חודש אינו מקבל צבירת חופשה/מחלה גם אם הפך לקבוע בחודש מאוחר יותר.",
                     "ימי עבודה בפועל כוללים עבודה, חופשה ומחלה.",
                     "הפירוט נשמר בשדות vacation_details, sick_days_accrued ו-vacation_days_accrued.",
                     "פער תצוגה ידוע: שורת חופשה בדוח הרצפים מחשבת לעיתים דקות כפול שכר מינימום במקום להציג ישירות את vacation_payment המחושב.",
                 ),
-                source=("app_utils.py:aggregate_daily_segments_to_monthly", "core/history.py:get_person_status_for_month", "utils/utils.py:calculate_accruals"),
+                source=("app_utils.py:aggregate_daily_segments_to_monthly", "utils/utils.py:calculate_accruals"),
                 tags=("צבירה", "חופשה", "מחלה"),
             ),
         ),
@@ -1105,6 +1103,19 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
                 source=("services/gesher_exporter.py:load_export_config_from_db", "routes/admin.py:manage_payment_codes"),
                 tags=("גשר", "מירב", "סמלי שכר"),
                 status="מנוהל חלקית במסך סמלי שכר",
+            ),
+            BusinessRule(
+                title="Audit לשינויים המשפיעים על שכר",
+                summary="שינויים בדיווחים, רכיבי תשלום, סטטוס מדריך, קודי גשר, תעריפים, דירות, שבת/חג, כוננות וימים מיוחדים נרשמים ב-audit_log.",
+                details=(
+                    "ה-audit שומר פעולה, old_data, new_data, changed_fields, מבצע וזמן שינוי.",
+                    "התיעוד הטכני הזה הוא בסיס לזיהוי עתידי של השלמות מסוג הוספה, עדכון, מחיקה, שינוי סטטוס, שינוי קוד או שינוי תעריף.",
+                    "המעקב כולל גם טבלאות תשתית שמשפיעות רוחבית על חישוב: דירות וסוגי דירה, מקטעי משמרת, overrides, תעריפי כוננות, שבתות/חגים והגדרת תשלום חג.",
+                    "אם טבלת מקור אופציונלית עדיין לא קיימת בזמן startup, התקנת ה-trigger שלה נדלגת בלי לעצור את עליית המערכת.",
+                ),
+                source=("core/audit.py:ensure_salary_audit_schema",),
+                tags=("Audit", "השלמות", "מעקב שינויים", "גשר"),
+                status="תשתית DB פעילה",
             ),
             BusinessRule(
                 title="קודים מוחרגים מייצוא",

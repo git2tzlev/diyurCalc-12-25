@@ -490,6 +490,10 @@
     <button type="submit">עדכן</button>
     {% if selected_month and selected_year %}
     <span class="muted">חודש מוצג: {{ "%02d"|format(selected_month) }}/{{ selected_year }}</span>
+    <a href="/guide/{{ person['id'] }}/history?month={{ selected_month }}&year={{ selected_year }}"
+      style="display:inline-block; padding:7px 12px; border-radius:6px; background:#334155; color:#fff; text-decoration:none; font-size:13px;">
+      היסטוריה
+    </a>
     {% endif %}
     {% if holiday_payment_setup and holiday_payment_setup.has_holidays %}
     <button type="button" onclick="openHolidayPaymentModal()" style="margin-right: auto; background:#0f766e; color:#fff;">ניהול תשלום חג</button>

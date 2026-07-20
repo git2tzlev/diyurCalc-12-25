@@ -70,6 +70,7 @@ def get_payment_period_completions(
     time_reports = conn.execute(f"""
         SELECT 'time_report' AS item_type,
                tr.id, tr.person_id, p.name AS person_name, p.email AS person_email, p.meirav_code,
+               e.code AS employer_code,
                tr.date, tr.start_time, tr.end_time, tr.shift_type_id,
                st.name AS shift_name,
                tr.apartment_id, ap.name AS apartment_name, ap.housing_array_id,
@@ -78,6 +79,7 @@ def get_payment_period_completions(
                tr.payment_marked_at, marker.name AS payment_marked_by_name
         FROM time_reports tr
         JOIN people p ON p.id = tr.person_id
+        LEFT JOIN employers e ON e.id = p.employer_id
         JOIN apartments ap ON ap.id = tr.apartment_id
         LEFT JOIN housing_arrays ha ON ha.id = ap.housing_array_id
         LEFT JOIN shift_types st ON st.id = tr.shift_type_id
@@ -94,6 +96,7 @@ def get_payment_period_completions(
     payment_components = conn.execute(f"""
         SELECT 'payment_component' AS item_type,
                pc.id, pc.person_id, p.name AS person_name, p.email AS person_email, p.meirav_code,
+               e.code AS employer_code,
                pc.date, pc.quantity, pc.rate, pc.component_type_id,
                pct.name AS component_name,
                pc.apartment_id, ap.name AS apartment_name, ap.housing_array_id,
@@ -102,6 +105,7 @@ def get_payment_period_completions(
                pc.payment_marked_at, marker.name AS payment_marked_by_name
         FROM payment_components pc
         JOIN people p ON p.id = pc.person_id
+        LEFT JOIN employers e ON e.id = p.employer_id
         JOIN apartments ap ON ap.id = pc.apartment_id
         LEFT JOIN housing_arrays ha ON ha.id = ap.housing_array_id
         LEFT JOIN payment_component_types pct ON pct.id = pc.component_type_id

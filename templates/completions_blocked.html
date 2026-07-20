@@ -8,16 +8,7 @@
         נמצאו שינויים בחודש העבודה שלא נובעים מההשלמות שסומנו לתשלום ב-{{ "%02d"|format(payment_month) }}/{{ payment_year }}.
       </div>
     </div>
-    <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-      {% if completions %}
-      <a
-        href="/completions/reports/{{ file.id }}?payment_year={{ payment_year }}&payment_month={{ payment_month }}"
-        class="nav-link"
-        style="background: #0f766e; color: #fff; border: 1px solid #0f766e; border-radius: 6px; padding: 7px 12px; text-decoration: none; font-weight: 700;"
-      >הפק דוח למדריכים שסומנו להשלמה</a>
-      {% endif %}
-      <a href="/completions?year={{ payment_year }}&month={{ payment_month }}" class="nav-link">חזרה להשלמות</a>
-    </div>
+    <a href="/completions?year={{ payment_year }}&month={{ payment_month }}" class="nav-link">חזרה להשלמות</a>
   </div>
 
   <section style="margin-top: 14px;">
@@ -54,7 +45,13 @@
           <td>{{ diff.employee_code }}</td>
           <td>{{ diff.symbol }}</td>
           <td>{{ diff.display_name }}</td>
-          <td>{{ "%.2f"|format(diff.rate or 0) }}</td>
+          <td>
+            {% if diff.display_rate is none %}
+              -
+            {% else %}
+              {{ "%.2f"|format(diff.display_rate or 0) }}
+            {% endif %}
+          </td>
           <td>{{ "%.2f"|format(diff.paid_quantity or 0) }}</td>
           <td>{{ "%.2f"|format(diff.current_quantity or 0) }}</td>
           <td>{{ "%.2f"|format(diff.paid_amount or 0) }}</td>

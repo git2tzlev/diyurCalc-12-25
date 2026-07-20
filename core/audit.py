@@ -6,7 +6,28 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-AUDITED_TABLES = ("payment_components", "guide_fixed_payments")
+AUDITED_TABLES = (
+    "payment_components",
+    "guide_fixed_payments",
+    "time_reports",
+    "people",
+    "person_status_history",
+    "payment_codes",
+    "shift_type_housing_rates",
+    "shift_type_housing_rates_history",
+    "minimum_wage_rates",
+    "special_days",
+    "shabbat_times",
+    "apartments",
+    "apartment_status_history",
+    "shift_time_segments",
+    "shift_time_overrides",
+    "shift_time_overrides_history",
+    "standby_rates",
+    "standby_rates_history",
+    "holiday_payment_apartment_guides",
+    "payment_component_types",
+)
 
 
 def ensure_salary_audit_schema(conn) -> None:
@@ -23,8 +44,33 @@ def ensure_salary_audit_schema(conn) -> None:
                 new_data JSONB NULL,
                 changed_fields JSONB NULL,
                 actor_person_id INTEGER NULL REFERENCES people(id) ON DELETE SET NULL,
-                changed_at TIMESTAMP NOT NULL DEFAULT NOW()
+                changed_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                actor_kind TEXT NOT NULL DEFAULT 'system',
+                actor_label TEXT NULL
             )
+        """)
+        cursor.execute("""
+            ALTER TABLE audit_log
+            ADD COLUMN IF NOT EXISTS actor_kind TEXT NOT NULL DEFAULT 'system'
+        """)
+        cursor.execute("""
+            ALTER TABLE audit_log
+            ADD COLUMN IF NOT EXISTS actor_label TEXT NULL
+        """)
+        cursor.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM pg_constraint
+                    WHERE conname = 'chk_audit_log_actor_kind'
+                      AND conrelid = 'audit_log'::regclass
+                ) THEN
+                    ALTER TABLE audit_log
+                    ADD CONSTRAINT chk_audit_log_actor_kind
+                    CHECK (actor_kind IN ('user', 'automatic', 'script', 'system'));
+                END IF;
+            END $$;
         """)
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_audit_log_table_record
@@ -39,10 +85,12 @@ def ensure_salary_audit_schema(conn) -> None:
             ON audit_log (changed_at DESC)
         """)
 
-        _ensure_actor_columns(cursor, "payment_components", include_timestamps=False)
-        _ensure_actor_columns(cursor, "guide_fixed_payments", include_timestamps=True)
         _ensure_audit_functions(cursor)
         for table_name in AUDITED_TABLES:
+            if not _table_exists(cursor, table_name):
+                logger.info("Skipping audit trigger for missing table %s", table_name)
+                continue
+            _ensure_actor_columns(cursor, table_name, include_timestamps=True)
             _ensure_audit_trigger(cursor, table_name)
 
         conn.commit()
@@ -52,6 +100,12 @@ def ensure_salary_audit_schema(conn) -> None:
         raise
     finally:
         cursor.close()
+
+
+def _table_exists(cursor, table_name: str) -> bool:
+    cursor.execute("SELECT to_regclass(%s)", (f"public.{table_name}",))
+    row = cursor.fetchone()
+    return bool(row and row[0])
 
 
 def _ensure_actor_columns(cursor, table_name: str, *, include_timestamps: bool) -> None:
@@ -87,7 +141,8 @@ def _ensure_actor_columns(cursor, table_name: str, *, include_timestamps: bool) 
                     ALTER TABLE {table_name}
                     ADD CONSTRAINT {constraint_name}
                     FOREIGN KEY ({column_name}) REFERENCES people(id)
-                    ON DELETE SET NULL;
+                    ON DELETE SET NULL
+                    NOT VALID;
                 END IF;
             END $$;
         """)
@@ -111,15 +166,30 @@ def _ensure_audit_functions(cursor) -> None:
         DECLARE
             actor_id_text text;
             actor_id integer;
+            actor_kind text;
+            actor_label text;
             old_json jsonb;
             new_json jsonb;
             changed jsonb;
+            row_id integer;
         BEGIN
             actor_id_text := current_setting('app.current_user_id', true);
-            IF actor_id_text IS NOT NULL AND actor_id_text <> '' THEN
+            IF actor_id_text IS NOT NULL AND actor_id_text ~ '^[0-9]+$' THEN
                 actor_id := actor_id_text::integer;
             ELSE
                 actor_id := NULL;
+            END IF;
+
+            actor_kind := current_setting('app.audit_actor_kind', true);
+            IF actor_kind IS NULL OR actor_kind = '' THEN
+                actor_kind := CASE WHEN actor_id IS NULL THEN 'system' ELSE 'user' END;
+            ELSIF actor_kind NOT IN ('user', 'automatic', 'script', 'system') THEN
+                actor_kind := 'system';
+            END IF;
+
+            actor_label := current_setting('app.audit_actor_label', true);
+            IF actor_label = '' THEN
+                actor_label := NULL;
             END IF;
 
             IF TG_OP = 'INSERT' THEN
@@ -134,14 +204,19 @@ def _ensure_audit_functions(cursor) -> None:
                 END IF;
 
                 new_json := to_jsonb(NEW);
+                IF (new_json ->> 'id') ~ '^[0-9]+$' THEN
+                    row_id := (new_json ->> 'id')::integer;
+                ELSE
+                    row_id := NULL;
+                END IF;
                 INSERT INTO audit_log (
                     table_name, record_id, action, old_data, new_data,
-                    changed_fields, actor_person_id
+                    changed_fields, actor_person_id, actor_kind, actor_label
                 )
                 VALUES (
-                    TG_TABLE_NAME, NEW.id, TG_OP, NULL, new_json,
+                    TG_TABLE_NAME, row_id, TG_OP, NULL, new_json,
                     to_jsonb(ARRAY(SELECT jsonb_object_keys(new_json))),
-                    actor_id
+                    actor_id, actor_kind, actor_label
                 );
                 RETURN NEW;
             ELSIF TG_OP = 'UPDATE' THEN
@@ -152,26 +227,36 @@ def _ensure_audit_functions(cursor) -> None:
 
                 old_json := to_jsonb(OLD);
                 new_json := to_jsonb(NEW);
+                IF (new_json ->> 'id') ~ '^[0-9]+$' THEN
+                    row_id := (new_json ->> 'id')::integer;
+                ELSE
+                    row_id := NULL;
+                END IF;
                 changed := audit_changed_fields(old_json, new_json);
                 INSERT INTO audit_log (
                     table_name, record_id, action, old_data, new_data,
-                    changed_fields, actor_person_id
+                    changed_fields, actor_person_id, actor_kind, actor_label
                 )
                 VALUES (
-                    TG_TABLE_NAME, NEW.id, TG_OP, old_json, new_json,
-                    changed, actor_id
+                    TG_TABLE_NAME, row_id, TG_OP, old_json, new_json,
+                    changed, actor_id, actor_kind, actor_label
                 );
                 RETURN NEW;
             ELSIF TG_OP = 'DELETE' THEN
                 old_json := to_jsonb(OLD);
+                IF (old_json ->> 'id') ~ '^[0-9]+$' THEN
+                    row_id := (old_json ->> 'id')::integer;
+                ELSE
+                    row_id := NULL;
+                END IF;
                 INSERT INTO audit_log (
                     table_name, record_id, action, old_data, new_data,
-                    changed_fields, actor_person_id
+                    changed_fields, actor_person_id, actor_kind, actor_label
                 )
                 VALUES (
-                    TG_TABLE_NAME, OLD.id, TG_OP, old_json, NULL,
+                    TG_TABLE_NAME, row_id, TG_OP, old_json, NULL,
                     to_jsonb(ARRAY(SELECT jsonb_object_keys(old_json))),
-                    actor_id
+                    actor_id, actor_kind, actor_label
                 );
                 RETURN OLD;
             END IF;
