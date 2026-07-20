@@ -136,6 +136,32 @@ def _filter_asd_completion_reports_for_one_time_exclusion(
     ]
 
 
+def _should_calculate_monthly_accruals(
+    start_date_value,
+    year: int,
+    month: int,
+) -> bool:
+    """True when vacation/sick accruals apply for the requested work month."""
+    if start_date_value is None:
+        return False
+
+    if isinstance(start_date_value, datetime):
+        start_dt = start_date_value.date()
+    elif isinstance(start_date_value, date):
+        start_dt = start_date_value
+    elif isinstance(start_date_value, (int, float)):
+        start_dt = datetime.fromtimestamp(start_date_value, LOCAL_TZ).date()
+    else:
+        return False
+
+    if month == 12:
+        next_month_start = date(year + 1, 1, 1)
+    else:
+        next_month_start = date(year, month + 1, 1)
+
+    return start_dt < next_month_start
+
+
 def _subtract_intervals_from_range(
     start: int,
     end: int,
@@ -4594,8 +4620,13 @@ def aggregate_daily_segments_to_monthly(
         ).fetchone()
         start_date_ts = person["start_date"] if person else None
 
-    # חישוב צבירות (מחלה וחופשה)
-    if start_date_ts is not None:
+    # חישוב צבירות (מחלה וחופשה) לפי חודש העבודה עצמו.
+    # אם תאריך התחילה אחרי חודש העבודה, אין זכאות לאותו חודש.
+    if _should_calculate_monthly_accruals(
+        start_date_ts,
+        year,
+        month,
+    ):
         accruals = calculate_accruals(
             actual_work_days=monthly_totals["actual_work_days"],
             start_date_ts=start_date_ts,

@@ -35,29 +35,26 @@ def ensure_gesher_export_files_table(conn) -> None:
             )
         """)
         cursor.execute("""
-            ALTER TABLE gesher_export_files
-            ADD COLUMN IF NOT EXISTS is_cancelled BOOLEAN NOT NULL DEFAULT false
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = 'gesher_export_files'
         """)
-        cursor.execute("""
-            ALTER TABLE gesher_export_files
-            ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMP NULL
-        """)
-        cursor.execute("""
-            ALTER TABLE gesher_export_files
-            ADD COLUMN IF NOT EXISTS cancelled_by INTEGER NULL REFERENCES people(id) ON DELETE SET NULL
-        """)
-        cursor.execute("""
-            ALTER TABLE gesher_export_files
-            ADD COLUMN IF NOT EXISTS is_final BOOLEAN NOT NULL DEFAULT false
-        """)
-        cursor.execute("""
-            ALTER TABLE gesher_export_files
-            ADD COLUMN IF NOT EXISTS finalized_at TIMESTAMP NULL
-        """)
-        cursor.execute("""
-            ALTER TABLE gesher_export_files
-            ADD COLUMN IF NOT EXISTS finalized_by INTEGER NULL REFERENCES people(id) ON DELETE SET NULL
-        """)
+        existing_columns = {row[0] for row in cursor.fetchall()}
+        optional_columns = {
+            "is_cancelled": "BOOLEAN NOT NULL DEFAULT false",
+            "cancelled_at": "TIMESTAMP NULL",
+            "cancelled_by": "INTEGER NULL REFERENCES people(id) ON DELETE SET NULL",
+            "is_final": "BOOLEAN NOT NULL DEFAULT false",
+            "finalized_at": "TIMESTAMP NULL",
+            "finalized_by": "INTEGER NULL REFERENCES people(id) ON DELETE SET NULL",
+        }
+        for column_name, column_definition in optional_columns.items():
+            if column_name in existing_columns:
+                continue
+            cursor.execute(f"""
+                ALTER TABLE gesher_export_files
+                ADD COLUMN {column_name} {column_definition}
+            """)
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_gesher_export_files_period
             ON gesher_export_files (year, month)

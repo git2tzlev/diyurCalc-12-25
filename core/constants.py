@@ -43,6 +43,14 @@ HOLIDAY_PAYMENT_INTERNAL_KEY = "holiday_payment"
 HOLIDAY_PAYMENT_MERAV_CODE = "254"
 PERMANENT_EMPLOYEE_TYPE = "permanent"
 
+# Recovery Pay (דמי הבראה)
+RECOVERY_PAY_INTERNAL_KEY = "recovery_pay"
+RECOVERY_PAY_MERAV_CODE = "38"
+RECOVERY_PAY_MONTH = 6
+RECOVERY_PAY_DAILY_RATE = 451.5
+RECOVERY_PAY_FULL_TIME_MONTHLY_HOURS = 182
+RECOVERY_PAY_MAX_FTE = 1.0
+
 # =============================================================================
 # Shift ID Groups
 # =============================================================================

@@ -23,9 +23,13 @@ CONFIG_PATH = Path(__file__).parent / "gesher_config.ini"
 EXCLUDED_EXPORT_CODES = {'130', '199'}
 
 COMPLETION_EXPORT_CODES = {
-    "243": ("completion_professional_support", "money", "הפרש תומך מקצועי"),
     "253": ("completion_non_pension", "money", "הפרשי השלמות לא לפנסיה"),
     "317": ("completion_pension", "money", "הפרשי השלמות לפנסיה"),
+}
+
+COMPLETION_TOTAL_KEYS = {
+    "253": "completion_non_pension",
+    "317": "completion_pension",
 }
 
 
@@ -71,18 +75,171 @@ def append_completion_rows_to_preview(preview: List[Dict], completion_rows: List
             if employee_code:
                 by_employee_code[employee_code] = person
 
+        symbol = str(row.get("symbol") or "")
+        key, value_type, _ = COMPLETION_EXPORT_CODES.get(symbol, ("completion_difference", "money", ""))
+        if value_type == "money":
+            quantity = 0.0
+            payment = round(float(row.get("amount") or 0), 2)
+        else:
+            quantity = round(float(row.get("quantity") or 0), 2)
+            payment = 0.0
+
         person.setdefault("lines", []).append({
-            "symbol": str(row.get("symbol") or ""),
-            "key": COMPLETION_EXPORT_CODES.get(str(row.get("symbol") or ""), ("completion_difference", "money", ""))[0],
+            "symbol": symbol,
+            "key": key,
             "display_name": row.get("display_name") or "הפרשי השלמות",
-            "type": "money",
-            "quantity": 0.0,
-            "payment": round(float(row.get("amount") or 0), 2),
+            "type": value_type,
+            "quantity": quantity,
+            "payment": payment,
             "is_completion_difference": True,
             "source_symbols": row.get("source_symbols") or "",
         })
 
     return preview
+
+
+def _completion_quantity_and_rate(row: Dict[str, Any]) -> tuple[float, float]:
+    symbol = str(row.get("symbol") or "")
+    value_type = COMPLETION_EXPORT_CODES.get(symbol, ("", "money", ""))[1]
+    if value_type == "money":
+        return 0.0, round(float(row.get("amount") or 0), 2)
+    return round(float(row.get("quantity") or 0), 2), 0.0
+
+
+def _clean_employee_code(value: Any) -> str:
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    return digits.zfill(6) if digits else ""
+
+
+def empty_completion_totals() -> Dict[str, float]:
+    return {
+        "completion_non_pension": 0.0,
+        "completion_pension": 0.0,
+        "completion_retro_money_total": 0.0,
+    }
+
+
+def add_completion_row_to_totals(totals: Dict[str, Any], row: Dict[str, Any]) -> None:
+    symbol = str(row.get("symbol") or "")
+    key = COMPLETION_TOTAL_KEYS.get(symbol)
+    if not key:
+        return
+    value_type = COMPLETION_EXPORT_CODES.get(symbol, ("", "money", ""))[1]
+    if value_type == "money":
+        value = round(float(row.get("amount") or 0), 2)
+        totals[key] = round(float(totals.get(key) or 0) + value, 2)
+        totals["completion_retro_money_total"] = round(
+            float(totals.get("completion_retro_money_total") or 0) + value,
+            2,
+        )
+        for total_key in ("total_payment", "gesher_total", "display_total", "rounded_total"):
+            if total_key in totals:
+                totals[total_key] = round(float(totals.get(total_key) or 0) + value, 2)
+    else:
+        value = round(float(row.get("quantity") or 0), 2)
+        totals[key] = round(float(totals.get(key) or 0) + value, 2)
+
+
+def apply_completion_rows_to_monthly_totals(
+    totals: Dict[str, Any],
+    completion_rows: List[Dict[str, Any]],
+    *,
+    person_id: int | None = None,
+    employee_code: str | None = None,
+) -> None:
+    for key, value in empty_completion_totals().items():
+        totals.setdefault(key, value)
+
+    clean_code = _clean_employee_code(employee_code)
+    for row in completion_rows:
+        row_code = _clean_employee_code(row.get("employee_code"))
+        person_match = person_id is not None and row.get("person_id") == person_id
+        code_match = bool(clean_code and row_code == clean_code)
+        if person_id is None and not clean_code:
+            person_match = True
+        if person_match or code_match:
+            add_completion_row_to_totals(totals, row)
+
+
+def apply_completion_rows_to_summary_data(
+    summary_data: List[Dict[str, Any]],
+    grand_totals: Dict[str, Any],
+    completion_rows: List[Dict[str, Any]],
+) -> None:
+    seen_person_ids = set()
+    seen_employee_codes = set()
+    for person_data in summary_data:
+        person_id = person_data.get("person_id") or person_data.get("id")
+        employee_code = person_data.get("merav_code") or person_data.get("meirav_code")
+        if person_id is not None:
+            seen_person_ids.add(person_id)
+        clean_code = _clean_employee_code(employee_code)
+        if clean_code:
+            seen_employee_codes.add(clean_code)
+        apply_completion_rows_to_monthly_totals(
+            person_data.setdefault("totals", {}),
+            completion_rows,
+            person_id=person_id,
+            employee_code=employee_code,
+        )
+
+    completion_only: dict[tuple[Any, str], Dict[str, Any]] = {}
+    for row in completion_rows:
+        person_id = row.get("person_id")
+        employee_code = _clean_employee_code(row.get("employee_code"))
+        if (person_id is not None and person_id in seen_person_ids) or (
+            employee_code and employee_code in seen_employee_codes
+        ):
+            continue
+        key = (person_id, employee_code)
+        if key not in completion_only:
+            completion_only[key] = {
+                "name": row.get("person_name") or "",
+                "person_id": person_id,
+                "merav_code": employee_code,
+                "totals": empty_completion_totals(),
+            }
+        add_completion_row_to_totals(completion_only[key]["totals"], row)
+    summary_data.extend(completion_only.values())
+
+    for key, value in empty_completion_totals().items():
+        grand_totals[key] = value
+    for row in completion_rows:
+        add_completion_row_to_totals(grand_totals, row)
+
+
+def _write_completion_rows(
+    output: io.StringIO,
+    rows: List[Dict[str, Any]],
+    *,
+    filter_name: str | None = None,
+    person_ids: set[int] | None = None,
+    employee_codes: set[str] | None = None,
+) -> int:
+    line_count = 0
+    for row in rows:
+        person_name = row.get("person_name") or ""
+        if filter_name and filter_name.lower() not in person_name.lower():
+            continue
+        employee_code_text = "".join(ch for ch in str(row.get("employee_code") or "") if ch.isdigit()).zfill(6)
+        if not employee_code_text:
+            continue
+        if person_ids is not None or employee_codes is not None:
+            person_match = person_ids is not None and row.get("person_id") in person_ids
+            code_match = employee_codes is not None and employee_code_text in employee_codes
+            if not person_match and not code_match:
+                continue
+
+        quantity, rate = _completion_quantity_and_rate(row)
+        line = format_gesher_line(
+            employee_code=int(employee_code_text),
+            symbol=str(row["symbol"]),
+            quantity=quantity,
+            rate=rate,
+        )
+        output.write(line + "\r\n")
+        line_count += 1
+    return line_count
 
 
 def should_block_multi_housing_for_gesher(housing_filter: int | None) -> bool:
@@ -166,6 +323,7 @@ def load_export_config_from_db(conn) -> Dict[str, Tuple[str, str, str]]:
             'travel': 'money',
             'professional_support': 'money',
             'holiday_payment': 'money',
+            'recovery_pay': 'money',
             'extras': 'money',
             'extras_for_pension': 'money',
             
@@ -487,6 +645,22 @@ def generate_gesher_file_for_person(conn, person_id: int, year: int, month: int)
         )
         output.write(line + "\r\n")
         line_count += 1
+
+    from services.gesher_difference import build_approved_completion_gesher_rows
+
+    completion_result = build_approved_completion_gesher_rows(
+        conn,
+        year,
+        month,
+        company_code=company,
+        housing_array_id=get_housing_array_filter(),
+    )
+    line_count += _write_completion_rows(
+        output,
+        completion_result["rows"],
+        person_ids={person_id},
+        employee_codes={meirav_code_clean.zfill(6)},
+    )
     
     result = output.getvalue()
     logger.info("Gesher export for person %s: %s lines", person_id, line_count)
@@ -650,19 +824,11 @@ def generate_gesher_file(
             output.write(line + "\r\n")
             line_count += 1
 
-    for row in completion_result["rows"]:
-        person_name = row.get("person_name") or ""
-        if filter_name and filter_name.lower() not in person_name.lower():
-            continue
-        employee_code = int(row["employee_code"])
-        line = format_gesher_line(
-            employee_code=employee_code,
-            symbol=str(row["symbol"]),
-            quantity=0.0,
-            rate=round(float(row.get("amount") or 0), 2),
-        )
-        output.write(line + "\r\n")
-        line_count += 1
+    line_count += _write_completion_rows(
+        output,
+        completion_result["rows"],
+        filter_name=filter_name,
+    )
 
     result = output.getvalue()
     logger.info("Gesher export: %s lines for company %s", line_count, company)
@@ -799,6 +965,27 @@ def generate_gesher_file_for_multiple(conn, person_ids: List[int], year: int, mo
             )
             output.write(line + "\r\n")
             line_count += 1
+
+    from services.gesher_difference import build_approved_completion_gesher_rows
+
+    completion_result = build_approved_completion_gesher_rows(
+        conn,
+        year,
+        month,
+        company_code=first_company,
+        housing_array_id=get_housing_array_filter(),
+    )
+    selected_employee_codes = {
+        "".join(filter(str.isdigit, str(person.get("meirav_code") or ""))).zfill(6)
+        for person in people_data.values()
+        if person.get("meirav_code")
+    }
+    line_count += _write_completion_rows(
+        output,
+        completion_result["rows"],
+        person_ids=set(person_ids),
+        employee_codes=selected_employee_codes,
+    )
 
     result = output.getvalue()
     logger.info("Gesher export for %s selected people: %s lines", len(person_ids), line_count)

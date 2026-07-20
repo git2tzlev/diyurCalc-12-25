@@ -20,17 +20,15 @@ COMPLETION_PENSION_SOURCE_SYMBOLS = {"360", "362", "363"}
 COMPLETION_NON_PENSION_SOURCE_SYMBOLS = {
     "366", "368", "370", "371", "373", "374", "382", "434",
 }
-COMPLETION_PROFESSIONAL_SUPPORT_SYMBOLS = {"243"}
 COMPLETION_TARGET_SYMBOLS = {
     "pension": "317",
     "non_pension": "253",
-    "professional_support": "243",
 }
 COMPLETION_TARGET_DISPLAY_NAMES = {
-    "243": "הפרש תומך מקצועי",
     "253": "הפרשי השלמות לא לפנסיה",
     "317": "הפרשי השלמות לפנסיה",
 }
+COMPLETION_QUANTITY_TARGET_SYMBOLS: set[str] = set()
 
 
 class CompletionGesherBlockedError(Exception):
@@ -163,10 +161,39 @@ def build_current_gesher_lines(
         raw_conn,
         year,
         month,
+        person_ids=person_ids,
         excluded_time_report_ids=excluded_time_report_ids,
         excluded_payment_component_ids=excluded_payment_component_ids,
     )
 
+    return build_gesher_lines_from_summary(
+        conn,
+        summary_data,
+        year,
+        month,
+        company_code=company_code,
+        person_ids=person_ids,
+        include_negative_values=include_negative_values,
+    )
+
+
+def build_gesher_lines_from_summary(
+    conn,
+    summary_data: list[dict[str, Any]],
+    year: int,
+    month: int,
+    *,
+    company_code: Optional[str],
+    person_ids: Optional[set[int]] = None,
+    include_negative_values: bool = False,
+) -> list[dict[str, Any]]:
+    """Convert an already calculated monthly summary to comparable Gesher lines."""
+    export_codes = gesher_exporter.load_export_config_from_db(conn)
+    if not export_codes:
+        export_codes = gesher_exporter.load_export_config()
+    options = gesher_exporter.get_export_options()
+    minimum_wage = gesher_exporter.get_minimum_wage(conn, year, month)
+    people_by_code = _person_lookup(conn)
     result = []
     for person_data in summary_data:
         if person_ids and person_data.get("person_id") not in person_ids:
@@ -192,11 +219,11 @@ def build_current_gesher_lines(
                 totals, internal_key, value_type, minimum_wage
             )
             if not options["export_zero_values"]:
+                if value_type.startswith("hours_") and abs(quantity) < options["min_amount"]:
+                    continue
                 if include_negative_values:
                     if abs(quantity) < options["min_amount"] and abs(rate) < options["min_amount"]:
                         continue
-                elif value_type.startswith("hours_") and quantity < options["min_amount"]:
-                    continue
                 elif value_type == "money" and rate < options["min_amount"]:
                     continue
                 elif quantity < options["min_amount"] and rate < options["min_amount"]:
@@ -224,8 +251,6 @@ def _completion_target_for_source_symbol(symbol: Any) -> Optional[str]:
         return COMPLETION_TARGET_SYMBOLS["pension"]
     if source_symbol in COMPLETION_NON_PENSION_SOURCE_SYMBOLS:
         return COMPLETION_TARGET_SYMBOLS["non_pension"]
-    if source_symbol in COMPLETION_PROFESSIONAL_SUPPORT_SYMBOLS:
-        return COMPLETION_TARGET_SYMBOLS["professional_support"]
     return None
 
 
@@ -237,7 +262,11 @@ def build_completion_gesher_rows(diffs: list[dict[str, Any]]) -> list[dict[str, 
         if not target_symbol:
             continue
         amount_diff = round(float(diff.get("amount_diff") or 0), 2)
-        if abs(amount_diff) < MONEY_EPSILON:
+        quantity_diff = round(float(diff.get("quantity_diff") or 0), 2)
+        if target_symbol in COMPLETION_QUANTITY_TARGET_SYMBOLS:
+            if abs(quantity_diff) < QUANTITY_EPSILON:
+                continue
+        elif abs(amount_diff) < MONEY_EPSILON:
             continue
         employee_code = _clean_employee_code(diff.get("employee_code"))
         if not employee_code:
@@ -253,14 +282,19 @@ def build_completion_gesher_rows(diffs: list[dict[str, Any]]) -> list[dict[str, 
                 "person_name": diff.get("person_name", ""),
                 "symbol": target_symbol,
                 "amount": 0.0,
+                "quantity": 0.0,
                 "source_symbols": set(),
             }
         grouped[key]["amount"] = round(grouped[key]["amount"] + amount_diff, 2)
+        grouped[key]["quantity"] = round(grouped[key]["quantity"] + quantity_diff, 2)
         grouped[key]["source_symbols"].add(str(diff.get("symbol") or ""))
 
     rows = []
     for row in grouped.values():
-        if abs(float(row["amount"])) < MONEY_EPSILON:
+        if row["symbol"] in COMPLETION_QUANTITY_TARGET_SYMBOLS:
+            if abs(float(row["quantity"])) < QUANTITY_EPSILON:
+                continue
+        elif abs(float(row["amount"])) < MONEY_EPSILON:
             continue
         row["source_symbols"] = ", ".join(sorted(row["source_symbols"]))
         rows.append(row)
@@ -273,11 +307,18 @@ def build_completion_gesher_file(rows: list[dict[str, Any]], year: int, month: i
     company = company_code or gesher_exporter.get_export_options()["default_company"]
     text = gesher_exporter.format_gesher_header(company, year, month) + "\r\n"
     for row in rows:
+        symbol = str(row.get("symbol") or "")
+        if symbol in COMPLETION_QUANTITY_TARGET_SYMBOLS:
+            quantity = round(float(row.get("quantity") or 0), 2)
+            rate = 0.0
+        else:
+            quantity = 0.0
+            rate = round(float(row["amount"]), 2)
         text += gesher_exporter.format_gesher_line(
             employee_code=int(row["employee_code"]),
-            symbol=row["symbol"],
-            quantity=0.0,
-            rate=round(float(row["amount"]), 2),
+            symbol=symbol,
+            quantity=quantity,
+            rate=rate,
         ) + "\r\n"
     return text
 
@@ -285,6 +326,8 @@ def build_completion_gesher_file(rows: list[dict[str, Any]], year: int, month: i
 def _build_unverified_completion_diffs(
     before_lines: list[dict[str, Any]],
     after_lines: list[dict[str, Any]],
+    *,
+    diff_type: str = "השלמה ללא קובץ גשר סופי",
 ) -> list[dict[str, Any]]:
     """Build completion diffs without an archived paid file, used only after explicit approval."""
 
@@ -320,10 +363,47 @@ def _build_unverified_completion_diffs(
         row.update({
             "quantity_diff": quantity_diff,
             "amount_diff": amount_diff,
-            "diff_type": "השלמה ללא קובץ גשר סופי",
+            "diff_type": diff_type,
         })
         diffs.append(row)
     return diffs
+
+
+def _build_current_completion_diffs(
+    conn,
+    work_year: int,
+    work_month: int,
+    company_code: str,
+    items: list[dict[str, Any]],
+    *,
+    person_ids: Optional[set[int]] = None,
+    diff_type: str = "השלמה ללא קובץ גשר סופי",
+) -> list[dict[str, Any]]:
+    """Calculate only the delta created by marked completion items."""
+    report_ids, component_ids = _completion_ids_from_items(items)
+    current_without = build_current_gesher_lines(
+        conn,
+        work_year,
+        work_month,
+        company_code=company_code,
+        person_ids=person_ids,
+        excluded_time_report_ids=report_ids,
+        excluded_payment_component_ids=component_ids,
+        include_negative_values=True,
+    )
+    current_with = build_current_gesher_lines(
+        conn,
+        work_year,
+        work_month,
+        company_code=company_code,
+        person_ids=person_ids,
+        include_negative_values=True,
+    )
+    return _build_unverified_completion_diffs(
+        current_without,
+        current_with,
+        diff_type=diff_type,
+    )
 
 
 def build_approved_completion_gesher_rows(
@@ -335,18 +415,58 @@ def build_approved_completion_gesher_rows(
     housing_array_id: Optional[int] = None,
     allow_unverified_missing_final: bool = False,
 ) -> dict[str, Any]:
-    """
-    Build payment-month completion Gesher rows using final archived Gesher files.
+    """Build approved completion rows from salary-impact events.
 
-    The safety rule is:
+    ``allow_unverified_missing_final`` remains in the public signature while old
+    callers are migrated; event-driven calculation never depends on a final file.
+    """
+    del allow_unverified_missing_final
+    from services.salary_impact import build_salary_impact_completion_rows
+
+    result = build_salary_impact_completion_rows(
+        conn,
+        payment_year,
+        payment_month,
+        statuses=("included_in_export",),
+        company_code=company_code,
+        housing_array_id=housing_array_id,
+    )
+    return {
+        **result,
+        "blocks": [
+            {
+                "type": "invalid_salary_impact_event",
+                "message": event.get("validation_error"),
+                "event_id": event.get("id"),
+                "company_code": event.get("employer_code") or "001",
+            }
+            for event in result["invalid_events"]
+            if event.get("status") == "included_in_export"
+        ],
+        "items": result["events"],
+        "approved_files": [],
+    }
+
+
+def build_legacy_completion_gesher_rows_from_final_file(
+    conn,
+    payment_year: int,
+    payment_month: int,
+    *,
+    company_code: Optional[str] = None,
+    housing_array_id: Optional[int] = None,
+    allow_unverified_missing_final: bool = False,
+) -> dict[str, Any]:
+    """
+    Build payment-month completion Gesher rows.
+
+    The rule is:
     1. Find marked completions for the payment month.
-    2. For each work month + company, require a final archived Gesher file by default.
+    2. For each work month + company, prefer a final archived Gesher file when available.
     3. Compare the final file to the current calculation without the marked completions.
-       Any difference here means the work month changed for another reason, so export is blocked.
-    4. Only then compare the final file to the current calculation and convert the differences
-       into target completion symbols 253/317/243.
-    If allow_unverified_missing_final is true, a missing final file is allowed after explicit
-    user approval, but unrelated diffs against an existing final file still block export.
+       If unrelated differences exist, export the full current gap for that work month.
+    4. If no final file exists, also export the clean delta of the marked completions.
+    5. Convert completion differences into target completion symbols 253/317.
     """
     completion_data = get_payment_period_completions(
         conn,
@@ -384,50 +504,30 @@ def build_approved_completion_gesher_rows(
             if file.get("is_final") and not file.get("is_cancelled")
         ]
         if not final_files:
-            if allow_unverified_missing_final:
-                report_ids, component_ids = _completion_ids_from_items(items)
-                current_without = build_current_gesher_lines(
-                    conn,
-                    work_year,
-                    work_month,
-                    company_code=item_company,
-                    excluded_time_report_ids=report_ids,
-                    excluded_payment_component_ids=component_ids,
-                    include_negative_values=True,
-                )
-                current_with = build_current_gesher_lines(
-                    conn,
-                    work_year,
-                    work_month,
-                    company_code=item_company,
-                    include_negative_values=True,
-                )
-                completion_diffs = _build_unverified_completion_diffs(current_without, current_with)
-                for diff in completion_diffs:
-                    diff["work_year"] = work_year
-                    diff["work_month"] = work_month
-                    diff["source_file_id"] = None
-                    diff["source_file_name"] = "ללא קובץ גשר סופי"
-                    diff["employer_code"] = item_company
-                    diff["is_unverified_missing_final"] = True
-                all_diffs.extend(completion_diffs)
-                approved_files.append({
-                    "id": None,
-                    "filename": "ללא קובץ גשר סופי",
-                    "work_year": work_year,
-                    "work_month": work_month,
-                    "company_code": item_company,
-                    "items_count": len(items),
-                    "is_unverified_missing_final": True,
-                })
-                continue
-            blocks.append({
-                "reason": "missing_final_file",
-                "message": "אין קובץ גשר סופי לחודש העבודה והמפעל",
+            completion_diffs = _build_current_completion_diffs(
+                conn,
+                work_year,
+                work_month,
+                item_company,
+                items,
+                diff_type="השלמה ללא קובץ גשר סופי",
+            )
+            for diff in completion_diffs:
+                diff["work_year"] = work_year
+                diff["work_month"] = work_month
+                diff["source_file_id"] = None
+                diff["source_file_name"] = "ללא קובץ גשר סופי"
+                diff["employer_code"] = item_company
+                diff["is_unverified_missing_final"] = True
+            all_diffs.extend(completion_diffs)
+            approved_files.append({
+                "id": None,
+                "filename": "ללא קובץ גשר סופי",
                 "work_year": work_year,
                 "work_month": work_month,
                 "company_code": item_company,
-                "items": items,
+                "items_count": len(items),
+                "is_unverified_missing_final": True,
             })
             continue
 
@@ -437,14 +537,30 @@ def build_approved_completion_gesher_rows(
             housing_array_id=housing_array_id,
         )
         if not file_row or file_row.get("is_cancelled") or not file_row.get("is_final"):
-            blocks.append({
-                "reason": "invalid_final_file",
-                "message": "קובץ הגשר הסופי לא זמין או אינו סופי",
+            completion_diffs = _build_current_completion_diffs(
+                conn,
+                work_year,
+                work_month,
+                item_company,
+                items,
+                diff_type="השלמה ללא קובץ גשר סופי תקין",
+            )
+            for diff in completion_diffs:
+                diff["work_year"] = work_year
+                diff["work_month"] = work_month
+                diff["source_file_id"] = None
+                diff["source_file_name"] = "קובץ גשר סופי לא זמין"
+                diff["employer_code"] = item_company
+                diff["is_unverified_missing_final"] = True
+            all_diffs.extend(completion_diffs)
+            approved_files.append({
+                "id": None,
+                "filename": "קובץ גשר סופי לא זמין",
                 "work_year": work_year,
                 "work_month": work_month,
                 "company_code": item_company,
-                "file": final_files[0],
-                "items": items,
+                "items_count": len(items),
+                "is_unverified_missing_final": True,
             })
             continue
 
@@ -465,15 +581,30 @@ def build_approved_completion_gesher_rows(
         )
         unrelated_diffs = compare_line_sets(paid_lines, current_without)
         if unrelated_diffs:
-            blocks.append({
-                "reason": "unrelated_diffs",
-                "message": "נמצאו פערים שאינם שייכים להשלמות המסומנות",
+            current_with = build_current_gesher_lines(
+                conn,
+                work_year,
+                work_month,
+                company_code=item_company,
+                person_ids=file_person_ids,
+            )
+            completion_diffs = compare_line_sets(paid_lines, current_with)
+            for diff in completion_diffs:
+                diff["work_year"] = work_year
+                diff["work_month"] = work_month
+                diff["source_file_id"] = file_row.get("id")
+                diff["source_file_name"] = file_row.get("filename")
+                diff["employer_code"] = item_company
+                diff["has_unrelated_diffs"] = True
+            all_diffs.extend(completion_diffs)
+            approved_files.append({
+                "id": file_row.get("id"),
+                "filename": file_row.get("filename"),
                 "work_year": work_year,
                 "work_month": work_month,
                 "company_code": item_company,
-                "file": file_row,
-                "items": items,
-                "diffs": unrelated_diffs,
+                "items_count": len(items),
+                "has_unrelated_diffs": True,
             })
             continue
 
@@ -512,8 +643,12 @@ def build_approved_completion_gesher_rows(
             str(row.get("symbol") or ""),
             "הפרשי השלמות",
         )
-        row["quantity"] = 0.0
-        row["rate"] = round(float(row.get("amount") or 0), 2)
+        if str(row.get("symbol") or "") in COMPLETION_QUANTITY_TARGET_SYMBOLS:
+            row["quantity"] = round(float(row.get("quantity") or 0), 2)
+            row["rate"] = 0.0
+        else:
+            row["quantity"] = 0.0
+            row["rate"] = round(float(row.get("amount") or 0), 2)
 
     return {
         "rows": rows,
@@ -624,22 +759,23 @@ def _diffs_to_rows(diffs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _completion_rows(completions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows = []
     for item in completions:
-        is_report = item.get("item_type") == "time_report"
+        is_report = item.get("item_type") == "time_report" or item.get("source_table") == "time_reports"
+        snapshot = item.get("new_data") or item.get("old_data") or {}
         rows.append({
             "סוג": "משמרת" if is_report else "רכיב תשלום",
             "שם מדריך": item.get("person_name", ""),
             "קוד מירב": item.get("meirav_code", ""),
-            "תאריך עבודה": item.get("date"),
+            "תאריך עבודה": item.get("date") or item.get("work_date"),
             "חודש עבודה": f"{item.get('work_month'):02d}/{item.get('work_year')}",
             "דירה": item.get("apartment_name", ""),
             "משמרת/רכיב": item.get("shift_name") if is_report else item.get("component_name"),
             "שעות/כמות": (
-                f"{item.get('start_time') or ''}-{item.get('end_time') or ''}"
-                if is_report else item.get("quantity")
+                f"{snapshot.get('start_time') or ''}-{snapshot.get('end_time') or ''}"
+                if is_report else snapshot.get("quantity")
             ),
-            "הערת תשלום": item.get("payment_note", ""),
-            "סומן ע\"י": item.get("payment_marked_by_name", ""),
-            "סומן בתאריך": item.get("payment_marked_at"),
+            "הערת תשלום": item.get("payment_note") or snapshot.get("payment_note", ""),
+            "סומן ע\"י": item.get("payment_marked_by_name") or item.get("actor_label", ""),
+            "סומן בתאריך": item.get("payment_marked_at") or item.get("created_at"),
         })
     return rows
 

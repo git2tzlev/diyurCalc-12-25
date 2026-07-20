@@ -28,6 +28,11 @@ from services.gesher_difference import (
     enrich_paid_lines,
     parse_gesher_file_lines,
 )
+from services.salary_impact import (
+    build_salary_impact_completion_rows,
+    get_salary_impact_events,
+    update_salary_impact_group_status,
+)
 from services.email_service import (
     generate_batch_id,
     get_email_settings,
@@ -41,6 +46,71 @@ templates = Jinja2Templates(directory=str(config.TEMPLATES_DIR))
 templates.env.filters["human_date"] = human_date
 templates.env.globals["app_version"] = config.VERSION
 logger = logging.getLogger(__name__)
+
+COMPLETION_ACTION_LABELS = {
+    "created": "יצירה",
+    "updated": "עדכון",
+    "deleted": "מחיקה",
+}
+COMPLETION_STATUS_LABELS = {
+    "open": "ממתין לאישור",
+    "included_in_export": "מאושר לייצוא",
+    "exported": "שולם",
+    "ignored": "לא לתשלום",
+    "cancelled": "בוטל",
+    "superseded": "הוחלף",
+}
+COMPLETION_FIELD_LABELS = {
+    "id": "מזהה רשומה",
+    "date": "תאריך עבודה",
+    "person_id": "מדריך",
+    "apartment_id": "דירה",
+    "start_time": "שעת התחלה",
+    "end_time": "שעת סיום",
+    "shift_type_id": "סוג משמרת",
+    "component_type_id": "סוג רכיב",
+    "quantity": "כמות",
+    "rate": "תעריף/סכום",
+    "description": "תיאור",
+    "is_approved": "מאושר",
+    "approved_by": "אושר על ידי",
+    "approved_at": "אושר בתאריך",
+    "for_pension": "לפנסיה",
+    "payment_year": "שנת תשלום",
+    "payment_month": "חודש תשלום",
+    "payment_note": "הערת תשלום",
+    "payment_marked_at": "סומן לתשלום בתאריך",
+    "payment_marked_by": "סומן לתשלום על ידי",
+    "rate_apartment_type_id": "סוג דירה לתעריף",
+    "asd_night_marking": "סימון לילה ASD",
+    "exclude_standby": "ללא כוננות",
+    "attachment_url": "קובץ מצורף",
+    "fixed_payment_id": "תשלום קבוע מקור",
+    "is_fixed_payment": "תשלום קבוע",
+    "created_at": "נוצר בתאריך",
+    "created_by": "נוצר על ידי",
+    "updated_at": "עודכן בתאריך",
+    "updated_by": "עודכן על ידי",
+}
+
+
+def _prepare_completion_event_for_display(event: dict) -> dict:
+    result = dict(event)
+    event_type = str(event.get("event_type") or "")
+    result["event_type_label"] = COMPLETION_ACTION_LABELS.get(event_type, "שינוי")
+    result["status_label"] = COMPLETION_STATUS_LABELS.get(event.get("status"), "לא ידוע")
+    if event_type == "created":
+        result["changed_fields_label"] = "כל נתוני הרשומה החדשה"
+    elif event_type == "deleted":
+        result["changed_fields_label"] = "כל נתוני הרשומה שנמחקה"
+    else:
+        labels = []
+        for field in event.get("changed_fields") or []:
+            label = COMPLETION_FIELD_LABELS.get(str(field), "שדה מערכת")
+            if label not in labels:
+                labels.append(label)
+        result["changed_fields_label"] = ", ".join(labels) or "לא נרשמו שדות"
+    return result
 
 
 def _sse_event(event: str, data: dict) -> str:
@@ -105,11 +175,30 @@ def completions_page(
 
     housing_filter = get_housing_array_filter()
     with get_conn() as conn:
-        completion_data = get_payment_period_completions(
+        legacy_completion_data = get_payment_period_completions(
             conn, year, month, housing_array_id=housing_filter
         )
+        events = [
+            _prepare_completion_event_for_display(event)
+            for event in get_salary_impact_events(
+                conn, year, month, housing_array_id=housing_filter
+            )
+        ]
+        open_result = build_salary_impact_completion_rows(
+            conn, year, month, statuses=("open",), housing_array_id=housing_filter
+        )
+        approved_result = build_salary_impact_completion_rows(
+            conn, year, month, statuses=("included_in_export",), housing_array_id=housing_filter
+        )
+        events_by_group = {}
+        for event in events:
+            key = (int(event.get("person_id") or 0), int(event.get("work_year") or 0), int(event.get("work_month") or 0))
+            events_by_group.setdefault(key, []).append(event)
         groups = []
-        for (work_year, work_month), items in sorted(completion_data["by_work_month"].items()):
+        for (person_id, work_year, work_month), items in sorted(
+            events_by_group.items(),
+            key=lambda item: (item[0][1], item[0][2], item[1][0].get("person_name") or ""),
+        ):
             files = list_gesher_export_files(
                 conn,
                 year=work_year,
@@ -121,11 +210,27 @@ def completions_page(
                 if file.get("is_final") and not file.get("is_cancelled")
             ]
             groups.append({
+                "person_id": person_id,
+                "person_name": items[0].get("person_name") or "",
+                "meirav_code": items[0].get("meirav_code") or "",
                 "work_year": work_year,
                 "work_month": work_month,
                 "items": items,
                 "final_files": final_files,
+                "status": items[0].get("status"),
+                "open_count": sum(1 for item in items if item.get("status") == "open"),
+                "approved_count": sum(1 for item in items if item.get("status") == "included_in_export"),
+                "open_rows": open_result["group_rows"].get((person_id, work_year, work_month), []),
+                "approved_rows": approved_result["group_rows"].get((person_id, work_year, work_month), []),
+                "validation_errors": [item["validation_error"] for item in items if item.get("validation_error")],
             })
+        event_completion_items = [
+                {**event, "date": event.get("work_date")}
+                for event in events
+            ]
+        completion_data = {
+            "items": legacy_completion_data["items"] + event_completion_items,
+        }
         email_tasks = _completion_report_tasks(completion_data)
 
     return templates.TemplateResponse("completions.html", {
@@ -134,12 +239,67 @@ def completions_page(
         "selected_month": month,
         "years": list(range(2023, 2028)),
         "groups": groups,
-        "total_items": len(completion_data["items"]),
+        "legacy_groups": [
+            {
+                "work_year": work_year,
+                "work_month": work_month,
+                "items": items,
+            }
+            for (work_year, work_month), items in sorted(
+                legacy_completion_data["by_work_month"].items()
+            )
+        ],
+        "total_items": len(events) + len(legacy_completion_data["items"]),
         "email_tasks": email_tasks,
         "email_tasks_with_email": sum(1 for task in email_tasks if task.get("email")),
         "completion_bulk_send_token": create_action_token(request, "completion_bulk_send"),
+        "completion_status_token": create_action_token(request, "completion_status"),
         "is_demo_mode": is_demo_mode(),
     })
+
+
+def change_completion_group_status(
+    request: Request,
+    *,
+    payment_year: int,
+    payment_month: int,
+    person_id: int,
+    work_year: int,
+    work_month: int,
+    from_status: str,
+    to_status: str,
+    token: str,
+    export_file_id: Optional[int] = None,
+) -> Response:
+    """Approve, reopen or mark one guide/work-month completion group as paid."""
+    if not validate_action_token(request, token, "completion_status"):
+        raise HTTPException(status_code=403, detail="אין הרשאה לשנות סטטוס השלמה")
+    current_user = getattr(request.state, "current_user", None) or {}
+    actor_person_id = current_user.get("person_id")
+    with get_conn() as conn:
+        try:
+            updated = update_salary_impact_group_status(
+                conn,
+                payment_year=payment_year,
+                payment_month=payment_month,
+                person_id=person_id,
+                work_year=work_year,
+                work_month=work_month,
+                from_status=from_status,
+                to_status=to_status,
+                actor_person_id=actor_person_id,
+                export_file_id=export_file_id,
+                housing_array_id=get_housing_array_filter(),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not updated:
+        raise HTTPException(status_code=404, detail="לא נמצאו אירועים מתאימים לשינוי")
+    from urllib.parse import urlencode
+    return Response(
+        status_code=303,
+        headers={"Location": f"/completions?{urlencode({'year': payment_year, 'month': payment_month})}"},
+    )
 
 
 async def completion_reports_bulk_send_stream(
@@ -175,9 +335,15 @@ async def completion_reports_bulk_send_stream(
 
             return StreamingResponse(settings_error_stream(), media_type="text/event-stream")
 
-        completion_data = get_payment_period_completions(
+        completion_events = get_salary_impact_events(
             conn, payment_year, payment_month, housing_array_id=housing_filter
         )
+        completion_data = {
+            "items": [
+                {**event, "date": event.get("work_date")}
+                for event in completion_events
+            ]
+        }
         tasks = _completion_report_tasks(completion_data)
 
     if not tasks:
@@ -334,12 +500,16 @@ def completion_guides_report_excel(
             set_housing_array_filter(file_housing_filter)
 
         try:
-            completion_data = get_payment_period_completions(
-                conn, payment_year, payment_month, housing_array_id=file_housing_filter
-            )
-            _report_ids, _component_ids, completion_items = _completion_ids_for_work_month(
-                completion_data, work_year, work_month
-            )
+            completion_items = [
+                event for event in get_salary_impact_events(
+                    conn,
+                    payment_year,
+                    payment_month,
+                    housing_array_id=file_housing_filter,
+                )
+                if int(event.get("work_year") or 0) == work_year
+                and int(event.get("work_month") or 0) == work_month
+            ]
             person_ids = _unique_completion_person_ids(completion_items)
             if not person_ids:
                 raise HTTPException(status_code=404, detail="לא נמצאו מדריכים שסומנו להשלמה לחודש העבודה של הקובץ")
@@ -424,38 +594,22 @@ def completion_difference_report(
             set_housing_array_filter(file_housing_filter)
 
         try:
-            completion_data = get_payment_period_completions(
-                conn, payment_year, payment_month, housing_array_id=file_housing_filter
-            )
-            report_ids, component_ids, completion_items = _completion_ids_for_work_month(
-                completion_data, work_year, work_month
-            )
+            completion_items = [
+                event for event in get_salary_impact_events(
+                    conn,
+                    payment_year,
+                    payment_month,
+                    housing_array_id=file_housing_filter,
+                )
+                if int(event.get("work_year") or 0) == work_year
+                and int(event.get("work_month") or 0) == work_month
+            ]
 
             paid_lines = enrich_paid_lines(
                 conn,
                 parse_gesher_file_lines(file_row.get("content") or ""),
             )
             file_person_ids = _file_person_ids(file_row)
-            current_without = build_current_gesher_lines(
-                conn,
-                work_year,
-                work_month,
-                company_code=file_row.get("company_code"),
-                person_ids=file_person_ids,
-                excluded_time_report_ids=report_ids,
-                excluded_payment_component_ids=component_ids,
-            )
-            unrelated_diffs = compare_line_sets(paid_lines, current_without)
-            if unrelated_diffs:
-                return templates.TemplateResponse("completions_blocked.html", {
-                    "request": request,
-                    "file": file_row,
-                    "payment_year": payment_year,
-                    "payment_month": payment_month,
-                    "diffs": unrelated_diffs,
-                    "completions": completion_items,
-                })
-
             current_with = build_current_gesher_lines(
                 conn,
                 work_year,

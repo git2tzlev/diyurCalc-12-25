@@ -1227,6 +1227,53 @@
                 </tr>
                 {% endif %}
 
+                {# שורת דמי הבראה #}
+                {% if monthly_totals.recovery_pay %}
+                {% set recovery = monthly_totals.recovery_pay_details or {} %}
+                {% set row_payment_recovery = (monthly_totals.recovery_pay or 0) | round(2) %}
+                {% set display_total.sum = display_total.sum + row_payment_recovery %}
+                <tr style="background-color: #ede9fe; font-weight: bold; border-top: 1px solid #ccc;">
+                  <td style="text-align: right; padding: 6px 8px;">
+                    <strong>דמי הבראה:</strong>
+                  </td>
+                  <td style="text-align: center; padding: 6px 8px;">
+                    {{ "%.2f"|format(recovery.recovery_days or 0) }} ימים
+                  </td>
+                  <td style="text-align: center; padding: 6px 8px; font-weight: bold;">
+                    {{ "%.2f"|format(row_payment_recovery) }}
+                  </td>
+                  <td colspan="6" style="text-align: right; padding: 6px 8px; font-size: 0.85em;">
+                    חישוב:
+                    {{ "%.2f"|format(recovery.recovery_days or 0) }} ימי הבראה ×
+                    {{ "%.2f"|format(recovery.daily_rate or 0) }} ₪ ×
+                    {{ "%.2f"|format(recovery.fte_percent or 0) }}% משרה
+                    =
+                    {{ "%.2f"|format(row_payment_recovery) }} ₪
+                    <br>
+                    אחוז משרה:
+                    (
+                    {{ "%.2f"|format(recovery.legacy_hours or 0) }} שעות מהמערכת הישנה
+                    +
+                    {{ "%.2f"|format(recovery.system_hours or 0) }} שעות מדיור003
+                    )
+                    /
+                    {{ "%.0f"|format(recovery.fte_denominator_hours or 2184) }}
+                    =
+                    {{ "%.2f"|format(recovery.fte_percent or 0) }}%
+                    {% if recovery.legacy_source %}
+                    <br>
+                    מקור ישן:
+                    {{ "%.2f"|format(recovery.legacy_source.legacy_fte|float) }} משרה × 182 × 4 =
+                    {{ "%.2f"|format(recovery.legacy_hours or 0) }} שעות
+                    {% endif %}
+                    {% if recovery.calculated_months %}
+                    <br>
+                    חודשי דיור003: {{ recovery.calculated_months | join(', ') }}
+                    {% endif %}
+                  </td>
+                </tr>
+                {% endif %}
+
                 {# שורת נסיעות, תומך מקצועי ותוספות - מוצגת רק אם יש #}
                 {% if (monthly_totals.travel or 0) > 0 or (monthly_totals.professional_support or 0) > 0 or (monthly_totals.extras or 0) > 0 %}
                 {% set row_payment_extras = ((monthly_totals.travel or 0) + (monthly_totals.professional_support or 0) + (monthly_totals.extras or 0)) | round(2) %}
@@ -1636,7 +1683,7 @@
                   monthly_totals.calc150_shabbat_100 > 0 and codes_map.get('calc150_shabbat_100')) %}
                   {% set should_show = true %}
                   {% endif %}
-                  {% elif val > 0 %}
+                  {% elif val != 0 %}
                   {% set should_show = true %}
                   {% endif %}
 
@@ -1655,7 +1702,7 @@
                   {% elif key == 'vacation' %}
                     {# חופשה: שעות × תעריף בסיס #}
                     {% set row_total = hours_rounded * (minimum_wage | round(2)) %}
-                  {% elif key == 'travel' or key == 'extras' or key == 'extras_for_pension' or key == 'sick_payment' or key == 'professional_support' or key == 'holiday_payment' %}
+                  {% elif key == 'travel' or key == 'extras' or key == 'extras_for_pension' or key == 'sick_payment' or key == 'professional_support' or key == 'holiday_payment' or key == 'recovery_pay' or key == 'completion_non_pension' or key == 'completion_pension' %}
                     {% set row_total = val %}
                   {% elif key == 'calc_variable' %}
                     {# תעריף משתנה - כמות 1, תעריף = סה"כ (כמו בגשר) #}
@@ -1735,6 +1782,16 @@
                     {# תשלום חג - כמות ימי חג × תעריף ליום #}
                     <td>{{ monthly_totals.holiday_payment_count or '-' }}</td>
                     <td>{% if monthly_totals.holiday_payment_rate %}{{ "%.2f"|format(monthly_totals.holiday_payment_rate) }} ₪{% else %}-{% endif %}</td>
+                    <td>{{ row_total | format_currency }}</td>
+                  {% elif key == 'recovery_pay' %}
+                    {# דמי הבראה - כמות ימי הבראה × תעריף × אחוז משרה #}
+                    {% set recovery = monthly_totals.recovery_pay_details or {} %}
+                    <td>{% if recovery.recovery_days %}{{ "%.2f"|format(recovery.recovery_days) }}{% else %}-{% endif %}</td>
+                    <td>{% if recovery.daily_rate %}{{ "%.2f"|format(recovery.daily_rate) }} ₪{% else %}-{% endif %}</td>
+                    <td>{{ row_total | format_currency }}</td>
+                  {% elif key == 'completion_non_pension' or key == 'completion_pension' %}
+                    <td>-</td>
+                    <td>-</td>
                     <td>{{ row_total | format_currency }}</td>
                   {% elif key == 'sick_payment' %}
                     {# תשלום מחלה #}

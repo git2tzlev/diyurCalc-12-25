@@ -27,14 +27,83 @@
     <span class="muted">{{ total_items }} השלמות</span>
   </form>
 
+  {% if legacy_groups %}
+  <h3 style="margin:18px 0 6px;">השלמות שסומנו ידנית</h3>
+  <div class="muted">משמרות ורכיבי תשלום שסומנו לחודש התשלום הנבחר</div>
+  {% endif %}
+  {% for group in legacy_groups %}
+  <section style="margin: 12px 0 22px; border-top: 1px solid #e5e7eb; padding-top: 12px;">
+    <h3 style="margin:0 0 8px;">חודש עבודה {{ "%02d"|format(group.work_month) }}/{{ group.work_year }}</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>סוג</th>
+          <th>מדריך</th>
+          <th>מספר עובד</th>
+          <th>תאריך עבודה</th>
+          <th>דירה</th>
+          <th>משמרת או רכיב</th>
+          <th>שעות או כמות</th>
+          <th>הערה</th>
+          <th>סומן בתאריך</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in group["items"] %}
+        <tr>
+          <td>{{ "משמרת" if item.item_type == "time_report" else "רכיב תשלום" }}</td>
+          <td>{{ item.person_name }}</td>
+          <td><bdi>{{ item.meirav_code or "" }}</bdi></td>
+          <td>{{ item.date.strftime("%d/%m/%Y") if item.date else "" }}</td>
+          <td>{{ item.apartment_name }}</td>
+          <td>{{ item.shift_name if item.item_type == "time_report" else item.component_name }}</td>
+          <td>
+            {% if item.item_type == "time_report" %}
+              <bdi>{{ item.start_time or "" }}–{{ item.end_time or "" }}</bdi>
+            {% else %}
+              <bdi>{{ item.quantity }} × {{ "%.2f"|format((item.rate or 0) / 100) }} ₪</bdi>
+            {% endif %}
+          </td>
+          <td>{{ item.payment_note or "" }}</td>
+          <td>
+            {% if item.payment_marked_at %}
+              <bdi>{{ item.payment_marked_at.strftime("%d/%m/%Y %H:%M") }}</bdi>
+            {% endif %}
+            {% if item.payment_marked_by_name %}
+              <div class="muted">{{ item.payment_marked_by_name }}</div>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endfor %}
+
+  {% if groups %}
+  <h3 style="margin:18px 0 6px;">השלמות מחושבות מאירועי שכר</h3>
+  {% endif %}
   {% for group in groups %}
   <section style="margin: 18px 0; border-top: 1px solid #e5e7eb; padding-top: 14px;">
     <div class="header-line" style="align-items: flex-start; gap: 12px;">
       <div>
-        <h3 style="margin: 0;">חודש עבודה {{ "%02d"|format(group.work_month) }}/{{ group.work_year }}</h3>
-        <div class="muted">{{ group["items"]|length }} השלמות</div>
+        <h3 style="margin: 0;">{{ group.person_name }} · חודש עבודה {{ "%02d"|format(group.work_month) }}/{{ group.work_year }}</h3>
+        <div class="muted">מספר עובד {{ group.meirav_code }} · {{ group["items"]|length }} אירועים</div>
       </div>
       <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+        {% if group.open_count and not group.validation_errors %}
+        <form method="post" action="/completions/status?payment_year={{ selected_year }}&payment_month={{ selected_month }}&person_id={{ group.person_id }}&work_year={{ group.work_year }}&work_month={{ group.work_month }}&from_status=open&to_status=included_in_export&token={{ completion_status_token|urlencode }}">
+          <button type="submit" style="padding:6px 10px;background:#15803d;color:white;border:0;border-radius:6px;cursor:pointer;">אשר לייצוא</button>
+        </form>
+        {% endif %}
+        {% if group.approved_count %}
+        <form method="post" action="/completions/status?payment_year={{ selected_year }}&payment_month={{ selected_month }}&person_id={{ group.person_id }}&work_year={{ group.work_year }}&work_month={{ group.work_month }}&from_status=included_in_export&to_status=open&token={{ completion_status_token|urlencode }}">
+          <button type="submit" style="padding:6px 10px;background:#64748b;color:white;border:0;border-radius:6px;cursor:pointer;">בטל אישור</button>
+        </form>
+        <form method="post" action="/completions/status?payment_year={{ selected_year }}&payment_month={{ selected_month }}&person_id={{ group.person_id }}&work_year={{ group.work_year }}&work_month={{ group.work_month }}&from_status=included_in_export&to_status=exported&token={{ completion_status_token|urlencode }}" onsubmit="return confirm('לסמן את ההשלמות כשולמו?');">
+          <button type="submit" style="padding:6px 10px;background:#1d4ed8;color:white;border:0;border-radius:6px;cursor:pointer;">סמן כשולם</button>
+        </form>
+        {% endif %}
         {% for file in group.final_files %}
           <a href="/completions/difference/{{ file.id }}?payment_year={{ selected_year }}&payment_month={{ selected_month }}"
              style="text-decoration: none; padding: 6px 10px; border-radius: 6px; background: #1f6feb; color: white;">
@@ -48,43 +117,51 @@
       </div>
     </div>
 
+    {% if group.validation_errors %}
+    <div style="margin-top:8px;padding:8px;background:#fee2e2;color:#991b1b;border-radius:6px;">
+      לא ניתן לאשר: {{ group.validation_errors|join(' | ') }}
+    </div>
+    {% endif %}
+
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:10px;">
+      {% for row in group.approved_rows %}
+      <span style="padding:7px 10px;background:#dcfce7;color:#166534;border-radius:6px;">
+        מאושר · {{ "השלמה לפנסיה" if row.symbol == "317" else "השלמה שאינה לפנסיה" }} ·
+        <bdi>סמל {{ row.symbol }}: {{ "%.2f"|format(row.amount or 0) }} ₪</bdi>
+      </span>
+      {% endfor %}
+      {% for row in group.open_rows %}
+      <span style="padding:7px 10px;background:#fef3c7;color:#92400e;border-radius:6px;">
+        ממתין לאישור · {{ "השלמה לפנסיה" if row.symbol == "317" else "השלמה שאינה לפנסיה" }} ·
+        <bdi>סמל {{ row.symbol }}: {{ "%.2f"|format(row.amount or 0) }} ₪</bdi>
+      </span>
+      {% endfor %}
+    </div>
+
     <table style="margin-top: 10px;">
       <thead>
         <tr>
-          <th>סוג</th>
-          <th>מדריך</th>
-          <th>מספר עובד</th>
+          <th>פעולה</th>
+          <th>סוג מקור</th>
+          <th>מזהה מקור</th>
           <th>תאריך עבודה</th>
-          <th>דירה</th>
-          <th>משמרת/רכיב</th>
-          <th>שעות/כמות</th>
-          <th>הערה</th>
-          <th>סומן</th>
+          <th>סטטוס</th>
+          <th>שדות ששונו</th>
+          <th>נוצר</th>
         </tr>
       </thead>
       <tbody>
         {% for item in group["items"] %}
         <tr>
-          <td>{{ "משמרת" if item.item_type == "time_report" else "רכיב תשלום" }}</td>
-          <td>{{ item.person_name }}</td>
-          <td>{{ item.meirav_code or "" }}</td>
-          <td>{{ item.date.strftime("%d/%m/%Y") if item.date else "" }}</td>
-          <td>{{ item.apartment_name }}</td>
-          <td>{{ item.shift_name if item.item_type == "time_report" else item.component_name }}</td>
+          <td>{{ item.event_type_label }}</td>
+          <td>{{ "משמרת" if item.source_table == "time_reports" else "רכיב תשלום" }}</td>
+          <td><bdi>{{ item.source_id }}</bdi></td>
+          <td>{{ item.work_date.strftime("%d/%m/%Y") if item.work_date else "" }}</td>
+          <td>{{ item.status_label }}</td>
+          <td>{{ item.changed_fields_label }}</td>
           <td>
-            {% if item.item_type == "time_report" %}
-              {{ item.start_time or "" }}-{{ item.end_time or "" }}
-            {% else %}
-              {{ item.quantity }} × {{ "%.2f"|format((item.rate or 0) / 100) }} ₪
-            {% endif %}
-          </td>
-          <td>{{ item.payment_note or "" }}</td>
-          <td>
-            {% if item.payment_marked_at %}
-              {{ item.payment_marked_at.strftime("%d/%m/%Y %H:%M") }}
-            {% endif %}
-            {% if item.payment_marked_by_name %}
-              <div class="muted">{{ item.payment_marked_by_name }}</div>
+            {% if item.created_at %}
+              {{ item.created_at.strftime("%d/%m/%Y %H:%M") }}
             {% endif %}
           </td>
         </tr>
@@ -92,9 +169,10 @@
       </tbody>
     </table>
   </section>
-  {% else %}
-    <div class="muted" style="padding: 30px 0;">אין השלמות לחודש התשלום שנבחר</div>
   {% endfor %}
+  {% if not groups and not legacy_groups %}
+    <div class="muted" style="padding: 30px 0;">אין השלמות לחודש התשלום שנבחר</div>
+  {% endif %}
 </div>
 
 <div id="completionEmailDialog" class="completion-email-overlay" style="display: none;">

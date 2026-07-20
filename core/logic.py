@@ -201,6 +201,32 @@ def ensure_holiday_payment_code(conn):
         logger.error(f"Error ensuring holiday payment code: {e}")
 
 
+def ensure_recovery_pay_code(conn):
+    """
+    מוודא שקוד מירב 38 לדמי הבראה קיים בטבלת payment_codes.
+    אם לא קיים, מוסיף אותו.
+    """
+    try:
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+
+        cursor.execute("""
+            SELECT id FROM payment_codes WHERE internal_key = 'recovery_pay'
+        """)
+        existing = cursor.fetchone()
+
+        if not existing:
+            cursor.execute("""
+                INSERT INTO payment_codes (internal_key, display_name, merav_code, display_order)
+                VALUES ('recovery_pay', 'דמי הבראה', '38', 177)
+            """)
+            conn.commit()
+            logger.info("Added recovery_pay code (38) to payment_codes table")
+
+        cursor.close()
+    except Exception as e:
+        logger.error(f"Error ensuring recovery pay code: {e}")
+
+
 def ensure_professional_support_code(conn):
     """
     מוודא שקוד מירב 243 לתומך מקצועי קיים בטבלת payment_codes.
@@ -353,13 +379,149 @@ def calculate_person_monthly_totals(
 # and app_utils.aggregate_daily_segments_to_monthly (source of truth).
 
 
+def _apply_time_report_overrides(
+    conn,
+    rows,
+    overrides: Dict[int, Optional[Dict]],
+    *,
+    housing_filter: Optional[int],
+) -> List[Dict]:
+    """Apply an in-memory report state without changing the database."""
+    by_id = {int(row["id"]): dict(row) for row in rows}
+    snapshots = [dict(value) for value in overrides.values() if value]
+    apartment_ids = {int(row["apartment_id"]) for row in snapshots if row.get("apartment_id")}
+    shift_ids = {int(row["shift_type_id"]) for row in snapshots if row.get("shift_type_id")}
+    rate_type_ids = {
+        int(row["rate_apartment_type_id"])
+        for row in snapshots
+        if row.get("rate_apartment_type_id")
+    }
+
+    apartments = {}
+    if apartment_ids:
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        cursor.execute("""
+            SELECT ap.id, ap.name AS apartment_name, ap.apartment_type_id,
+                   ap.housing_array_id, at.hourly_wage_supplement,
+                   at.name AS apartment_type_name, ha.name AS housing_array_name
+            FROM apartments ap
+            LEFT JOIN apartment_types at ON at.id = ap.apartment_type_id
+            LEFT JOIN housing_arrays ha ON ha.id = ap.housing_array_id
+            WHERE ap.id = ANY(%s)
+        """, (list(apartment_ids),))
+        apartments = {int(row["id"]): dict(row) for row in cursor.fetchall()}
+        cursor.close()
+
+    shifts = {}
+    if shift_ids:
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        cursor.execute("""
+            SELECT id, name AS shift_name, color AS shift_color,
+                   is_special_hourly AS shift_is_special_hourly
+            FROM shift_types WHERE id = ANY(%s)
+        """, (list(shift_ids),))
+        shifts = {int(row["id"]): dict(row) for row in cursor.fetchall()}
+        cursor.close()
+
+    rate_types = {}
+    if rate_type_ids:
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        cursor.execute("""
+            SELECT id, name AS rate_apartment_type_name,
+                   hourly_wage_supplement AS rate_hourly_wage_supplement
+            FROM apartment_types WHERE id = ANY(%s)
+        """, (list(rate_type_ids),))
+        rate_types = {int(row["id"]): dict(row) for row in cursor.fetchall()}
+        cursor.close()
+
+    for report_id, snapshot in overrides.items():
+        report_id = int(report_id)
+        if snapshot is None:
+            by_id.pop(report_id, None)
+            continue
+        report = dict(snapshot)
+        apartment = apartments.get(int(report.get("apartment_id") or 0), {})
+        if housing_filter is not None and apartment.get("housing_array_id") != housing_filter:
+            by_id.pop(report_id, None)
+            continue
+        report.update(apartment)
+        report.update(shifts.get(int(report.get("shift_type_id") or 0), {}))
+        report.update(rate_types.get(int(report.get("rate_apartment_type_id") or 0), {}))
+        report["id"] = report_id
+        by_id[report_id] = report
+
+    return sorted(
+        by_id.values(),
+        key=lambda row: (row.get("person_id") or 0, row.get("date"), row.get("start_time") or ""),
+    )
+
+
+def _apply_payment_component_overrides(
+    conn,
+    rows,
+    overrides: Dict[int, Optional[Dict]],
+    *,
+    housing_filter: Optional[int],
+) -> List[Dict]:
+    """Apply in-memory payment-component snapshots in the bulk summary shape."""
+    by_id = {int(row["id"]): dict(row) for row in rows}
+    snapshots = [dict(value) for value in overrides.values() if value]
+    type_ids = {int(row["component_type_id"]) for row in snapshots if row.get("component_type_id")}
+    apartment_ids = {int(row["apartment_id"]) for row in snapshots if row.get("apartment_id")}
+
+    pension_by_type = {}
+    if type_ids:
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        cursor.execute(
+            "SELECT id, for_pension FROM payment_component_types WHERE id = ANY(%s)",
+            (list(type_ids),),
+        )
+        pension_by_type = {int(row["id"]): bool(row["for_pension"]) for row in cursor.fetchall()}
+        cursor.close()
+
+    housing_by_apartment = {}
+    if apartment_ids:
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        cursor.execute(
+            "SELECT id, housing_array_id FROM apartments WHERE id = ANY(%s)",
+            (list(apartment_ids),),
+        )
+        housing_by_apartment = {int(row["id"]): row["housing_array_id"] for row in cursor.fetchall()}
+        cursor.close()
+
+    for component_id, snapshot in overrides.items():
+        component_id = int(component_id)
+        if snapshot is None:
+            by_id.pop(component_id, None)
+            continue
+        component = dict(snapshot)
+        apartment_id = int(component.get("apartment_id") or 0)
+        if housing_filter is not None and housing_by_apartment.get(apartment_id) != housing_filter:
+            by_id.pop(component_id, None)
+            continue
+        quantity = float(component.get("quantity") or 0)
+        rate = float(component.get("rate") or 0)
+        type_id = int(component.get("component_type_id") or 0)
+        by_id[component_id] = {
+            "id": component_id,
+            "person_id": component.get("person_id"),
+            "total_amount": quantity * rate,
+            "component_type_id": type_id,
+            "for_pension": pension_by_type.get(type_id, bool(component.get("for_pension"))),
+        }
+    return list(by_id.values())
+
+
 def calculate_monthly_summary(
     conn,
     year: int,
     month: int,
     *,
+    person_ids: Optional[set[int]] = None,
     excluded_time_report_ids: Optional[set[int]] = None,
     excluded_payment_component_ids: Optional[set[int]] = None,
+    time_report_overrides: Optional[Dict[int, Optional[Dict]]] = None,
+    payment_component_overrides: Optional[Dict[int, Optional[Dict]]] = None,
 ) -> Tuple[List[Dict], Dict]:
     """
     Calculate monthly summary for all active people.
@@ -388,16 +550,34 @@ def calculate_monthly_summary(
     housing_filter = get_housing_array_filter()
     excluded_time_report_ids = excluded_time_report_ids or set()
     excluded_payment_component_ids = excluded_payment_component_ids or set()
+    requested_person_ids = {int(person_id) for person_id in (person_ids or set())}
+    time_report_overrides = time_report_overrides or {}
+    payment_component_overrides = payment_component_overrides or {}
 
     # שליפת אנשים - עם סינון לפי מערך דיור אם מוגדר
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    if housing_filter is not None:
+    if housing_filter is not None and requested_person_ids:
+        cursor.execute("""
+            SELECT id, name, start_date, is_married, meirav_code, type
+            FROM people
+            WHERE housing_array_id = %s
+              AND id = ANY(%s)
+            ORDER BY name
+        """, (housing_filter, list(requested_person_ids)))
+    elif housing_filter is not None:
         cursor.execute("""
             SELECT id, name, start_date, is_married, meirav_code, type
             FROM people
             WHERE is_active::integer = 1 AND housing_array_id = %s
             ORDER BY name
         """, (housing_filter,))
+    elif requested_person_ids:
+        cursor.execute("""
+            SELECT id, name, start_date, is_married, meirav_code, type
+            FROM people
+            WHERE id = ANY(%s)
+            ORDER BY name
+        """, (list(requested_person_ids),))
     else:
         cursor.execute("""
             SELECT id, name, start_date, is_married, meirav_code, type
@@ -489,6 +669,13 @@ def calculate_monthly_summary(
             ORDER BY tr.person_id, tr.date, tr.start_time
         """, (person_ids, start_date, end_date))
     all_reports = cursor.fetchall()
+    if time_report_overrides:
+        all_reports = _apply_time_report_overrides(
+            conn,
+            all_reports,
+            time_report_overrides,
+            housing_filter=housing_filter,
+        )
     if excluded_time_report_ids:
         all_reports = [
             report for report in all_reports
@@ -608,6 +795,13 @@ def calculate_monthly_summary(
             WHERE pc.person_id = ANY(%s) AND pc.date >= %s AND pc.date < %s
         """, (person_ids, month_start, month_end))
     all_payment_comps = cursor.fetchall()
+    if payment_component_overrides:
+        all_payment_comps = _apply_payment_component_overrides(
+            conn,
+            all_payment_comps,
+            payment_component_overrides,
+            housing_filter=housing_filter,
+        )
     if excluded_payment_component_ids:
         all_payment_comps = [
             pc for pc in all_payment_comps
@@ -633,6 +827,23 @@ def calculate_monthly_summary(
 
     # Build person start_date map (already have this data from people query)
     person_start_dates = {p["id"]: p["start_date"] for p in people}
+    person_types = {p["id"]: p["type"] for p in people}
+    person_is_married = {p["id"]: bool(p["is_married"]) for p in people}
+
+    from core.holiday_payment import calculate_holiday_payments
+    from core.recovery_pay import (
+        apply_recovery_pay_to_totals,
+        calculate_recovery_pay_for_person,
+    )
+
+    holiday_payments = calculate_holiday_payments(
+        conn, year, month, shabbat_cache, minimum_wage,
+        all_reports=all_reports,
+        person_types=person_types,
+        person_start_dates=person_start_dates,
+        person_is_married=person_is_married,
+        housing_filter=housing_filter,
+    )
 
     # ============================================================
     # END BULK LOADING - Now process each person with cached data
@@ -643,6 +854,8 @@ def calculate_monthly_summary(
     grand_totals.update({
         "payment": 0, "standby_payment": 0, "travel": 0, "professional_support": 0, "extras": 0, "total_payment": 0,
         "calc150_shabbat_100": 0, "calc150_shabbat_50": 0,
+        "holiday_payment": 0,
+        "recovery_pay": 0,
         "vacation_payment": 0, "vacation_minutes": 0,
         "sick_payment": 0, "sick_minutes": 0,  # מחלה
         "rounded_total": 0  # סה"כ מעוגל - סכום השורות עם עיגול
@@ -673,6 +886,35 @@ def calculate_monthly_summary(
             housing_filter=housing_filter,
         )
 
+        hp_data = holiday_payments.get(pid)
+        if hp_data and hp_data["amount"] > 0:
+            hp = hp_data["amount"]
+            monthly_totals["holiday_payment"] = hp
+            monthly_totals["holiday_payment_count"] = hp_data["count"]
+            monthly_totals["holiday_payment_rate"] = hp_data["rate"]
+            hp_details = hp_data.get("details", []) or []
+            monthly_totals["holiday_payment_details"] = hp_details
+            monthly_totals["holiday_payment_hours"] = (
+                round(sum(float(item.get("hours") or 0) for item in hp_details), 2)
+                if hp_details
+                else (round(hp / round(minimum_wage, 2), 2) if minimum_wage else 0)
+            )
+            hp_rounded = round(round(hp, 2), 1)
+            monthly_totals["total_payment"] += hp_rounded
+            monthly_totals["gesher_total"] += hp_rounded
+            monthly_totals["display_total"] += hp_rounded
+            monthly_totals["rounded_total"] += hp_rounded
+
+        recovery_data = calculate_recovery_pay_for_person(
+            conn_wrapper,
+            pid,
+            year,
+            month,
+            current_month_totals=monthly_totals,
+            housing_filter=housing_filter,
+        )
+        apply_recovery_pay_to_totals(monthly_totals, recovery_data)
+
         # הצג מדריכים עם שעות עבודה או תשלום כלשהו
         # (כשיש סינון לפי מערך דיור, גם השעות וגם רכיבי התשלום כבר מסוננים)
         should_include = monthly_totals.get("total_payment", 0) > 0 or monthly_totals.get("total_hours", 0) > 0
@@ -687,37 +929,6 @@ def calculate_monthly_summary(
             for k, v in monthly_totals.items():
                 if k in grand_totals and isinstance(v, (int, float)) and k not in ("payment", "total_payment", "rounded_total"):
                     grand_totals[k] += v
-
-    # חישוב תשלום חג
-    from core.holiday_payment import calculate_holiday_payments
-
-    person_types = {p["id"]: p["type"] for p in people}
-    person_is_married = {p["id"]: bool(p["is_married"]) for p in people}
-    holiday_payments = calculate_holiday_payments(
-        conn, year, month, shabbat_cache, minimum_wage,
-        all_reports=all_reports,
-        person_types=person_types,
-        person_start_dates=person_start_dates,
-        person_is_married=person_is_married,
-        housing_filter=housing_filter,
-    )
-
-    for person_data in summary_data:
-        pid = person_data["person_id"]
-        hp_data = holiday_payments.get(pid)
-        if hp_data and hp_data["amount"] > 0:
-            hp = hp_data["amount"]
-            person_data["totals"]["holiday_payment"] = hp
-            person_data["totals"]["holiday_payment_count"] = hp_data["count"]
-            person_data["totals"]["holiday_payment_rate"] = hp_data["rate"]
-            hp_rounded = round(round(hp, 2), 1)
-            person_data["totals"]["total_payment"] += hp_rounded
-            person_data["totals"]["gesher_total"] += hp_rounded
-            person_data["totals"]["display_total"] += hp_rounded
-            person_data["totals"]["rounded_total"] += hp_rounded
-            grand_totals["holiday_payment"] = grand_totals.get("holiday_payment", 0) + hp
-            grand_totals["total_payment"] += hp_rounded
-            grand_totals["rounded_total"] += hp_rounded
 
     # עיגול סה"כ כללי למניעת שגיאות floating point
     grand_totals["rounded_total"] = round(grand_totals["rounded_total"], 2)

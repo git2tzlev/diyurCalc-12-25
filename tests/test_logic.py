@@ -19,6 +19,7 @@ from app_utils import (
     _apply_tagbur_dynamic_boundaries,
     _filter_asd_completion_reports_for_one_time_exclusion,
     _filter_previous_month_carryover_reports,
+    _should_calculate_monthly_accruals,
 )
 from core.constants import (
     ASD_SENIORITY_SUPPLEMENT,
@@ -54,6 +55,37 @@ from utils.utils import calculate_annual_vacation_quota, overlap_minutes
 #     calculate_overlap_percentage,
 #     ValidationError
 # )
+
+
+class TestMonthlyAccrualEligibility(unittest.TestCase):
+    """בדיקות זכאות לצבירת חופשה/מחלה לפי חודש עבודה."""
+
+    def test_permanent_started_before_month_end_gets_accruals(self):
+        self.assertTrue(
+            _should_calculate_monthly_accruals(
+                date(2026, 5, 31),
+                2026,
+                5,
+            )
+        )
+
+    def test_future_start_date_does_not_get_previous_month_accruals(self):
+        self.assertFalse(
+            _should_calculate_monthly_accruals(
+                date(2026, 6, 1),
+                2026,
+                5,
+            )
+        )
+
+    def test_accruals_do_not_depend_on_current_employee_type(self):
+        self.assertTrue(
+            _should_calculate_monthly_accruals(
+                date(2026, 5, 1),
+                2026,
+                5,
+            )
+        )
 
 
 class TestPersonStatusEffectiveDate(unittest.TestCase):

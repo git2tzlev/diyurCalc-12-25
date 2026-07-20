@@ -565,6 +565,46 @@
         </tr>
         {% endif %}
 
+        {% if monthly_totals.recovery_pay %}
+        {% set recovery = monthly_totals.recovery_pay_details or {} %}
+        {% set row_payment_recovery = (monthly_totals.recovery_pay or 0) | round(2) %}
+        {% set display_total.sum = display_total.sum + row_payment_recovery %}
+        <tr class="summary-row" style="background:#ede9fe;">
+          <td style="text-align: right;">דמי הבראה:</td>
+          <td>{{ "%.2f"|format(recovery.recovery_days or 0) }} ימים</td>
+          <td class="payment-cell">{{ "%.2f"|format(row_payment_recovery) }}</td>
+          <td colspan="6" style="text-align:right;">
+            חישוב:
+            {{ "%.2f"|format(recovery.recovery_days or 0) }} ימי הבראה ×
+            {{ "%.2f"|format(recovery.daily_rate or 0) }} ₪ ×
+            {{ "%.2f"|format(recovery.fte_percent or 0) }}% משרה
+            =
+            {{ "%.2f"|format(row_payment_recovery) }} ₪
+            <br>
+            אחוז משרה:
+            (
+            {{ "%.2f"|format(recovery.legacy_hours or 0) }} שעות מהמערכת הישנה
+            +
+            {{ "%.2f"|format(recovery.system_hours or 0) }} שעות מדיור003
+            )
+            /
+            {{ "%.0f"|format(recovery.fte_denominator_hours or 2184) }}
+            =
+            {{ "%.2f"|format(recovery.fte_percent or 0) }}%
+            {% if recovery.legacy_source %}
+            <br>
+            מקור ישן:
+            {{ "%.2f"|format(recovery.legacy_source.legacy_fte|float) }} משרה × 182 × 4 =
+            {{ "%.2f"|format(recovery.legacy_hours or 0) }} שעות
+            {% endif %}
+            {% if recovery.calculated_months %}
+            <br>
+            חודשי דיור003: {{ recovery.calculated_months | join(', ') }}
+            {% endif %}
+          </td>
+        </tr>
+        {% endif %}
+
         {% if (monthly_totals.travel or 0) > 0 or (monthly_totals.professional_support or 0) > 0 or (monthly_totals.extras or 0) > 0 %}
         {% set row_payment_extras = ((monthly_totals.travel or 0) + (monthly_totals.professional_support or 0) + (monthly_totals.extras or 0)) | round(2) %}
         {% set display_total.sum = display_total.sum + row_payment_extras %}

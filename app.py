@@ -56,6 +56,7 @@ from routes.export import (
 )
 from routes.completions import (
     completions_page,
+    change_completion_group_status,
     completion_difference_report,
     completion_guides_report_excel,
     completion_reports_bulk_send_stream,
@@ -663,6 +664,34 @@ async def update_gesher_archive_status_route(request: Request, file_id: int):
 def completions_route(request: Request, year: int = None, month: int = None):
     """Retroactive completions page."""
     return completions_page(request, year, month)
+
+
+@app.post("/completions/status")
+def completion_status_route(
+    request: Request,
+    payment_year: int,
+    payment_month: int,
+    person_id: int,
+    work_year: int,
+    work_month: int,
+    from_status: str,
+    to_status: str,
+    token: str,
+    export_file_id: int = None,
+):
+    """Change the lifecycle status of one completion group."""
+    return change_completion_group_status(
+        request,
+        payment_year=payment_year,
+        payment_month=payment_month,
+        person_id=person_id,
+        work_year=work_year,
+        work_month=work_month,
+        from_status=from_status,
+        to_status=to_status,
+        token=token,
+        export_file_id=export_file_id,
+    )
 
 
 @app.get("/completions/difference/{file_id}")

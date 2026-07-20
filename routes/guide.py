@@ -29,6 +29,8 @@ from core.logic import (
     auto_approve_substitute_travel,
 )
 from core.history import get_minimum_wage_for_month
+from services.gesher_difference import build_approved_completion_gesher_rows
+from services.gesher_exporter import apply_completion_rows_to_monthly_totals
 from app_utils import get_daily_segments_data, aggregate_daily_segments_to_monthly
 from core.constants import (
     HIGH_FUNCTIONING_APT_TYPE, LOW_FUNCTIONING_APT_TYPE,
@@ -46,6 +48,10 @@ from core.holiday_payment import (
     _has_sufficient_seniority,
     _get_special_holiday_payment_window_details,
     _report_overlaps_special_holiday_window,
+)
+from core.recovery_pay import (
+    apply_recovery_pay_to_totals,
+    calculate_recovery_pay_for_person,
 )
 from core.auth import enforce_housing_filter_guide_access
 from services.pdf_renderer import render_html_to_pdf_bytes
@@ -369,6 +375,24 @@ def _inject_holiday_payment(
         monthly_totals["rounded_total"] = monthly_totals.get("rounded_total", 0) + hp_rounded
 
 
+def _inject_recovery_pay(
+    conn,
+    monthly_totals: dict,
+    person_id: int,
+    year: int,
+    month: int,
+    housing_filter: int | None,
+) -> None:
+    """הזרקת דמי הבראה ל-monthly_totals (in-place)."""
+    recovery_data = calculate_recovery_pay_for_person(
+        conn,
+        person_id,
+        year,
+        month,
+        current_month_totals=monthly_totals,
+        housing_filter=housing_filter,
+    )
+    apply_recovery_pay_to_totals(monthly_totals, recovery_data)
 
 
 def _as_date(value) -> date | None:
@@ -1133,6 +1157,10 @@ def guide_view(
                 selected_year, selected_month, shabbat_cache,
                 MINIMUM_WAGE, housing_filter,
             )
+            _inject_recovery_pay(
+                conn, monthly_totals, person_id,
+                selected_year, selected_month, housing_filter,
+            )
 
             # אישור אוטומטי של נסיעות מדריך מחליף
             start_dt, end_dt = month_range_ts(selected_year, selected_month)
@@ -1142,6 +1170,32 @@ def guide_view(
                 conn, person_id, selected_year, selected_month, housing_filter
             )
             _apply_payment_period_markers_to_chains(daily_segments, payment_period_markers)
+
+        completion_result = build_approved_completion_gesher_rows(
+            conn,
+            selected_year,
+            selected_month,
+            company_code=person.get("employer_code"),
+            housing_array_id=housing_filter,
+        )
+        apply_completion_rows_to_monthly_totals(
+            monthly_totals,
+            completion_result["rows"],
+            person_id=person_id,
+            employee_code=person.get("meirav_code"),
+        )
+        existing_keys = {code.get("internal_key") for code in payment_codes}
+        for symbol, internal_key, display_name in (
+            ("253", "completion_non_pension", "הפרשי השלמות לא לפנסיה"),
+            ("317", "completion_pension", "הפרשי השלמות לפנסיה"),
+        ):
+            if internal_key not in existing_keys:
+                payment_codes.append({
+                    "internal_key": internal_key,
+                    "display_name": display_name,
+                    "merav_code": symbol,
+                    "display_order": 190 if symbol == "253" else 191,
+                })
 
         daily_segments = _prepare_daily_segments_for_display(daily_segments)
         monthly_report = prepare_guide_pdf_data(
@@ -1715,6 +1769,10 @@ def prepare_guide_pdf_data(
         year, month, shabbat_cache,
         MINIMUM_WAGE, housing_filter,
     )
+    _inject_recovery_pay(
+        conn, monthly_totals, person_id,
+        year, month, housing_filter,
+    )
     total_work_hours, standby_count = _apply_calculated_hours_to_shift_rows(
         shifts_data, daily_segments
     )
@@ -1763,6 +1821,20 @@ def prepare_guide_pdf_data(
         })
         total_additions += monthly_totals["holiday_payment"]
         total_additions_no_travel += monthly_totals["holiday_payment"]
+
+    if monthly_totals.get("recovery_pay"):
+        recovery_details = monthly_totals.get("recovery_pay_details", {}) or {}
+        payments_data.append({
+            "description": "דמי הבראה",
+            "detail": (
+                f"{recovery_details.get('recovery_days', 0)} ימים, "
+                f"{recovery_details.get('fte_percent', 0):.2f}% משרה"
+            ),
+            "amount": round(monthly_totals["recovery_pay"], 2),
+            "work_hours": round(recovery_details.get("total_hours", 0) or 0, 2),
+        })
+        total_additions += monthly_totals["recovery_pay"]
+        total_additions_no_travel += monthly_totals["recovery_pay"]
 
     # פירוט שורות תלוש/גשר שבהן יש פילוג תעריפים.
     # ב-ASD מציגים רק רכיבי שכר שבהם אותה שורת תלוש מורכבת מיותר מתעריף בסיס אחד.
@@ -2201,6 +2273,10 @@ def _prepare_chains_pdf_data(conn, person_id: int, year: int, month: int) -> Opt
         conn, monthly_totals, person_id,
         year, month, shabbat_cache,
         MINIMUM_WAGE, hf,
+    )
+    _inject_recovery_pay(
+        conn, monthly_totals, person_id,
+        year, month, hf,
     )
     holiday_payment_chain_summary = _build_holiday_payment_chain_summary(
         conn, person_id, year, month, shabbat_cache, MINIMUM_WAGE, hf,

@@ -297,6 +297,22 @@ def export_gesher_multiple(
                 status_code=400,
                 detail="כל המדריכים שנבחרו לא עוברים לקובץ גשר כי הם פעילים ביותר ממערך דיור בחודש זה",
             )
+        company_rows = conn.execute("""
+            SELECT DISTINCT COALESCE(e.code, '001') AS company_code
+            FROM people p
+            LEFT JOIN employers e ON p.employer_id = e.id
+            WHERE p.id = ANY(%s)
+            ORDER BY company_code
+        """, (exportable_person_ids,)).fetchall()
+        selected_companies = [str(row["company_code"] or "001") for row in company_rows]
+        if len(selected_companies) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "לא ניתן לייצא קובץ גשר אחד לעובדים ממפעלים שונים. "
+                    f"נבחרו מפעלים: {', '.join(selected_companies)}"
+                ),
+            )
         content, company = gesher_exporter.generate_gesher_file_for_multiple(conn, exportable_person_ids, year, month)
 
     if not content:
@@ -526,6 +542,8 @@ def export_excel(year: Optional[int] = None, month: Optional[int] = None) -> Res
                 'נסיעות': round(totals.get('travel', 0), 2),
                 'תוספות': round(totals.get('extras', 0), 2),
                 'ת.מקצועי': round(totals.get('professional_support', 0), 2),
+                'תשלום חג 254': round(totals.get('holiday_payment', 0), 2),
+                'דמי הבראה 38': round(totals.get('recovery_pay', 0), 2),
                 'סה"כ': round(totals.get('rounded_total', 0), 2),
             }
             summary_rows.append(row)
@@ -546,6 +564,8 @@ def export_excel(year: Optional[int] = None, month: Optional[int] = None) -> Res
             'תשלום כוננויות': round(grand_totals.get('standby_payment', 0), 2),
             'ימי עבודה': grand_totals.get('actual_work_days', 0),
             'חופשה נוצלה': grand_totals.get('vacation_days_taken', 0),
+            'תשלום חג 254': round(grand_totals.get('holiday_payment', 0), 2),
+            'דמי הבראה 38': round(grand_totals.get('recovery_pay', 0), 2),
         }]
         df_totals = pd.DataFrame(grand_totals_data)
         df_totals.to_excel(writer, sheet_name='סיכום כללי', index=False)

@@ -76,6 +76,7 @@ class TestGesherExportPreview(unittest.TestCase):
         self.assertEqual(line["quantity"], 8.0)
         self.assertEqual(line["payment"], 34.40)
 
+    @patch("services.gesher_difference.build_approved_completion_gesher_rows", return_value={"rows": []})
     @patch("core.logic.calculate_monthly_summary")
     @patch.object(gesher_exporter, "get_minimum_wage", return_value=35.40)
     @patch.object(
@@ -92,6 +93,7 @@ class TestGesherExportPreview(unittest.TestCase):
         _mock_options,
         _mock_minimum_wage,
         mock_monthly_summary,
+        _mock_completion_rows,
     ):
         class _Result:
             def fetchone(self):
