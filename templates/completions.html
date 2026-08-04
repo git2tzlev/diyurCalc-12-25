@@ -27,150 +27,163 @@
     <span class="muted">{{ total_items }} השלמות</span>
   </form>
 
-  {% if legacy_groups %}
-  <h3 style="margin:18px 0 6px;">השלמות שסומנו ידנית</h3>
-  <div class="muted">משמרות ורכיבי תשלום שסומנו לחודש התשלום הנבחר</div>
-  {% endif %}
-  {% for group in legacy_groups %}
-  <section style="margin: 12px 0 22px; border-top: 1px solid #e5e7eb; padding-top: 12px;">
-    <h3 style="margin:0 0 8px;">חודש עבודה {{ "%02d"|format(group.work_month) }}/{{ group.work_year }}</h3>
-    <table>
-      <thead>
-        <tr>
-          <th>סוג</th>
-          <th>מדריך</th>
-          <th>מספר עובד</th>
-          <th>תאריך עבודה</th>
-          <th>דירה</th>
-          <th>משמרת או רכיב</th>
-          <th>שעות או כמות</th>
-          <th>הערה</th>
-          <th>סומן בתאריך</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for item in group["items"] %}
-        <tr>
-          <td>{{ "משמרת" if item.item_type == "time_report" else "רכיב תשלום" }}</td>
-          <td>{{ item.person_name }}</td>
-          <td><bdi>{{ item.meirav_code or "" }}</bdi></td>
-          <td>{{ item.date.strftime("%d/%m/%Y") if item.date else "" }}</td>
-          <td>{{ item.apartment_name }}</td>
-          <td>{{ item.shift_name if item.item_type == "time_report" else item.component_name }}</td>
-          <td>
-            {% if item.item_type == "time_report" %}
-              <bdi>{{ item.start_time or "" }}–{{ item.end_time or "" }}</bdi>
-            {% else %}
-              <bdi>{{ item.quantity }} × {{ "%.2f"|format((item.rate or 0) / 100) }} ₪</bdi>
-            {% endif %}
-          </td>
-          <td>{{ item.payment_note or "" }}</td>
-          <td>
-            {% if item.payment_marked_at %}
-              <bdi>{{ item.payment_marked_at.strftime("%d/%m/%Y %H:%M") }}</bdi>
-            {% endif %}
-            {% if item.payment_marked_by_name %}
-              <div class="muted">{{ item.payment_marked_by_name }}</div>
-            {% endif %}
-          </td>
-        </tr>
+  {% for guide in guides %}
+  <details class="cmp-guide">
+    <summary class="cmp-guide-head">
+      <span class="cmp-arrow" aria-hidden="true">▾</span>
+      <span class="cmp-guide-title">
+        <span class="cmp-guide-name">{{ guide.person_name }}</span>
+        <span class="muted cmp-guide-meta">
+          מספר עובד <bdi>{{ guide.meirav_code }}</bdi>
+          · {{ guide.months|length }} חודשי עבודה
+          · {{ guide.events_count }} אירועים
+          {%- if guide.legacy_count %} · {{ guide.legacy_count }} בחישוב ישן{% endif %}
+        </span>
+      </span>
+      <span class="cmp-badges">
+        {% for badge in guide.approved_badges %}
+        <span class="cmp-badge approved">
+          מאושר · {{ "השלמה לפנסיה" if badge.symbol == "317" else "השלמה שאינה לפנסיה" }} ·
+          <bdi>סמל {{ badge.symbol }}: {{ "%.2f"|format(badge.amount) }} ₪</bdi>
+        </span>
         {% endfor %}
-      </tbody>
-    </table>
-  </section>
-  {% endfor %}
+        {% for badge in guide.open_badges %}
+        <span class="cmp-badge open">
+          ממתין לאישור · {{ "השלמה לפנסיה" if badge.symbol == "317" else "השלמה שאינה לפנסיה" }} ·
+          <bdi>סמל {{ badge.symbol }}: {{ "%.2f"|format(badge.amount) }} ₪</bdi>
+        </span>
+        {% endfor %}
+        {% if guide.validation_errors %}
+        <span class="cmp-badge error">{{ guide.validation_errors|length }} אירועים לא תקינים</span>
+        {% endif %}
+      </span>
+      <span class="cmp-actions" onclick="event.stopPropagation()">
+        {% if guide.open_count and not guide.validation_errors %}
+        <form method="post" action="/completions/status?payment_year={{ selected_year }}&payment_month={{ selected_month }}&person_id={{ guide.person_id }}&from_status=open&to_status=included_in_export&token={{ completion_status_token|urlencode }}">
+          <button type="submit" class="cmp-btn approve">אשר לייצוא</button>
+        </form>
+        {% endif %}
+        {% if guide.approved_count %}
+        <form method="post" action="/completions/status?payment_year={{ selected_year }}&payment_month={{ selected_month }}&person_id={{ guide.person_id }}&from_status=included_in_export&to_status=open&token={{ completion_status_token|urlencode }}">
+          <button type="submit" class="cmp-btn reopen">בטל אישור</button>
+        </form>
+        <form method="post" action="/completions/status?payment_year={{ selected_year }}&payment_month={{ selected_month }}&person_id={{ guide.person_id }}&from_status=included_in_export&to_status=exported&token={{ completion_status_token|urlencode }}" onsubmit="return confirm('לסמן את כל ההשלמות של המדריך כשולמו?');">
+          <button type="submit" class="cmp-btn paid">סמן כשולם</button>
+        </form>
+        {% endif %}
+        {% for link in guide.difference_links %}
+        <a class="cmp-btn diff" href="/completions/difference/{{ link.file.id }}?payment_year={{ selected_year }}&payment_month={{ selected_month }}">
+          הפק הפרשים {{ "%02d"|format(link.work_month) }}/{{ link.work_year }}
+        </a>
+        {% endfor %}
+        {% for month in guide.months_without_final_file %}
+        <span class="cmp-btn warn">אין קובץ גשר סופי ל-{{ "%02d"|format(month.work_month) }}/{{ month.work_year }}</span>
+        {% endfor %}
+      </span>
+    </summary>
 
-  {% if groups %}
-  <h3 style="margin:18px 0 6px;">השלמות מחושבות מאירועי שכר</h3>
-  {% endif %}
-  {% for group in groups %}
-  <section style="margin: 18px 0; border-top: 1px solid #e5e7eb; padding-top: 14px;">
-    <div class="header-line" style="align-items: flex-start; gap: 12px;">
-      <div>
-        <h3 style="margin: 0;">{{ group.person_name }} · חודש עבודה {{ "%02d"|format(group.work_month) }}/{{ group.work_year }}</h3>
-        <div class="muted">מספר עובד {{ group.meirav_code }} · {{ group["items"]|length }} אירועים</div>
-      </div>
-      <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-        {% if group.open_count and not group.validation_errors %}
-        <form method="post" action="/completions/status?payment_year={{ selected_year }}&payment_month={{ selected_month }}&person_id={{ group.person_id }}&work_year={{ group.work_year }}&work_month={{ group.work_month }}&from_status=open&to_status=included_in_export&token={{ completion_status_token|urlencode }}">
-          <button type="submit" style="padding:6px 10px;background:#15803d;color:white;border:0;border-radius:6px;cursor:pointer;">אשר לייצוא</button>
-        </form>
-        {% endif %}
-        {% if group.approved_count %}
-        <form method="post" action="/completions/status?payment_year={{ selected_year }}&payment_month={{ selected_month }}&person_id={{ group.person_id }}&work_year={{ group.work_year }}&work_month={{ group.work_month }}&from_status=included_in_export&to_status=open&token={{ completion_status_token|urlencode }}">
-          <button type="submit" style="padding:6px 10px;background:#64748b;color:white;border:0;border-radius:6px;cursor:pointer;">בטל אישור</button>
-        </form>
-        <form method="post" action="/completions/status?payment_year={{ selected_year }}&payment_month={{ selected_month }}&person_id={{ group.person_id }}&work_year={{ group.work_year }}&work_month={{ group.work_month }}&from_status=included_in_export&to_status=exported&token={{ completion_status_token|urlencode }}" onsubmit="return confirm('לסמן את ההשלמות כשולמו?');">
-          <button type="submit" style="padding:6px 10px;background:#1d4ed8;color:white;border:0;border-radius:6px;cursor:pointer;">סמן כשולם</button>
-        </form>
-        {% endif %}
-        {% for file in group.final_files %}
-          <a href="/completions/difference/{{ file.id }}?payment_year={{ selected_year }}&payment_month={{ selected_month }}"
-             style="text-decoration: none; padding: 6px 10px; border-radius: 6px; background: #1f6feb; color: white;">
-            בדוק והפק מול {{ file.filename }}
-          </a>
-        {% else %}
-          <span style="padding: 6px 10px; border-radius: 6px; background: #fef3c7; color: #92400e;">
-            אין קובץ גשר סופי לחודש זה
+    <div class="cmp-guide-body">
+      {% for month in guide.months %}
+      <section class="cmp-month">
+        <div class="cmp-month-head">
+          <h4>חודש עבודה {{ "%02d"|format(month.work_month) }}/{{ month.work_year }}</h4>
+          {% for badge in month.approved_badges %}
+          <span class="cmp-badge approved">
+            מאושר · <bdi>סמל {{ badge.symbol }}: {{ "%.2f"|format(badge.amount) }} ₪</bdi>
           </span>
-        {% endfor %}
-      </div>
-    </div>
+          {% endfor %}
+          {% for badge in month.open_badges %}
+          <span class="cmp-badge open">
+            ממתין לאישור · <bdi>סמל {{ badge.symbol }}: {{ "%.2f"|format(badge.amount) }} ₪</bdi>
+          </span>
+          {% endfor %}
+        </div>
 
-    {% if group.validation_errors %}
-    <div style="margin-top:8px;padding:8px;background:#fee2e2;color:#991b1b;border-radius:6px;">
-      לא ניתן לאשר: {{ group.validation_errors|join(' | ') }}
-    </div>
-    {% endif %}
+        {% if month.validation_errors %}
+        <div class="cmp-error-box">לא ניתן לאשר: {{ month.validation_errors|join(' | ') }}</div>
+        {% endif %}
 
-    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:10px;">
-      {% for row in group.approved_rows %}
-      <span style="padding:7px 10px;background:#dcfce7;color:#166534;border-radius:6px;">
-        מאושר · {{ "השלמה לפנסיה" if row.symbol == "317" else "השלמה שאינה לפנסיה" }} ·
-        <bdi>סמל {{ row.symbol }}: {{ "%.2f"|format(row.amount or 0) }} ₪</bdi>
-      </span>
+        {% if month.events %}
+        <table>
+          <thead>
+            <tr>
+              <th>פעולה</th>
+              <th>סוג מקור</th>
+          <th>סוג משמרת או רכיב</th>
+              <th>תאריך עבודה</th>
+              <th>סטטוס</th>
+              <th>שדות ששונו</th>
+              <th>נוצר</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in month["events"] %}
+            <tr>
+              <td>{{ item.event_type_label }}</td>
+              <td>{{ "משמרת" if item.source_table == "time_reports" else "רכיב תשלום" }}</td>
+          <td>{{ item.source_item_name or "לא ידוע" }}</td>
+              <td>{{ item.work_date.strftime("%d/%m/%Y") if item.work_date else "" }}</td>
+              <td>{{ item.status_label }}</td>
+              <td>{{ item.changed_fields_label }}</td>
+              <td>
+                {% if item.created_at %}
+                  {{ item.created_at.strftime("%d/%m/%Y %H:%M") }}
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+
+        {% if month.legacy_items %}
+        <div class="muted cmp-legacy-title">מסומנות לתשלום ללא אירוע שכר — חישוב ישן</div>
+        <table>
+          <thead>
+            <tr>
+              <th>סוג</th>
+              <th>תאריך עבודה</th>
+              <th>דירה</th>
+              <th>משמרת או רכיב</th>
+              <th>שעות או כמות</th>
+              <th>הערה</th>
+              <th>סומן בתאריך</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in month["legacy_items"] %}
+            <tr>
+              <td>{{ "משמרת" if item.item_type == "time_report" else "רכיב תשלום" }}</td>
+              <td>{{ item.date.strftime("%d/%m/%Y") if item.date else "" }}</td>
+              <td>{{ item.apartment_name }}</td>
+              <td>{{ item.shift_name if item.item_type == "time_report" else item.component_name }}</td>
+              <td>
+                {% if item.item_type == "time_report" %}
+                  <bdi>{{ item.start_time or "" }}–{{ item.end_time or "" }}</bdi>
+                {% else %}
+                  <bdi>{{ item.quantity }} × {{ "%.2f"|format((item.rate or 0) / 100) }} ₪</bdi>
+                {% endif %}
+              </td>
+              <td>{{ item.payment_note or "" }}</td>
+              <td>
+                {% if item.payment_marked_at %}
+                  <bdi>{{ item.payment_marked_at.strftime("%d/%m/%Y %H:%M") }}</bdi>
+                {% endif %}
+                {% if item.payment_marked_by_name %}
+                  <div class="muted">{{ item.payment_marked_by_name }}</div>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+      </section>
       {% endfor %}
-      {% for row in group.open_rows %}
-      <span style="padding:7px 10px;background:#fef3c7;color:#92400e;border-radius:6px;">
-        ממתין לאישור · {{ "השלמה לפנסיה" if row.symbol == "317" else "השלמה שאינה לפנסיה" }} ·
-        <bdi>סמל {{ row.symbol }}: {{ "%.2f"|format(row.amount or 0) }} ₪</bdi>
-      </span>
-      {% endfor %}
     </div>
-
-    <table style="margin-top: 10px;">
-      <thead>
-        <tr>
-          <th>פעולה</th>
-          <th>סוג מקור</th>
-          <th>מזהה מקור</th>
-          <th>תאריך עבודה</th>
-          <th>סטטוס</th>
-          <th>שדות ששונו</th>
-          <th>נוצר</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for item in group["items"] %}
-        <tr>
-          <td>{{ item.event_type_label }}</td>
-          <td>{{ "משמרת" if item.source_table == "time_reports" else "רכיב תשלום" }}</td>
-          <td><bdi>{{ item.source_id }}</bdi></td>
-          <td>{{ item.work_date.strftime("%d/%m/%Y") if item.work_date else "" }}</td>
-          <td>{{ item.status_label }}</td>
-          <td>{{ item.changed_fields_label }}</td>
-          <td>
-            {% if item.created_at %}
-              {{ item.created_at.strftime("%d/%m/%Y %H:%M") }}
-            {% endif %}
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </section>
+  </details>
   {% endfor %}
-  {% if not groups and not legacy_groups %}
+  {% if not guides %}
     <div class="muted" style="padding: 30px 0;">אין השלמות לחודש התשלום שנבחר</div>
   {% endif %}
 </div>
@@ -222,6 +235,97 @@
 </div>
 
 <style>
+  .cmp-guide {
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    margin-bottom: 8px;
+    background: #fff;
+  }
+  .cmp-guide[open] {
+    border-color: #cbd5e1;
+    box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
+  }
+  .cmp-guide-head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    padding: 10px 12px;
+    cursor: pointer;
+    list-style: none;
+  }
+  .cmp-guide-head::-webkit-details-marker { display: none; }
+  .cmp-guide-head:hover { background: #f8fafc; }
+  .cmp-arrow {
+    color: #64748b;
+    font-size: 12px;
+    transition: transform 0.15s ease;
+  }
+  .cmp-guide:not([open]) .cmp-arrow { transform: rotate(90deg); }
+  .cmp-guide-title {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 180px;
+  }
+  .cmp-guide-name { font-weight: 600; }
+  .cmp-guide-meta { font-size: 12px; }
+  .cmp-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-inline-start: auto;
+  }
+  .cmp-badge {
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .cmp-badge.approved { background: #dcfce7; color: #166534; }
+  .cmp-badge.open { background: #fef3c7; color: #92400e; }
+  .cmp-badge.error { background: #fee2e2; color: #991b1b; }
+  .cmp-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .cmp-btn {
+    display: inline-block;
+    padding: 6px 10px;
+    border: 0;
+    border-radius: 6px;
+    font-size: 13px;
+    text-decoration: none;
+    cursor: pointer;
+    color: #fff;
+  }
+  .cmp-btn.approve { background: #15803d; }
+  .cmp-btn.reopen { background: #64748b; }
+  .cmp-btn.paid { background: #1d4ed8; }
+  .cmp-btn.diff { background: #1f6feb; }
+  .cmp-btn.warn { background: #fef3c7; color: #92400e; cursor: default; }
+  .cmp-guide-body {
+    padding: 0 12px 12px;
+    border-top: 1px solid #f1f5f9;
+  }
+  .cmp-month { margin-top: 12px; }
+  .cmp-month-head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+  .cmp-month-head h4 { margin: 0; font-size: 14px; }
+  .cmp-legacy-title { margin: 10px 0 4px; font-size: 12px; }
+  .cmp-error-box {
+    margin: 6px 0;
+    padding: 8px;
+    background: #fee2e2;
+    color: #991b1b;
+    border-radius: 6px;
+  }
   .completion-email-overlay {
     position: fixed;
     inset: 0;

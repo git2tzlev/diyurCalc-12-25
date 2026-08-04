@@ -654,6 +654,7 @@ def generate_gesher_file_for_person(conn, person_id: int, year: int, month: int)
         month,
         company_code=company,
         housing_array_id=get_housing_array_filter(),
+        person_ids={person_id},
     )
     line_count += _write_completion_rows(
         output,
@@ -974,6 +975,7 @@ def generate_gesher_file_for_multiple(conn, person_ids: List[int], year: int, mo
         month,
         company_code=first_company,
         housing_array_id=get_housing_array_filter(),
+        person_ids=set(person_ids),
     )
     selected_employee_codes = {
         "".join(filter(str.isdigit, str(person.get("meirav_code") or ""))).zfill(6)

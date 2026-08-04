@@ -1,10 +1,12 @@
 from services.gesher_difference import (
     _build_unverified_completion_diffs,
+    build_approved_completion_gesher_rows,
     build_legacy_completion_gesher_rows_from_final_file,
     build_completion_gesher_file,
     build_completion_gesher_rows,
     build_current_gesher_lines,
     compare_line_sets,
+    get_legacy_completion_items,
     parse_gesher_file_lines,
 )
 
@@ -135,6 +137,113 @@ def test_unverified_completion_diffs_net_by_employee_and_symbol():
     assert rows[0]["symbol"] == "370"
     assert rows[0]["amount_diff"] == 16.0
     assert rows[0]["diff_type"] == "השלמה ללא קובץ גשר סופי"
+
+
+def test_legacy_items_exclude_any_matching_salary_event_status():
+    class Result:
+        def fetchall(self):
+            return [{"source_table": "time_reports", "source_id": 10}]
+
+    class Conn:
+        def execute(self, query, params):
+            assert "salary_impact_events" in query
+            assert params[0:2] == (2026, 7)
+            return Result()
+
+    items = [
+        {
+            "id": 10,
+            "item_type": "time_report",
+            "person_id": 1,
+            "employer_code": "400",
+        },
+        {
+            "id": 11,
+            "item_type": "payment_component",
+            "person_id": 2,
+            "employer_code": "400",
+        },
+    ]
+
+    result = get_legacy_completion_items(
+        Conn(),
+        items,
+        payment_year=2026,
+        payment_month=7,
+        company_code="400",
+    )
+
+    assert [item["id"] for item in result] == [11]
+
+
+def test_approved_completion_rows_merge_events_and_legacy_without_duplication(monkeypatch):
+    import services.gesher_difference as gesher_difference
+    import services.salary_impact as salary_impact
+
+    event_row = {
+        "employer_code": "400",
+        "employee_code": "000123",
+        "person_id": 1,
+        "person_name": "מדריך",
+        "symbol": "317",
+        "amount": 100.0,
+        "quantity": 0.0,
+        "source_symbols": "360",
+    }
+    legacy_row = {
+        **event_row,
+        "amount": -25.0,
+        "source_symbols": "362",
+    }
+    captured = {}
+
+    monkeypatch.setattr(
+        salary_impact,
+        "build_salary_impact_completion_rows",
+        lambda *args, **kwargs: {
+            "rows": [event_row],
+            "events": [],
+            "invalid_events": [],
+        },
+    )
+    monkeypatch.setattr(
+        gesher_difference,
+        "get_payment_period_completions",
+        lambda *args, **kwargs: {"items": [{"id": 11}]},
+    )
+    monkeypatch.setattr(
+        gesher_difference,
+        "get_legacy_completion_items",
+        lambda *args, **kwargs: [{"id": 11}],
+    )
+
+    def fake_legacy(*args, **kwargs):
+        captured.update(kwargs)
+        return {
+            "rows": [legacy_row],
+            "blocks": [],
+            "approved_files": [],
+            "diffs": [],
+        }
+
+    monkeypatch.setattr(
+        gesher_difference,
+        "build_legacy_completion_gesher_rows_from_final_file",
+        fake_legacy,
+    )
+
+    result = build_approved_completion_gesher_rows(
+        object(),
+        2026,
+        7,
+        company_code="400",
+        person_ids={1},
+    )
+
+    assert [(row["symbol"], row["amount"]) for row in result["rows"]] == [("317", 75.0)]
+    assert result["rows"][0]["source_symbols"] == "360, 362"
+    assert captured["person_ids"] == {1}
+    assert captured["completion_items"] == [{"id": 11}]
 
 
 def test_current_gesher_lines_skip_zero_quantity_hour_rates_even_for_completion_deltas(monkeypatch):

@@ -413,26 +413,63 @@ def build_approved_completion_gesher_rows(
     *,
     company_code: Optional[str] = None,
     housing_array_id: Optional[int] = None,
+    person_ids: Optional[set[int]] = None,
     allow_unverified_missing_final: bool = False,
+    request_cache: Optional[dict] = None,
 ) -> dict[str, Any]:
-    """Build approved completion rows from salary-impact events.
-
-    ``allow_unverified_missing_final`` remains in the public signature while old
-    callers are migrated; event-driven calculation never depends on a final file.
-    """
+    """Build one completion result from approved events and untracked legacy marks."""
     del allow_unverified_missing_final
     from services.salary_impact import build_salary_impact_completion_rows
 
-    result = build_salary_impact_completion_rows(
+    selected_person_ids = {int(person_id) for person_id in (person_ids or set())}
+    cache_key = (
+        "approved-completions",
+        payment_year,
+        payment_month,
+        company_code,
+        housing_array_id,
+        tuple(sorted(selected_person_ids)),
+    )
+    if request_cache is not None and cache_key in request_cache:
+        return request_cache[cache_key]
+
+    event_result = build_salary_impact_completion_rows(
         conn,
         payment_year,
         payment_month,
         statuses=("included_in_export",),
         company_code=company_code,
         housing_array_id=housing_array_id,
+        person_ids=selected_person_ids or None,
+        request_cache=request_cache,
     )
-    return {
-        **result,
+    completion_data = get_payment_period_completions(
+        conn,
+        payment_year,
+        payment_month,
+        housing_array_id=housing_array_id,
+    )
+    legacy_items = get_legacy_completion_items(
+        conn,
+        completion_data["items"],
+        payment_year=payment_year,
+        payment_month=payment_month,
+        company_code=company_code,
+        person_ids=selected_person_ids or None,
+    )
+    legacy_result = build_legacy_completion_gesher_rows_from_final_file(
+        conn,
+        payment_year,
+        payment_month,
+        company_code=company_code,
+        housing_array_id=housing_array_id,
+        person_ids=selected_person_ids or None,
+        completion_items=legacy_items,
+    )
+    rows = _merge_completion_rows(event_result["rows"], legacy_result["rows"])
+    result = {
+        **event_result,
+        "rows": rows,
         "blocks": [
             {
                 "type": "invalid_salary_impact_event",
@@ -440,12 +477,105 @@ def build_approved_completion_gesher_rows(
                 "event_id": event.get("id"),
                 "company_code": event.get("employer_code") or "001",
             }
-            for event in result["invalid_events"]
+            for event in event_result["invalid_events"]
             if event.get("status") == "included_in_export"
-        ],
-        "items": result["events"],
-        "approved_files": [],
+        ] + legacy_result["blocks"],
+        "items": event_result["events"] + legacy_items,
+        "legacy_items": legacy_items,
+        "approved_files": legacy_result["approved_files"],
+        "legacy_diffs": legacy_result["diffs"],
     }
+    if request_cache is not None:
+        request_cache[cache_key] = result
+    return result
+
+
+def get_legacy_completion_items(
+    conn,
+    items: list[dict[str, Any]],
+    *,
+    payment_year: int,
+    payment_month: int,
+    company_code: Optional[str] = None,
+    person_ids: Optional[set[int]] = None,
+) -> list[dict[str, Any]]:
+    """Return marked payment-period rows that were never captured as salary events."""
+    relevant = [
+        item for item in items
+        if (not company_code or str(item.get("employer_code") or "001") == str(company_code))
+        and (not person_ids or int(item.get("person_id") or 0) in person_ids)
+    ]
+    if not relevant:
+        return []
+    source_tables = {
+        "time_reports" if item.get("item_type") == "time_report" else "payment_components"
+        for item in relevant
+    }
+    rows = conn.execute("""
+        SELECT source_table, source_id
+        FROM salary_impact_events
+        WHERE payment_year = %s AND payment_month = %s
+          AND source_table = ANY(%s)
+          AND source_id = ANY(%s)
+    """, (
+        payment_year,
+        payment_month,
+        list(source_tables),
+        [int(item["id"]) for item in relevant],
+    )).fetchall()
+    event_keys = {
+        (str(row["source_table"]), int(row["source_id"]))
+        for row in rows
+    }
+    result = []
+    for item in relevant:
+        source_table = "time_reports" if item.get("item_type") == "time_report" else "payment_components"
+        if (source_table, int(item["id"])) not in event_keys:
+            result.append(item)
+    return result
+
+
+def _merge_completion_rows(*row_groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge event and legacy amounts without losing their employee scope."""
+    grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for rows in row_groups:
+        for source_row in rows:
+            row = dict(source_row)
+            row_amount = float(row.get("amount") or 0)
+            row_quantity = float(row.get("quantity") or 0)
+            row_source_symbols = str(row.get("source_symbols") or "")
+            key = (
+                str(row.get("employer_code") or "001"),
+                _clean_employee_code(row.get("employee_code")),
+                str(row.get("symbol") or ""),
+            )
+            if not key[1] or not key[2]:
+                continue
+            if key not in grouped:
+                grouped[key] = row
+                grouped[key]["amount"] = 0.0
+                grouped[key]["quantity"] = 0.0
+                grouped[key]["source_symbols"] = set()
+            grouped[key]["amount"] = round(
+                float(grouped[key].get("amount") or 0) + row_amount,
+                2,
+            )
+            grouped[key]["quantity"] = round(
+                float(grouped[key].get("quantity") or 0) + row_quantity,
+                2,
+            )
+            grouped[key]["source_symbols"].update(
+                symbol.strip() for symbol in row_source_symbols.split(",") if symbol.strip()
+            )
+    result = []
+    for row in grouped.values():
+        if abs(float(row.get("amount") or 0)) < MONEY_EPSILON:
+            continue
+        row["source_symbols"] = ", ".join(sorted(row["source_symbols"]))
+        row["rate"] = round(float(row["amount"]), 2)
+        row["quantity"] = 0.0
+        result.append(row)
+    return sorted(result, key=lambda row: (row["employee_code"], row["symbol"]))
 
 
 def build_legacy_completion_gesher_rows_from_final_file(
@@ -455,6 +585,8 @@ def build_legacy_completion_gesher_rows_from_final_file(
     *,
     company_code: Optional[str] = None,
     housing_array_id: Optional[int] = None,
+    person_ids: Optional[set[int]] = None,
+    completion_items: Optional[list[dict[str, Any]]] = None,
     allow_unverified_missing_final: bool = False,
 ) -> dict[str, Any]:
     """
@@ -468,15 +600,20 @@ def build_legacy_completion_gesher_rows_from_final_file(
     4. If no final file exists, also export the clean delta of the marked completions.
     5. Convert completion differences into target completion symbols 253/317.
     """
-    completion_data = get_payment_period_completions(
-        conn,
-        payment_year,
-        payment_month,
-        housing_array_id=housing_array_id,
+    completion_data = (
+        get_payment_period_completions(
+            conn,
+            payment_year,
+            payment_month,
+            housing_array_id=housing_array_id,
+        )
+        if completion_items is None
+        else {"items": completion_items}
     )
     relevant_items = [
         item for item in completion_data["items"]
         if not company_code or str(item.get("employer_code") or "001") == str(company_code)
+        if not person_ids or int(item.get("person_id") or 0) in person_ids
     ]
 
     items_by_work_month_company: dict[tuple[int, int, str], list[dict[str, Any]]] = defaultdict(list)
@@ -510,6 +647,7 @@ def build_legacy_completion_gesher_rows_from_final_file(
                 work_month,
                 item_company,
                 items,
+                person_ids=person_ids,
                 diff_type="השלמה ללא קובץ גשר סופי",
             )
             for diff in completion_diffs:
@@ -543,6 +681,7 @@ def build_legacy_completion_gesher_rows_from_final_file(
                 work_month,
                 item_company,
                 items,
+                person_ids=person_ids,
                 diff_type="השלמה ללא קובץ גשר סופי תקין",
             )
             for diff in completion_diffs:
@@ -570,6 +709,12 @@ def build_legacy_completion_gesher_rows_from_final_file(
             parse_gesher_file_lines(file_row.get("content") or ""),
         )
         file_person_ids = _file_person_ids(file_row)
+        if person_ids:
+            paid_lines = [
+                line for line in paid_lines
+                if int(line.get("person_id") or 0) in person_ids
+            ]
+            file_person_ids = set(person_ids)
         current_without = build_current_gesher_lines(
             conn,
             work_year,

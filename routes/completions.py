@@ -26,6 +26,7 @@ from services.gesher_difference import (
     build_difference_excel,
     compare_line_sets,
     enrich_paid_lines,
+    get_legacy_completion_items,
     parse_gesher_file_lines,
 )
 from services.salary_impact import (
@@ -146,6 +147,111 @@ def _completion_report_tasks(completion_data: dict) -> list[dict]:
     )
 
 
+def _completion_amount_badges(rows: list[dict]) -> list[dict]:
+    """Sum completion gesher rows into one amount per salary symbol."""
+    totals: dict[str, float] = {}
+    for row in rows:
+        symbol = str(row.get("symbol") or "")
+        totals[symbol] = totals.get(symbol, 0.0) + float(row.get("amount") or 0)
+    return [
+        {"symbol": symbol, "amount": round(amount, 2)}
+        for symbol, amount in sorted(totals.items())
+    ]
+
+
+def _completion_month_entry(work_year: int, work_month: int, final_files: list[dict]) -> dict:
+    return {
+        "work_year": work_year,
+        "work_month": work_month,
+        "events": [],
+        "legacy_items": [],
+        "final_files": final_files,
+    }
+
+
+def _finalize_completion_guide(
+    guide: dict,
+    open_group_rows: dict,
+    approved_group_rows: dict,
+) -> dict:
+    """Add per-month and guide-level counters, amounts and export links."""
+    months = []
+    for (work_year, work_month), month in sorted(guide["months"].items()):
+        group_key = (guide["person_id"], work_year, work_month)
+        month["open_rows"] = open_group_rows.get(group_key, [])
+        month["approved_rows"] = approved_group_rows.get(group_key, [])
+        month["open_badges"] = _completion_amount_badges(month["open_rows"])
+        month["approved_badges"] = _completion_amount_badges(month["approved_rows"])
+        month["open_count"] = sum(1 for event in month["events"] if event.get("status") == "open")
+        month["approved_count"] = sum(
+            1 for event in month["events"] if event.get("status") == "included_in_export"
+        )
+        month["validation_errors"] = [
+            event["validation_error"] for event in month["events"] if event.get("validation_error")
+        ]
+        months.append(month)
+    return {
+        **{key: guide[key] for key in ("person_id", "person_name", "meirav_code")},
+        "months": months,
+        "events_count": sum(len(month["events"]) for month in months),
+        "legacy_count": sum(len(month["legacy_items"]) for month in months),
+        "open_count": sum(month["open_count"] for month in months),
+        "approved_count": sum(month["approved_count"] for month in months),
+        "open_badges": _completion_amount_badges(
+            [row for month in months for row in month["open_rows"]]
+        ),
+        "approved_badges": _completion_amount_badges(
+            [row for month in months for row in month["approved_rows"]]
+        ),
+        "validation_errors": [error for month in months for error in month["validation_errors"]],
+        "difference_links": [
+            {"file": file, "work_year": month["work_year"], "work_month": month["work_month"]}
+            for month in months
+            for file in month["final_files"]
+        ],
+        "months_without_final_file": [month for month in months if not month["final_files"]],
+    }
+
+
+def _build_completion_guides(
+    events: list[dict],
+    legacy_items: list[dict],
+    open_group_rows: dict,
+    approved_group_rows: dict,
+    final_files_by_month: dict,
+) -> list[dict]:
+    """Group event and legacy completions per guide, ordered alphabetically."""
+    guides: dict[int, dict] = {}
+
+    def month_for(item: dict) -> dict:
+        person_id = int(item.get("person_id") or 0)
+        guide = guides.setdefault(person_id, {
+            "person_id": person_id,
+            "person_name": item.get("person_name") or "",
+            "meirav_code": item.get("meirav_code") or "",
+            "months": {},
+        })
+        key = (int(item.get("work_year") or 0), int(item.get("work_month") or 0))
+        if key not in guide["months"]:
+            guide["months"][key] = _completion_month_entry(
+                *key, final_files_by_month.get(key, [])
+            )
+        return guide["months"][key]
+
+    for event in events:
+        month_for(event)["events"].append(event)
+    for item in legacy_items:
+        month_for(item)["legacy_items"].append(item)
+
+    return sorted(
+        (
+            _finalize_completion_guide(guide, open_group_rows, approved_group_rows)
+            for guide in guides.values()
+        ),
+        key=lambda guide: guide["person_name"],
+    )
+
+
 def _unique_completion_person_ids(completion_items: list[dict]) -> list[int]:
     person_ids_by_name: dict[int, str] = {}
     for item in completion_items:
@@ -167,7 +273,7 @@ def completions_page(
     year: Optional[int] = None,
     month: Optional[int] = None,
 ) -> HTMLResponse:
-    """Show payment-period completions grouped by original work month."""
+    """Show payment-period completions grouped per guide, sorted alphabetically."""
     if year is None or month is None:
         default_year, default_month = get_default_period(request)
         year = year or default_year
@@ -177,6 +283,12 @@ def completions_page(
     with get_conn() as conn:
         legacy_completion_data = get_payment_period_completions(
             conn, year, month, housing_array_id=housing_filter
+        )
+        legacy_items = get_legacy_completion_items(
+            conn,
+            legacy_completion_data["items"],
+            payment_year=year,
+            payment_month=month,
         )
         events = [
             _prepare_completion_event_for_display(event)
@@ -190,46 +302,35 @@ def completions_page(
         approved_result = build_salary_impact_completion_rows(
             conn, year, month, statuses=("included_in_export",), housing_array_id=housing_filter
         )
-        events_by_group = {}
-        for event in events:
-            key = (int(event.get("person_id") or 0), int(event.get("work_year") or 0), int(event.get("work_month") or 0))
-            events_by_group.setdefault(key, []).append(event)
-        groups = []
-        for (person_id, work_year, work_month), items in sorted(
-            events_by_group.items(),
-            key=lambda item: (item[0][1], item[0][2], item[1][0].get("person_name") or ""),
-        ):
+        work_month_keys = {
+            (int(item.get("work_year") or 0), int(item.get("work_month") or 0))
+            for item in events + legacy_items
+        }
+        final_files_by_month = {}
+        for work_year, work_month in work_month_keys:
             files = list_gesher_export_files(
                 conn,
                 year=work_year,
                 month=work_month,
                 housing_array_id=housing_filter,
             )
-            final_files = [
+            final_files_by_month[(work_year, work_month)] = [
                 file for file in files
                 if file.get("is_final") and not file.get("is_cancelled")
             ]
-            groups.append({
-                "person_id": person_id,
-                "person_name": items[0].get("person_name") or "",
-                "meirav_code": items[0].get("meirav_code") or "",
-                "work_year": work_year,
-                "work_month": work_month,
-                "items": items,
-                "final_files": final_files,
-                "status": items[0].get("status"),
-                "open_count": sum(1 for item in items if item.get("status") == "open"),
-                "approved_count": sum(1 for item in items if item.get("status") == "included_in_export"),
-                "open_rows": open_result["group_rows"].get((person_id, work_year, work_month), []),
-                "approved_rows": approved_result["group_rows"].get((person_id, work_year, work_month), []),
-                "validation_errors": [item["validation_error"] for item in items if item.get("validation_error")],
-            })
+        guides = _build_completion_guides(
+            events,
+            legacy_items,
+            open_result["group_rows"],
+            approved_result["group_rows"],
+            final_files_by_month,
+        )
         event_completion_items = [
-                {**event, "date": event.get("work_date")}
-                for event in events
-            ]
+            {**event, "date": event.get("work_date")}
+            for event in events
+        ]
         completion_data = {
-            "items": legacy_completion_data["items"] + event_completion_items,
+            "items": legacy_items + event_completion_items,
         }
         email_tasks = _completion_report_tasks(completion_data)
 
@@ -238,18 +339,8 @@ def completions_page(
         "selected_year": year,
         "selected_month": month,
         "years": list(range(2023, 2028)),
-        "groups": groups,
-        "legacy_groups": [
-            {
-                "work_year": work_year,
-                "work_month": work_month,
-                "items": items,
-            }
-            for (work_year, work_month), items in sorted(
-                legacy_completion_data["by_work_month"].items()
-            )
-        ],
-        "total_items": len(events) + len(legacy_completion_data["items"]),
+        "guides": guides,
+        "total_items": len(events) + len(legacy_items),
         "email_tasks": email_tasks,
         "email_tasks_with_email": sum(1 for task in email_tasks if task.get("email")),
         "completion_bulk_send_token": create_action_token(request, "completion_bulk_send"),
@@ -264,14 +355,14 @@ def change_completion_group_status(
     payment_year: int,
     payment_month: int,
     person_id: int,
-    work_year: int,
-    work_month: int,
     from_status: str,
     to_status: str,
     token: str,
+    work_year: Optional[int] = None,
+    work_month: Optional[int] = None,
     export_file_id: Optional[int] = None,
 ) -> Response:
-    """Approve, reopen or mark one guide/work-month completion group as paid."""
+    """Approve, reopen or mark a guide's completions as paid, for one work month or all."""
     if not validate_action_token(request, token, "completion_status"):
         raise HTTPException(status_code=403, detail="אין הרשאה לשנות סטטוס השלמה")
     current_user = getattr(request.state, "current_user", None) or {}

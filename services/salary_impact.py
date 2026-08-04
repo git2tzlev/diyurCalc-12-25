@@ -109,12 +109,25 @@ def get_salary_impact_events(
     rows = conn.execute(f"""
         SELECT sie.*, p.name AS person_name, p.meirav_code, p.email AS person_email,
                COALESCE(e.code, '001') AS employer_code,
-               ap.name AS apartment_name, ha.name AS housing_array_name
+               ap.name AS apartment_name, ha.name AS housing_array_name,
+               CASE
+                   WHEN sie.source_table = 'time_reports' THEN st.name
+                   WHEN sie.source_table = 'payment_components' THEN pct.name
+                   ELSE NULL
+               END AS source_item_name
         FROM salary_impact_events sie
         LEFT JOIN people p ON p.id = sie.person_id
         LEFT JOIN employers e ON e.id = p.employer_id
         LEFT JOIN apartments ap ON ap.id = sie.apartment_id
         LEFT JOIN housing_arrays ha ON ha.id = sie.housing_array_id
+        LEFT JOIN shift_types st ON st.id = NULLIF(
+            COALESCE(sie.new_data ->> 'shift_type_id', sie.old_data ->> 'shift_type_id'),
+            ''
+        )::integer
+        LEFT JOIN payment_component_types pct ON pct.id = NULLIF(
+            COALESCE(sie.new_data ->> 'component_type_id', sie.old_data ->> 'component_type_id'),
+            ''
+        )::integer
         WHERE {' AND '.join(filters)}
         ORDER BY sie.work_year, sie.work_month, p.name, sie.created_at, sie.id
     """, tuple(params)).fetchall()
@@ -279,15 +292,15 @@ def update_salary_impact_group_status(
     payment_year: int,
     payment_month: int,
     person_id: int,
-    work_year: int,
-    work_month: int,
     from_status: str,
     to_status: str,
     actor_person_id: Optional[int],
+    work_year: Optional[int] = None,
+    work_month: Optional[int] = None,
     export_file_id: Optional[int] = None,
     housing_array_id: Optional[int] = None,
 ) -> int:
-    """Move one guide/work-month event group through its explicit lifecycle."""
+    """Move a guide's events through their lifecycle, for one work month or all of them."""
     if to_status not in VALID_TRANSITIONS.get(from_status, set()):
         raise ValueError("מעבר סטטוס השלמה אינו חוקי")
     events = get_salary_impact_events(
@@ -300,8 +313,8 @@ def update_salary_impact_group_status(
     )
     matching = [
         event for event in events
-        if int(event.get("work_year") or 0) == work_year
-        and int(event.get("work_month") or 0) == work_month
+        if (work_year is None or int(event.get("work_year") or 0) == work_year)
+        and (work_month is None or int(event.get("work_month") or 0) == work_month)
     ]
     if not matching:
         return 0

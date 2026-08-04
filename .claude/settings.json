@@ -30,10 +30,19 @@
       "PowerShell(py C:\\\\Users\\\\leahsc\\\\AppData\\\\Local\\\\Temp\\\\check_lock.py 2>&1)",
       "PowerShell(Remove-Item C:\\\\Users\\\\leahsc\\\\AppData\\\\Local\\\\Temp\\\\check_lock.py -Confirm:$false)",
       "WebFetch(domain:www.workrights.co.il)",
-      "WebFetch(domain:bazlaw.co.il)"
+      "WebFetch(domain:bazlaw.co.il)",
+      "Bash(claude mcp *)",
+      "mcp__atlassian__getVisibleJiraProjects",
+      "Bash(py -c ' *)",
+      "Read(//c/Users/leahsc/**)",
+      "Edit(~/.claude/skills/email-to-jira/**)",
+      "mcp__atlassian__searchJiraIssuesUsingJql",
+      "mcp__gmail__search_threads",
+      "Bash(PYTHONIOENCODING=utf-8 py read_gmail.py --window 7d --limit 3)"
     ],
     "additionalDirectories": [
-      "C:\\Users\\leahsc\\AppData\\Local\\Temp"
+      "C:\\Users\\leahsc\\AppData\\Local\\Temp",
+      "C:\\Users\\leahsc"
     ]
   }
 }

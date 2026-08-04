@@ -672,14 +672,14 @@ def completion_status_route(
     payment_year: int,
     payment_month: int,
     person_id: int,
-    work_year: int,
-    work_month: int,
     from_status: str,
     to_status: str,
     token: str,
+    work_year: int = None,
+    work_month: int = None,
     export_file_id: int = None,
 ):
-    """Change the lifecycle status of one completion group."""
+    """Change the lifecycle status of a guide's completions."""
     return change_completion_group_status(
         request,
         payment_year=payment_year,

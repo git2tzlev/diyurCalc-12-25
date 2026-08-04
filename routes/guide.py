@@ -1177,6 +1177,7 @@ def guide_view(
             selected_month,
             company_code=person.get("employer_code"),
             housing_array_id=housing_filter,
+            person_ids={person_id},
         )
         apply_completion_rows_to_monthly_totals(
             monthly_totals,

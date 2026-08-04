@@ -120,6 +120,8 @@ class TestGesherExportPreview(unittest.TestCase):
         self.assertEqual(company, "001")
         self.assertIn("001 26 05", content)
         self.assertIn("001234 254 0000.00 00247.80", content)
+        _mock_completion_rows.assert_called_once()
+        self.assertEqual(_mock_completion_rows.call_args.kwargs["person_ids"], {10})
 
 
 if __name__ == "__main__":
