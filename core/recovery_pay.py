@@ -240,6 +240,15 @@ def seniority_years_for_recovery(start_date: Any, payment_year: int) -> int:
     return max(0, years)
 
 
+def recovery_person_ineligibility_reason(person: Any) -> str:
+    """Return a person-level failure without using the current active flag."""
+    if not person:
+        return "not_found"
+    if person["housing_array_id"] != TZOHAR_HALEV_HOUSING_ARRAY_ID:
+        return "not_tzohar_halev"
+    return ""
+
+
 def recovery_eligible_minutes_from_totals(
     totals: dict[str, Any],
     *,
@@ -409,7 +418,7 @@ def calculate_recovery_pay_for_person(
     try:
         cursor.execute(
             """
-            SELECT id, name, start_date, is_active, type, housing_array_id
+            SELECT id, name, start_date, type, housing_array_id
             FROM people
             WHERE id = %s
             """,
@@ -419,10 +428,9 @@ def calculate_recovery_pay_for_person(
     finally:
         cursor.close()
 
-    if not person or not person["is_active"]:
-        return {"amount": 0.0, "eligible": False, "reason": "inactive"}
-    if person["housing_array_id"] != TZOHAR_HALEV_HOUSING_ARRAY_ID:
-        return {"amount": 0.0, "eligible": False, "reason": "not_tzohar_halev"}
+    person_reason = recovery_person_ineligibility_reason(person)
+    if person_reason:
+        return {"amount": 0.0, "eligible": False, "reason": person_reason}
 
     seniority_years = seniority_years_for_recovery(person["start_date"], payment_year)
     recovery_days = recovery_days_for_period(person["start_date"], payment_year)

@@ -1227,6 +1227,26 @@
                 </tr>
                 {% endif %}
 
+                {% if monthly_totals.clothing_pay %}
+                {% set clothing = monthly_totals.clothing_pay_details or {} %}
+                {% set row_payment_clothing = (monthly_totals.clothing_pay or 0) | round(2) %}
+                {% set display_total.sum = display_total.sum + row_payment_clothing %}
+                <tr style="background-color: #e0f2fe; font-weight: bold; border-top: 1px solid #ccc;">
+                  <td style="text-align: right; padding: 6px 8px;"><strong>דמי ביגוד:</strong></td>
+                  <td style="text-align: center; padding: 6px 8px;">{{ "%.2f"|format(clothing.fte_percent or 0) }}% משרה</td>
+                  <td style="text-align: center; padding: 6px 8px; font-weight: bold;">{{ "%.2f"|format(row_payment_clothing) }}</td>
+                  <td colspan="6" style="text-align: right; padding: 6px 8px; font-size: 0.85em;">
+                    חישוב: {{ "%.2f"|format(clothing.full_time_amount or 0) }} ₪ ×
+                    {{ "%.2f"|format(clothing.fte_percent or 0) }}% = {{ "%.2f"|format(row_payment_clothing) }} ₪
+                    <br>אחוז משרה: {{ "%.2f"|format(clothing.capped_hours or 0) }} שעות מזכות /
+                    {{ "%.0f"|format(clothing.fte_denominator_hours or 2184) }} =
+                    {{ "%.2f"|format(clothing.fte_percent or 0) }}%
+                    <br>{{ "%.2f"|format(clothing.legacy_hours or 0) }} שעות מהמערכת הישנה +
+                    {{ "%.2f"|format(clothing.system_hours or 0) }} שעות מדיור003 (לפני תקרה חודשית)
+                  </td>
+                </tr>
+                {% endif %}
+
                 {# שורת דמי הבראה #}
                 {% if monthly_totals.recovery_pay %}
                 {% set recovery = monthly_totals.recovery_pay_details or {} %}
@@ -1702,7 +1722,7 @@
                   {% elif key == 'vacation' %}
                     {# חופשה: שעות × תעריף בסיס #}
                     {% set row_total = hours_rounded * (minimum_wage | round(2)) %}
-                  {% elif key == 'travel' or key == 'extras' or key == 'extras_for_pension' or key == 'sick_payment' or key == 'professional_support' or key == 'holiday_payment' or key == 'recovery_pay' or key == 'completion_non_pension' or key == 'completion_pension' %}
+                  {% elif key == 'travel' or key == 'extras' or key == 'extras_for_pension' or key == 'sick_payment' or key == 'professional_support' or key == 'holiday_payment' or key == 'recovery_pay' or key == 'clothing_pay' or key == 'completion_non_pension' or key == 'completion_pension' %}
                     {% set row_total = val %}
                   {% elif key == 'calc_variable' %}
                     {# תעריף משתנה - כמות 1, תעריף = סה"כ (כמו בגשר) #}
@@ -1788,6 +1808,10 @@
                     {% set recovery = monthly_totals.recovery_pay_details or {} %}
                     <td>{% if recovery.recovery_days %}{{ "%.2f"|format(recovery.recovery_days) }}{% else %}-{% endif %}</td>
                     <td>{% if recovery.daily_rate %}{{ "%.2f"|format(recovery.daily_rate) }} ₪{% else %}-{% endif %}</td>
+                    <td>{{ row_total | format_currency }}</td>
+                  {% elif key == 'clothing_pay' %}
+                    <td>1</td>
+                    <td>{{ "%.2f"|format(row_total) }} ₪</td>
                     <td>{{ row_total | format_currency }}</td>
                   {% elif key == 'completion_non_pension' or key == 'completion_pension' %}
                     <td>-</td>

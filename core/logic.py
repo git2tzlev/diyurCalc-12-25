@@ -10,6 +10,7 @@ Import directly from submodules for specific functionality:
 import logging
 import psycopg2
 import psycopg2.extras
+from datetime import date
 from typing import List, Tuple, Dict, Any, Optional
 
 from utils.cache_manager import cached
@@ -225,6 +226,24 @@ def ensure_recovery_pay_code(conn):
         cursor.close()
     except Exception as e:
         logger.error(f"Error ensuring recovery pay code: {e}")
+
+
+def ensure_clothing_pay_code(conn):
+    """מוודא שקוד מירב 107 לדמי ביגוד קיים בטבלת payment_codes."""
+    try:
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        cursor.execute("SELECT id FROM payment_codes WHERE internal_key = 'clothing_pay'")
+        existing = cursor.fetchone()
+        if not existing:
+            cursor.execute("""
+                INSERT INTO payment_codes (internal_key, display_name, merav_code, display_order)
+                VALUES ('clothing_pay', 'דמי ביגוד', '107', 178)
+            """)
+            conn.commit()
+            logger.info("Added clothing_pay code (107) to payment_codes table")
+        cursor.close()
+    except Exception as e:
+        logger.error(f"Error ensuring clothing pay code: {e}")
 
 
 def ensure_professional_support_code(conn):
@@ -554,7 +573,9 @@ def calculate_monthly_summary(
     time_report_overrides = time_report_overrides or {}
     payment_component_overrides = payment_component_overrides or {}
 
-    # שליפת אנשים - עם סינון לפי מערך דיור אם מוגדר
+    # שליפת אנשים - פעילים או בעלי פעילות בחודש, עם סינון מערך כשנדרש.
+    activity_start = date(year, month, 1)
+    activity_end = date(year + (1 if month == 12 else 0), 1 if month == 12 else month + 1, 1)
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     if housing_filter is not None and requested_person_ids:
         cursor.execute("""
@@ -567,10 +588,29 @@ def calculate_monthly_summary(
     elif housing_filter is not None:
         cursor.execute("""
             SELECT id, name, start_date, is_married, meirav_code, type
-            FROM people
-            WHERE is_active::integer = 1 AND housing_array_id = %s
+            FROM people p
+            WHERE p.housing_array_id = %s
+              AND (
+                p.is_active::integer = 1
+                OR EXISTS (
+                    SELECT 1 FROM time_reports tr
+                    JOIN apartments ap ON ap.id = tr.apartment_id
+                    WHERE tr.person_id = p.id AND tr.date >= %s AND tr.date < %s
+                      AND ap.housing_array_id = %s
+                )
+                OR EXISTS (
+                    SELECT 1 FROM payment_components pc
+                    JOIN apartments ap ON ap.id = pc.apartment_id
+                    WHERE pc.person_id = p.id AND pc.date >= %s AND pc.date < %s
+                      AND ap.housing_array_id = %s
+                )
+              )
             ORDER BY name
-        """, (housing_filter,))
+        """, (
+            housing_filter,
+            activity_start, activity_end, housing_filter,
+            activity_start, activity_end, housing_filter,
+        ))
     elif requested_person_ids:
         cursor.execute("""
             SELECT id, name, start_date, is_married, meirav_code, type
@@ -581,10 +621,18 @@ def calculate_monthly_summary(
     else:
         cursor.execute("""
             SELECT id, name, start_date, is_married, meirav_code, type
-            FROM people
-            WHERE is_active::integer = 1
+            FROM people p
+            WHERE p.is_active::integer = 1
+               OR EXISTS (
+                    SELECT 1 FROM time_reports tr
+                    WHERE tr.person_id = p.id AND tr.date >= %s AND tr.date < %s
+               )
+               OR EXISTS (
+                    SELECT 1 FROM payment_components pc
+                    WHERE pc.person_id = p.id AND pc.date >= %s AND pc.date < %s
+               )
             ORDER BY name
-        """)
+        """, (activity_start, activity_end, activity_start, activity_end))
     people = cursor.fetchall()
     cursor.close()
 
@@ -835,6 +883,10 @@ def calculate_monthly_summary(
         apply_recovery_pay_to_totals,
         calculate_recovery_pay_for_person,
     )
+    from core.clothing_pay import (
+        apply_clothing_pay_to_totals,
+        calculate_clothing_pay_for_person,
+    )
 
     holiday_payments = calculate_holiday_payments(
         conn, year, month, shabbat_cache, minimum_wage,
@@ -856,6 +908,7 @@ def calculate_monthly_summary(
         "calc150_shabbat_100": 0, "calc150_shabbat_50": 0,
         "holiday_payment": 0,
         "recovery_pay": 0,
+        "clothing_pay": 0,
         "vacation_payment": 0, "vacation_minutes": 0,
         "sick_payment": 0, "sick_minutes": 0,  # מחלה
         "rounded_total": 0  # סה"כ מעוגל - סכום השורות עם עיגול
@@ -914,6 +967,16 @@ def calculate_monthly_summary(
             housing_filter=housing_filter,
         )
         apply_recovery_pay_to_totals(monthly_totals, recovery_data)
+
+        clothing_data = calculate_clothing_pay_for_person(
+            conn_wrapper,
+            pid,
+            year,
+            month,
+            current_month_totals=monthly_totals,
+            housing_filter=housing_filter,
+        )
+        apply_clothing_pay_to_totals(monthly_totals, clothing_data)
 
         # הצג מדריכים עם שעות עבודה או תשלום כלשהו
         # (כשיש סינון לפי מערך דיור, גם השעות וגם רכיבי התשלום כבר מסוננים)

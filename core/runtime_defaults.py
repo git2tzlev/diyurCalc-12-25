@@ -11,12 +11,14 @@ from core.holiday_payment import (
 )
 from core.history import ensure_shift_time_overrides_history_table
 from core.logic import (
+    ensure_clothing_pay_code,
     ensure_holiday_payment_code,
     ensure_professional_support_code,
     ensure_recovery_pay_code,
     ensure_sick_payment_code,
 )
 from core.recovery_pay import ensure_recovery_pay_legacy_table
+from core.clothing_pay import ensure_clothing_pay_legacy_table
 from core.time_reports_audit import ensure_time_reports_audit_columns
 from core.payment_period import ensure_payment_period_columns
 from services.email_service import ensure_email_logs_table
@@ -32,8 +34,10 @@ def ensure_runtime_defaults_for_current_database() -> None:
         ensure_professional_support_code(conn.conn)
         ensure_holiday_payment_code(conn.conn)
         ensure_recovery_pay_code(conn.conn)
+        ensure_clothing_pay_code(conn.conn)
         ensure_holiday_payment_assignments_table(conn.conn)
         ensure_recovery_pay_legacy_table(conn.conn)
+        ensure_clothing_pay_legacy_table(conn.conn)
         ensure_special_days_holiday_payment_column(conn.conn)
         ensure_email_logs_table(conn.conn)
         ensure_gesher_export_files_table(conn.conn)

@@ -51,6 +51,14 @@ RECOVERY_PAY_DAILY_RATE = 451.5
 RECOVERY_PAY_FULL_TIME_MONTHLY_HOURS = 182
 RECOVERY_PAY_MAX_FTE = 1.0
 
+# Clothing Pay (דמי ביגוד)
+CLOTHING_PAY_INTERNAL_KEY = "clothing_pay"
+CLOTHING_PAY_MERAV_CODE = "107"
+CLOTHING_PAY_MONTH = 7
+CLOTHING_PAY_FULL_TIME_AMOUNT = 1812.0
+CLOTHING_PAY_FULL_TIME_MONTHLY_HOURS = 182
+CLOTHING_PAY_MAX_FTE = 1.0
+
 # =============================================================================
 # Shift ID Groups
 # =============================================================================

@@ -29,7 +29,11 @@ class TestRuntimeDefaults(unittest.TestCase):
             patch.object(runtime_defaults, "ensure_sick_payment_code") as sick,
             patch.object(runtime_defaults, "ensure_professional_support_code") as support,
             patch.object(runtime_defaults, "ensure_holiday_payment_code") as holiday,
+            patch.object(runtime_defaults, "ensure_recovery_pay_code") as recovery,
+            patch.object(runtime_defaults, "ensure_clothing_pay_code") as clothing,
             patch.object(runtime_defaults, "ensure_holiday_payment_assignments_table") as assignments,
+            patch.object(runtime_defaults, "ensure_recovery_pay_legacy_table") as recovery_legacy,
+            patch.object(runtime_defaults, "ensure_clothing_pay_legacy_table") as clothing_legacy,
             patch.object(runtime_defaults, "ensure_special_days_holiday_payment_column") as special_day,
             patch.object(runtime_defaults, "ensure_email_logs_table") as email_logs,
             patch.object(runtime_defaults, "ensure_gesher_export_files_table") as gesher_files,
@@ -41,7 +45,8 @@ class TestRuntimeDefaults(unittest.TestCase):
             runtime_defaults.ensure_runtime_defaults_for_current_database()
 
         for mock in (
-            sick, support, holiday, assignments, special_day,
+            sick, support, holiday, recovery, clothing, assignments,
+            recovery_legacy, clothing_legacy, special_day,
             email_logs, gesher_files, time_reports_audit, salary_audit, payment_period,
             shift_overrides_history,
         ):

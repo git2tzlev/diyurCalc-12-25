@@ -544,6 +544,7 @@ def export_excel(year: Optional[int] = None, month: Optional[int] = None) -> Res
                 'ת.מקצועי': round(totals.get('professional_support', 0), 2),
                 'תשלום חג 254': round(totals.get('holiday_payment', 0), 2),
                 'דמי הבראה 38': round(totals.get('recovery_pay', 0), 2),
+                'דמי ביגוד 107': round(totals.get('clothing_pay', 0), 2),
                 'סה"כ': round(totals.get('rounded_total', 0), 2),
             }
             summary_rows.append(row)
@@ -566,6 +567,7 @@ def export_excel(year: Optional[int] = None, month: Optional[int] = None) -> Res
             'חופשה נוצלה': grand_totals.get('vacation_days_taken', 0),
             'תשלום חג 254': round(grand_totals.get('holiday_payment', 0), 2),
             'דמי הבראה 38': round(grand_totals.get('recovery_pay', 0), 2),
+            'דמי ביגוד 107': round(grand_totals.get('clothing_pay', 0), 2),
         }]
         df_totals = pd.DataFrame(grand_totals_data)
         df_totals.to_excel(writer, sheet_name='סיכום כללי', index=False)

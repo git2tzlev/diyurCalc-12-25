@@ -53,6 +53,10 @@ from core.recovery_pay import (
     apply_recovery_pay_to_totals,
     calculate_recovery_pay_for_person,
 )
+from core.clothing_pay import (
+    apply_clothing_pay_to_totals,
+    calculate_clothing_pay_for_person,
+)
 from core.auth import enforce_housing_filter_guide_access
 from services.pdf_renderer import render_html_to_pdf_bytes
 from utils.utils import month_range_ts, format_currency, format_currency_total, human_date
@@ -393,6 +397,26 @@ def _inject_recovery_pay(
         housing_filter=housing_filter,
     )
     apply_recovery_pay_to_totals(monthly_totals, recovery_data)
+
+
+def _inject_clothing_pay(
+    conn,
+    monthly_totals: dict,
+    person_id: int,
+    year: int,
+    month: int,
+    housing_filter: int | None,
+) -> None:
+    """הזרקת דמי ביגוד ל-monthly_totals (in-place)."""
+    clothing_data = calculate_clothing_pay_for_person(
+        conn,
+        person_id,
+        year,
+        month,
+        current_month_totals=monthly_totals,
+        housing_filter=housing_filter,
+    )
+    apply_clothing_pay_to_totals(monthly_totals, clothing_data)
 
 
 def _as_date(value) -> date | None:
@@ -1161,6 +1185,10 @@ def guide_view(
                 conn, monthly_totals, person_id,
                 selected_year, selected_month, housing_filter,
             )
+            _inject_clothing_pay(
+                conn, monthly_totals, person_id,
+                selected_year, selected_month, housing_filter,
+            )
 
             # אישור אוטומטי של נסיעות מדריך מחליף
             start_dt, end_dt = month_range_ts(selected_year, selected_month)
@@ -1774,6 +1802,10 @@ def prepare_guide_pdf_data(
         conn, monthly_totals, person_id,
         year, month, housing_filter,
     )
+    _inject_clothing_pay(
+        conn, monthly_totals, person_id,
+        year, month, housing_filter,
+    )
     total_work_hours, standby_count = _apply_calculated_hours_to_shift_rows(
         shifts_data, daily_segments
     )
@@ -1836,6 +1868,17 @@ def prepare_guide_pdf_data(
         })
         total_additions += monthly_totals["recovery_pay"]
         total_additions_no_travel += monthly_totals["recovery_pay"]
+
+    if monthly_totals.get("clothing_pay"):
+        clothing_details = monthly_totals.get("clothing_pay_details", {}) or {}
+        payments_data.append({
+            "description": "דמי ביגוד",
+            "detail": f"{clothing_details.get('fte_percent', 0):.2f}% משרה",
+            "amount": round(monthly_totals["clothing_pay"], 2),
+            "work_hours": round(clothing_details.get("capped_hours", 0) or 0, 2),
+        })
+        total_additions += monthly_totals["clothing_pay"]
+        total_additions_no_travel += monthly_totals["clothing_pay"]
 
     # פירוט שורות תלוש/גשר שבהן יש פילוג תעריפים.
     # ב-ASD מציגים רק רכיבי שכר שבהם אותה שורת תלוש מורכבת מיותר מתעריף בסיס אחד.
@@ -2276,6 +2319,10 @@ def _prepare_chains_pdf_data(conn, person_id: int, year: int, month: int) -> Opt
         MINIMUM_WAGE, hf,
     )
     _inject_recovery_pay(
+        conn, monthly_totals, person_id,
+        year, month, hf,
+    )
+    _inject_clothing_pay(
         conn, monthly_totals, person_id,
         year, month, hf,
     )

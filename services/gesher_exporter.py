@@ -324,6 +324,7 @@ def load_export_config_from_db(conn) -> Dict[str, Tuple[str, str, str]]:
             'professional_support': 'money',
             'holiday_payment': 'money',
             'recovery_pay': 'money',
+            'clothing_pay': 'money_as_unit',
             'extras': 'money',
             'extras_for_pension': 'money',
             
@@ -433,6 +434,7 @@ def calculate_value(totals: Dict, internal_key: str, value_type: str, minimum_wa
     
     hours_XXX - שעות עם תעריף XXX% (מחזיר שעות ותעריף לשעה)
     money - סכום ישיר (מחזיר 0 וסכום)
+    money_as_unit - סכום ישיר ככמות 1 ותעריף מחושב
     days - ימים (מחזיר ימים ו-0)
     count - ספירה (מחזיר כמות ו-0)
     standby_with_rate - כוננויות (כמות ותעריף ממוצע)
@@ -442,6 +444,10 @@ def calculate_value(totals: Dict, internal_key: str, value_type: str, minimum_wa
     if value_type == 'money':
         # סכום ישיר - אין כמות, רק סכום
         return (0.0, round(raw_value, 2))
+
+    elif value_type == 'money_as_unit':
+        # רכיב סכומי שנדרש בגשר ככמות 1 ותעריף השווה לסכום המחושב.
+        return (1.0, round(raw_value, 2)) if raw_value > 0 else (0.0, 0.0)
     
     elif value_type.startswith('hours_'):
         # שעות עם תעריף - מחזיר שעות ותעריף לשעה

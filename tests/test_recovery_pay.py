@@ -10,6 +10,7 @@ from core.recovery_pay import (
     recovery_days_for_period,
     recovery_days_for_seniority,
     recovery_eligible_minutes_from_totals,
+    recovery_person_ineligibility_reason,
     seniority_years_for_recovery,
 )
 
@@ -43,6 +44,12 @@ def test_recovery_eligible_minutes_uses_full_sick_minutes_not_paid_part_only():
     }
 
     assert recovery_eligible_minutes_from_totals(totals) == 480
+
+
+def test_recovery_person_eligibility_ignores_current_active_flag():
+    person = {"housing_array_id": 1, "is_active": False}
+    assert recovery_person_ineligibility_reason(person) == ""
+    assert recovery_person_ineligibility_reason({**person, "housing_array_id": 2}) == "not_tzohar_halev"
 
 
 def test_recovery_days_by_seniority_brackets():
