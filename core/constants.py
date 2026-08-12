@@ -337,3 +337,13 @@ def calculate_weekday_work_minutes(start_min: int, end_min: int) -> int:
     standby_overlap = max(0, overlap_end - overlap_start)
 
     return total - standby_overlap
+
+
+# =============================================================================
+# Manual Completion Payments
+# =============================================================================
+
+# רכיבים שההשלמה שלהם משולמת ידנית במירב: אין להם סמל רטרו, ולכן ההשלמה
+# מחושבת ומוצגת בדוח ובמסך ההשלמות אך לעולם אינה נכתבת לקובץ הגשר.
+MANUAL_COMPLETION_SYMBOLS = {"243"}
+MANUAL_COMPLETION_COMPONENT_TYPE_IDS = {13}  # תומך מקצועי

@@ -24,11 +24,35 @@ COMPLETION_TARGET_SYMBOLS = {
     "pension": "317",
     "non_pension": "253",
 }
+# רכיבים שמועברים כהשלמה בסמל ייעודי משלהם, לפי מפתח פנימי ולא לפי סמל מקור
+# (סמלי המקור נשלפים מ-payment_codes וניתנים לעריכה במסך סמלי שכר).
+COMPLETION_PASSTHROUGH_TARGETS = {
+    "sick_days_taken": "414",
+    "vacation_days_taken": "427",
+    "sick_days_accrued": "410",
+    "vacation_days_accrued": "799",
+    "sick_payment": "306",
+    "vacation": "332",
+    "vacation_minutes": "332",
+}
+# רכיבים שההשלמה שלהם משולמת ידנית: מחושבים ומוצגים, אך נחסמים בכתיבה לגשר.
+# המיפוי לפי מפתח פנימי, כמו COMPLETION_PASSTHROUGH_TARGETS ומאותה סיבה.
+COMPLETION_MANUAL_TARGETS = {
+    "professional_support": "243",
+}
 COMPLETION_TARGET_DISPLAY_NAMES = {
+    "243": "תומך מקצועי - לתשלום ידני",
     "253": "הפרשי השלמות לא לפנסיה",
     "317": "הפרשי השלמות לפנסיה",
+    "306": "תשלום מחלה רטרו",
+    "332": "תשלום חופשה רטרו",
+    "410": "זכות מחלה רטרו",
+    "414": "ניצול מחלה רטרו",
+    "427": "ניצול חופשה רטרו",
+    "799": "זכות חופשה רטרו",
 }
-COMPLETION_QUANTITY_TARGET_SYMBOLS: set[str] = set()
+COMPLETION_QUANTITY_TARGET_SYMBOLS = {"410", "414", "427", "799"}
+COMPLETION_HOURS_TARGET_SYMBOLS = {"306", "332"}
 
 
 class CompletionGesherBlockedError(Exception):
@@ -245,8 +269,16 @@ def build_gesher_lines_from_summary(
     return result
 
 
-def _completion_target_for_source_symbol(symbol: Any) -> Optional[str]:
-    source_symbol = str(symbol or "").strip()
+def _completion_target_for_diff(diff: dict[str, Any]) -> Optional[str]:
+    """סמל היעד של שורת הפרש - רטרו ייעודי, תשלום ידני, אחרת פנסיה/לא פנסיה."""
+    internal_key = str(diff.get("internal_key") or "").strip()
+    passthrough = COMPLETION_PASSTHROUGH_TARGETS.get(internal_key)
+    if passthrough:
+        return passthrough
+    manual = COMPLETION_MANUAL_TARGETS.get(internal_key)
+    if manual:
+        return manual
+    source_symbol = str(diff.get("symbol") or "").strip()
     if source_symbol in COMPLETION_PENSION_SOURCE_SYMBOLS:
         return COMPLETION_TARGET_SYMBOLS["pension"]
     if source_symbol in COMPLETION_NON_PENSION_SOURCE_SYMBOLS:
@@ -254,26 +286,59 @@ def _completion_target_for_source_symbol(symbol: Any) -> Optional[str]:
     return None
 
 
+def _is_significant_completion_value(
+    target_symbol: str,
+    quantity: float,
+    amount: float,
+) -> bool:
+    """סמלי ימים ושעות נמדדים לפי כמות, סמלי כסף לפי סכום."""
+    if target_symbol in COMPLETION_QUANTITY_TARGET_SYMBOLS | COMPLETION_HOURS_TARGET_SYMBOLS:
+        return abs(quantity) >= QUANTITY_EPSILON
+    return abs(amount) >= MONEY_EPSILON
+
+
+def finalize_completion_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """קביעת שם תצוגה, כמות, תעריף וסכום לכל שורת השלמה לפי סוג סמל היעד."""
+    for row in rows:
+        symbol = str(row.get("symbol") or "")
+        row["display_name"] = COMPLETION_TARGET_DISPLAY_NAMES.get(symbol, "הפרשי השלמות")
+        if symbol in COMPLETION_QUANTITY_TARGET_SYMBOLS:
+            row["quantity"] = round(float(row.get("quantity") or 0), 2)
+            row["rate"] = 0.0
+            row["amount"] = 0.0
+        elif symbol in COMPLETION_HOURS_TARGET_SYMBOLS:
+            row["quantity"] = round(float(row.get("quantity") or 0), 2)
+            row["rate"] = round(float(row.get("rate") or 0), 2)
+            row["amount"] = round(row["quantity"] * row["rate"], 2)
+        else:
+            row["quantity"] = 0.0
+            row["rate"] = round(float(row.get("amount") or 0), 2)
+    return rows
+
+
 def build_completion_gesher_rows(diffs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Aggregate completion differences into the target Gesher symbols."""
-    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    grouped: dict[tuple[str, str, str, float], dict[str, Any]] = {}
     for diff in diffs:
-        target_symbol = _completion_target_for_source_symbol(diff.get("symbol"))
+        target_symbol = _completion_target_for_diff(diff)
         if not target_symbol:
             continue
         amount_diff = round(float(diff.get("amount_diff") or 0), 2)
         quantity_diff = round(float(diff.get("quantity_diff") or 0), 2)
-        if target_symbol in COMPLETION_QUANTITY_TARGET_SYMBOLS:
-            if abs(quantity_diff) < QUANTITY_EPSILON:
-                continue
-        elif abs(amount_diff) < MONEY_EPSILON:
+        if not _is_significant_completion_value(target_symbol, quantity_diff, amount_diff):
             continue
         employee_code = _clean_employee_code(diff.get("employee_code"))
         if not employee_code:
             continue
 
         employer_code = str(diff.get("employer_code") or "001").strip() or "001"
-        key = (employer_code, employee_code, target_symbol)
+        # סמלי שעות משלמים כמות בתעריף של חודש העבודה, לכן תעריפים שונים אינם מתמזגים
+        group_rate = (
+            round(float(diff.get("rate") or 0), 2)
+            if target_symbol in COMPLETION_HOURS_TARGET_SYMBOLS
+            else 0.0
+        )
+        key = (employer_code, employee_code, target_symbol, group_rate)
         if key not in grouped:
             grouped[key] = {
                 "employer_code": employer_code,
@@ -281,6 +346,7 @@ def build_completion_gesher_rows(diffs: list[dict[str, Any]]) -> list[dict[str, 
                 "person_id": diff.get("person_id"),
                 "person_name": diff.get("person_name", ""),
                 "symbol": target_symbol,
+                "rate": group_rate,
                 "amount": 0.0,
                 "quantity": 0.0,
                 "source_symbols": set(),
@@ -291,36 +357,12 @@ def build_completion_gesher_rows(diffs: list[dict[str, Any]]) -> list[dict[str, 
 
     rows = []
     for row in grouped.values():
-        if row["symbol"] in COMPLETION_QUANTITY_TARGET_SYMBOLS:
-            if abs(float(row["quantity"])) < QUANTITY_EPSILON:
-                continue
-        elif abs(float(row["amount"])) < MONEY_EPSILON:
+        if not _is_significant_completion_value(row["symbol"], row["quantity"], row["amount"]):
             continue
         row["source_symbols"] = ", ".join(sorted(row["source_symbols"]))
         rows.append(row)
 
-    return sorted(rows, key=lambda row: (row["employee_code"], row["symbol"]))
-
-
-def build_completion_gesher_file(rows: list[dict[str, Any]], year: int, month: int, company_code: Optional[str] = None) -> str:
-    """Build a Gesher-format file for aggregated completion differences."""
-    company = company_code or gesher_exporter.get_export_options()["default_company"]
-    text = gesher_exporter.format_gesher_header(company, year, month) + "\r\n"
-    for row in rows:
-        symbol = str(row.get("symbol") or "")
-        if symbol in COMPLETION_QUANTITY_TARGET_SYMBOLS:
-            quantity = round(float(row.get("quantity") or 0), 2)
-            rate = 0.0
-        else:
-            quantity = 0.0
-            rate = round(float(row["amount"]), 2)
-        text += gesher_exporter.format_gesher_line(
-            employee_code=int(row["employee_code"]),
-            symbol=symbol,
-            quantity=quantity,
-            rate=rate,
-        ) + "\r\n"
-    return text
+    return sorted(rows, key=lambda row: (row["employee_code"], row["symbol"], row["rate"]))
 
 
 def _build_unverified_completion_diffs(
@@ -467,19 +509,32 @@ def build_approved_completion_gesher_rows(
         completion_items=legacy_items,
     )
     rows = _merge_completion_rows(event_result["rows"], legacy_result["rows"])
+    invalid_notices = [
+        {
+            "type": "invalid_salary_impact_event",
+            "message": event.get("validation_error"),
+            "event_id": event.get("id"),
+            "person_name": event.get("person_name") or "",
+            "work_year": event.get("work_year"),
+            "work_month": event.get("work_month"),
+            "company_code": event.get("employer_code") or "001",
+        }
+        for event in event_result["invalid_events"]
+        if event.get("status") == "included_in_export"
+    ]
+    missing_code_warnings = [
+        notice for notice in invalid_notices
+        if notice.get("message") == "חסר קוד מירב למדריך"
+    ]
+    invalid_blocks = [
+        notice for notice in invalid_notices
+        if notice.get("message") != "חסר קוד מירב למדריך"
+    ]
     result = {
         **event_result,
         "rows": rows,
-        "blocks": [
-            {
-                "type": "invalid_salary_impact_event",
-                "message": event.get("validation_error"),
-                "event_id": event.get("id"),
-                "company_code": event.get("employer_code") or "001",
-            }
-            for event in event_result["invalid_events"]
-            if event.get("status") == "included_in_export"
-        ] + legacy_result["blocks"],
+        "blocks": invalid_blocks + legacy_result["blocks"],
+        "warnings": missing_code_warnings,
         "items": event_result["events"] + legacy_items,
         "legacy_items": legacy_items,
         "approved_files": legacy_result["approved_files"],
@@ -537,22 +592,27 @@ def get_legacy_completion_items(
 
 def _merge_completion_rows(*row_groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Merge event and legacy amounts without losing their employee scope."""
-    grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
+    grouped: dict[tuple[str, str, str, float], dict[str, Any]] = {}
     for rows in row_groups:
         for source_row in rows:
             row = dict(source_row)
             row_amount = float(row.get("amount") or 0)
             row_quantity = float(row.get("quantity") or 0)
             row_source_symbols = str(row.get("source_symbols") or "")
+            symbol = str(row.get("symbol") or "")
             key = (
                 str(row.get("employer_code") or "001"),
                 _clean_employee_code(row.get("employee_code")),
-                str(row.get("symbol") or ""),
+                symbol,
+                round(float(row.get("rate") or 0), 2)
+                if symbol in COMPLETION_HOURS_TARGET_SYMBOLS
+                else 0.0,
             )
             if not key[1] or not key[2]:
                 continue
             if key not in grouped:
                 grouped[key] = row
+                grouped[key]["rate"] = key[3]
                 grouped[key]["amount"] = 0.0
                 grouped[key]["quantity"] = 0.0
                 grouped[key]["source_symbols"] = set()
@@ -569,13 +629,12 @@ def _merge_completion_rows(*row_groups: list[dict[str, Any]]) -> list[dict[str, 
             )
     result = []
     for row in grouped.values():
-        if abs(float(row.get("amount") or 0)) < MONEY_EPSILON:
+        if not _is_significant_completion_value(row["symbol"], row["quantity"], row["amount"]):
             continue
         row["source_symbols"] = ", ".join(sorted(row["source_symbols"]))
-        row["rate"] = round(float(row["amount"]), 2)
-        row["quantity"] = 0.0
         result.append(row)
-    return sorted(result, key=lambda row: (row["employee_code"], row["symbol"]))
+    finalize_completion_rows(result)
+    return sorted(result, key=lambda row: (row["employee_code"], row["symbol"], row["rate"]))
 
 
 def build_legacy_completion_gesher_rows_from_final_file(
@@ -783,17 +842,7 @@ def build_legacy_completion_gesher_rows_from_final_file(
             row for row in rows
             if str(row.get("employer_code") or "001") == str(company_code)
         ]
-    for row in rows:
-        row["display_name"] = COMPLETION_TARGET_DISPLAY_NAMES.get(
-            str(row.get("symbol") or ""),
-            "הפרשי השלמות",
-        )
-        if str(row.get("symbol") or "") in COMPLETION_QUANTITY_TARGET_SYMBOLS:
-            row["quantity"] = round(float(row.get("quantity") or 0), 2)
-            row["rate"] = 0.0
-        else:
-            row["quantity"] = 0.0
-            row["rate"] = round(float(row.get("amount") or 0), 2)
+    finalize_completion_rows(rows)
 
     return {
         "rows": rows,
@@ -961,5 +1010,374 @@ def build_difference_excel(
         pd.DataFrame(_completion_rows(completions)).to_excel(writer, sheet_name="רשימת השלמות", index=False)
         pd.DataFrame(file_rows).to_excel(writer, sheet_name="פרטי קובץ בסיס", index=False)
 
+    output.seek(0)
+    return output.getvalue()
+
+
+COMPLETION_AUDIT_EXPECTED_STATUSES = ("open", "included_in_export")
+COMPLETION_AUDIT_INACTIVE_STATUSES = ("ignored", "cancelled", "superseded")
+COMPLETION_AUDIT_ALL_STATUSES = (
+    *COMPLETION_AUDIT_EXPECTED_STATUSES,
+    *COMPLETION_AUDIT_INACTIVE_STATUSES,
+)
+
+
+def _audit_row_groups(rows: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, Any]]:
+    """Aggregate completion rows for a stable employee+symbol audit comparison."""
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    for source in rows:
+        employee_code = _clean_employee_code(source.get("employee_code"))
+        symbol = str(source.get("symbol") or "").strip()
+        if not employee_code or not symbol:
+            continue
+        key = (employee_code, symbol)
+        row = grouped.setdefault(key, {
+            "employee_code": employee_code,
+            "person_id": source.get("person_id"),
+            "person_name": source.get("person_name") or "",
+            "symbol": symbol,
+            "display_name": source.get("display_name") or COMPLETION_TARGET_DISPLAY_NAMES.get(
+                symbol, "הפרשי השלמות"
+            ),
+            "quantity": 0.0,
+            "amount": 0.0,
+            "rates": set(),
+        })
+        if not row.get("person_id") and source.get("person_id"):
+            row["person_id"] = source.get("person_id")
+        if not row.get("person_name") and source.get("person_name"):
+            row["person_name"] = source.get("person_name")
+        row["quantity"] = round(row["quantity"] + float(source.get("quantity") or 0), 2)
+        row["amount"] = round(row["amount"] + float(source.get("amount") or 0), 2)
+        row["rates"].add(round(float(source.get("rate") or 0), 2))
+    return grouped
+
+
+def compare_completion_audit_rows(
+    expected_rows: list[dict[str, Any]],
+    actual_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Classify expected versus actual completion export rows."""
+    expected = _audit_row_groups(expected_rows)
+    actual = _audit_row_groups(actual_rows)
+    result = []
+    for key in sorted(set(expected) | set(actual)):
+        wanted = expected.get(key)
+        found = actual.get(key)
+        row = dict(wanted or found or {})
+        expected_quantity = round(float(wanted.get("quantity") if wanted else 0), 2)
+        expected_amount = round(float(wanted.get("amount") if wanted else 0), 2)
+        actual_quantity = round(float(found.get("quantity") if found else 0), 2)
+        actual_amount = round(float(found.get("amount") if found else 0), 2)
+        expected_rates = sorted(wanted.get("rates", set())) if wanted else []
+        actual_rates = sorted(found.get("rates", set())) if found else []
+        if wanted is None:
+            category = "extra"
+        elif found is None:
+            category = "missing"
+        elif (
+            abs(expected_quantity - actual_quantity) >= QUANTITY_EPSILON
+            or abs(expected_amount - actual_amount) >= MONEY_EPSILON
+        ):
+            category = "mismatch"
+        else:
+            category = "matched"
+        row.update({
+            "category": category,
+            "expected_quantity": expected_quantity,
+            "expected_amount": expected_amount,
+            "expected_rates": expected_rates,
+            "actual_quantity": actual_quantity,
+            "actual_amount": actual_amount,
+            "actual_rates": actual_rates,
+            "quantity_difference": round(actual_quantity - expected_quantity, 2),
+            "amount_difference": round(actual_amount - expected_amount, 2),
+        })
+        row.pop("rates", None)
+        result.append(row)
+    return result
+
+
+def _event_as_completion_item(event: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **event,
+        "id": event.get("source_id"),
+        "item_type": (
+            "time_report" if event.get("source_table") == "time_reports"
+            else "payment_component"
+        ),
+    }
+
+
+def build_completion_gesher_audit(
+    conn,
+    payment_year: int,
+    payment_month: int,
+    *,
+    housing_array_id: Optional[int] = None,
+) -> dict[str, Any]:
+    """Audit all payment-month completions against the latest final work-month files."""
+    from services.salary_impact import build_salary_impact_completion_rows, get_salary_impact_events
+
+    all_events = get_salary_impact_events(
+        conn,
+        payment_year,
+        payment_month,
+        housing_array_id=housing_array_id,
+        statuses=COMPLETION_AUDIT_ALL_STATUSES,
+    )
+    expected_event_result = build_salary_impact_completion_rows(
+        conn,
+        payment_year,
+        payment_month,
+        statuses=COMPLETION_AUDIT_EXPECTED_STATUSES,
+        housing_array_id=housing_array_id,
+    )
+    completion_data = get_payment_period_completions(
+        conn, payment_year, payment_month, housing_array_id=housing_array_id
+    )
+    legacy_items = get_legacy_completion_items(
+        conn,
+        completion_data["items"],
+        payment_year=payment_year,
+        payment_month=payment_month,
+    )
+
+    group_items: dict[tuple[int, int, str], list[dict[str, Any]]] = defaultdict(list)
+    for event in all_events:
+        if event.get("work_year") and event.get("work_month"):
+            key = (
+                int(event["work_year"]), int(event["work_month"]),
+                str(event.get("employer_code") or "001"),
+            )
+            group_items[key].append(_event_as_completion_item(event))
+    for item in legacy_items:
+        if item.get("work_year") and item.get("work_month"):
+            key = (
+                int(item["work_year"]), int(item["work_month"]),
+                str(item.get("employer_code") or "001"),
+            )
+            group_items[key].append(item)
+
+    groups = []
+    all_entries = []
+    for (work_year, work_month, company_code), items in sorted(group_items.items()):
+        final_files = [
+            row for row in list_gesher_export_files(
+                conn,
+                year=work_year,
+                month=work_month,
+                company_code=company_code,
+                housing_array_id=housing_array_id,
+            )
+            if row.get("is_final") and not row.get("is_cancelled")
+        ]
+        group = {
+            "work_year": work_year,
+            "work_month": work_month,
+            "company_code": company_code,
+            "file_id": None,
+            "filename": "",
+            "status": "checked",
+            "entries": [],
+        }
+        if not final_files:
+            group.update({"status": "skipped", "reason": "אין קובץ גשר סופי"})
+            groups.append(group)
+            continue
+        file_row = get_gesher_export_file(
+            conn, int(final_files[0]["id"]), housing_array_id=housing_array_id
+        )
+        if not file_row or file_row.get("is_cancelled") or not file_row.get("is_final"):
+            group.update({"status": "skipped", "reason": "קובץ הגשר הסופי אינו זמין"})
+            groups.append(group)
+            continue
+        group["file_id"] = file_row.get("id")
+        group["filename"] = file_row.get("filename") or ""
+
+        paid_lines = enrich_paid_lines(conn, parse_gesher_file_lines(file_row.get("content") or ""))
+        file_person_ids = _file_person_ids(file_row)
+        current_lines = build_current_gesher_lines(
+            conn, work_year, work_month,
+            company_code=company_code,
+            person_ids=file_person_ids,
+        )
+        paid_employee_codes = {line["employee_code"] for line in paid_lines}
+        current_employee_codes = {line["employee_code"] for line in current_lines}
+        actual_diffs = compare_line_sets(paid_lines, current_lines)
+        for diff in actual_diffs:
+            diff["employer_code"] = company_code
+        actual_rows = finalize_completion_rows(build_completion_gesher_rows(actual_diffs))
+
+        event_diffs = [
+            diff for diff in expected_event_result["diffs"]
+            if int(diff.get("work_year") or 0) == work_year
+            and int(diff.get("work_month") or 0) == work_month
+            and str(diff.get("employer_code") or "001") == company_code
+        ]
+        expected_rows = finalize_completion_rows(build_completion_gesher_rows(event_diffs))
+        legacy_group = [item for item in legacy_items if item in items]
+        if legacy_group:
+            legacy_people = {int(item["person_id"]) for item in legacy_group if item.get("person_id")}
+            legacy_diffs = _build_current_completion_diffs(
+                conn, work_year, work_month, company_code, legacy_group,
+                person_ids=legacy_people or None,
+                diff_type="השלמה בחישוב ישן",
+            )
+            expected_rows = _merge_completion_rows(
+                expected_rows,
+                finalize_completion_rows(build_completion_gesher_rows(legacy_diffs)),
+            )
+
+        entries = compare_completion_audit_rows(expected_rows, actual_rows)
+        for entry in entries:
+            employee_code = entry.get("employee_code") or ""
+            if entry["category"] == "matched":
+                reason_category = "matched"
+            elif employee_code not in paid_employee_codes and employee_code in current_employee_codes:
+                reason_category = "new_in_current"
+            elif employee_code in paid_employee_codes and employee_code not in current_employee_codes:
+                reason_category = "removed_from_current"
+            elif entry["category"] == "extra":
+                reason_category = "untracked_bridge_difference"
+            elif entry["category"] == "missing":
+                reason_category = "expected_not_in_bridge_difference"
+            else:
+                reason_category = "value_mismatch"
+            entry["reason_category"] = reason_category
+        for entry in entries:
+            entry.update({
+                "work_year": work_year,
+                "work_month": work_month,
+                "company_code": company_code,
+                "filename": group["filename"],
+            })
+        group["entries"] = entries
+        group["status"] = "matched" if all(
+            entry["category"] == "matched" for entry in entries
+        ) else "issues"
+        groups.append(group)
+        all_entries.extend(entries)
+
+    invalid_events = [
+        event for event in expected_event_result["invalid_events"]
+        if event.get("status") in COMPLETION_AUDIT_EXPECTED_STATUSES
+    ]
+    for event in invalid_events:
+        entry = {
+            "category": "missing",
+            "reason_category": "invalid_event",
+            "employee_code": _clean_employee_code(event.get("meirav_code")),
+            "person_id": event.get("person_id"),
+            "person_name": event.get("person_name") or "",
+            "symbol": "",
+            "display_name": event.get("validation_error") or "אירוע השלמה לא תקין",
+            "expected_quantity": 0.0,
+            "expected_amount": 0.0,
+            "expected_rates": [],
+            "actual_quantity": 0.0,
+            "actual_amount": 0.0,
+            "actual_rates": [],
+            "quantity_difference": 0.0,
+            "amount_difference": 0.0,
+            "work_year": event.get("work_year"),
+            "work_month": event.get("work_month"),
+            "company_code": str(event.get("employer_code") or "001"),
+            "filename": "",
+        }
+        for group in groups:
+            if (
+                group["work_year"] == event.get("work_year")
+                and group["work_month"] == event.get("work_month")
+                and group["company_code"] == entry["company_code"]
+            ):
+                group["entries"].append(entry)
+                if group["status"] != "skipped":
+                    group["status"] = "issues"
+                break
+        all_entries.append(entry)
+
+    counts = {category: 0 for category in (
+        "missing", "extra", "mismatch", "unrelated", "skipped", "matched"
+    )}
+    for entry in all_entries:
+        counts[entry["category"]] += 1
+    counts["skipped"] = sum(group["status"] == "skipped" for group in groups)
+    issue_count = sum(counts[key] for key in ("missing", "extra", "mismatch"))
+    return {
+        "payment_year": payment_year,
+        "payment_month": payment_month,
+        "is_valid": issue_count == 0,
+        "counts": counts,
+        "checked_groups": sum(group["status"] != "skipped" for group in groups),
+        "skipped_groups": counts["skipped"],
+        "groups": groups,
+        "entries": all_entries,
+        "invalid_events": [
+            {
+                "id": event.get("id"),
+                "person_name": event.get("person_name") or "",
+                "work_year": event.get("work_year"),
+                "work_month": event.get("work_month"),
+                "message": event.get("validation_error") or "",
+            }
+            for event in invalid_events
+        ],
+    }
+
+
+def build_completion_gesher_audit_excel(result: dict[str, Any]) -> bytes:
+    """Export the already-calculated audit result without changing its findings."""
+    labels = {
+        "missing": "חסר", "extra": "מיותר", "mismatch": "אי התאמה",
+        "unrelated": "שינוי לא קשור", "matched": "תואם",
+    }
+    reason_labels = {
+        "new_in_current": "המדריך לא היה בגשר הקודם וכעת נמצא",
+        "removed_from_current": "המדריך היה בגשר הקודם וכעת אינו נמצא",
+        "untracked_bridge_difference": "הפרש בגשר ללא השלמה רשומה",
+        "expected_not_in_bridge_difference": "השלמה בעמוד שלא נמצאה בהשוואת הגשר",
+        "value_mismatch": "אי התאמה בסכום או בכמות",
+        "invalid_event": "לא ניתן לבדוק בגלל נתונים חסרים",
+        "matched": "התאמה מלאה",
+    }
+    detail_rows = []
+    for row in result.get("entries", []):
+        symbol = str(row.get("symbol") or "")
+        is_quantity = symbol in COMPLETION_QUANTITY_TARGET_SYMBOLS
+        expected_value = float(
+            (row.get("expected_quantity") if is_quantity else row.get("expected_amount")) or 0
+        )
+        actual_value = float(
+            (row.get("actual_quantity") if is_quantity else row.get("actual_amount")) or 0
+        )
+        detail_rows.append({
+            "תוצאה": labels.get(row.get("category"), row.get("category", "")),
+            "מקור ההבדל": reason_labels.get(
+                row.get("reason_category"), row.get("reason_category", "")
+            ),
+            "חודש עבודה": f"{int(row.get('work_month') or 0):02d}/{row.get('work_year') or ''}",
+            "מעסיק": row.get("company_code", ""),
+            "קובץ גשר": row.get("filename", ""),
+            "מדריך": row.get("person_name", ""),
+            "קוד מירב": row.get("employee_code", ""),
+            "סמל": symbol,
+            "רכיב": row.get("display_name", ""),
+            "יחידה": "ימים" if is_quantity else "₪",
+            "חישוב ההשלמות בעמוד": round(expected_value, 2),
+            "השוואת הגשר": round(actual_value, 2),
+            "פער": round(actual_value - expected_value, 2),
+        })
+    group_rows = [{
+        "חודש עבודה": f"{group['work_month']:02d}/{group['work_year']}",
+        "מעסיק": group["company_code"],
+        "סטטוס": group["status"],
+        "קובץ גשר": group.get("filename", ""),
+        "סיבה": group.get("reason", ""),
+    } for group in result.get("groups", [])]
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        pd.DataFrame(detail_rows).to_excel(writer, sheet_name="פירוט בדיקה", index=False)
+        pd.DataFrame(group_rows).to_excel(writer, sheet_name="חודשי עבודה", index=False)
     output.seek(0)
     return output.getvalue()
