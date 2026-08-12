@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import logging
 
+from core.constants import MANUAL_COMPLETION_COMPONENT_TYPE_IDS
+
 logger = logging.getLogger(__name__)
 
 
@@ -173,10 +175,15 @@ def _ensure_salary_impact_events(cursor) -> None:
 
 def _ensure_salary_impact_capture(cursor) -> None:
     """Capture explicitly marked late report/component mutations from audit rows."""
-    cursor.execute("""
+    manual_component_ids = ", ".join(
+        str(component_type_id)
+        for component_type_id in sorted(MANUAL_COMPLETION_COMPONENT_TYPE_IDS)
+    )
+    cursor.execute(f"""
         CREATE OR REPLACE FUNCTION capture_salary_impact_from_audit()
         RETURNS trigger AS $$
         DECLARE
+            status_value text;
             row_data jsonb;
             work_date_value date;
             payment_year_value integer;
@@ -224,13 +231,23 @@ def _ensure_salary_impact_capture(cursor) -> None:
             SELECT housing_array_id INTO housing_value FROM apartments WHERE id = apartment_value;
             event_name := CASE NEW.action WHEN 'INSERT' THEN 'created' WHEN 'UPDATE' THEN 'updated' ELSE 'deleted' END;
             domain_name := CASE NEW.table_name WHEN 'time_reports' THEN 'report' ELSE 'payment_component' END;
+            -- רכיבים שההשלמה שלהם משולמת ידנית אינם יוצאים לגשר, ולכן אין מה לאשר
+            status_value := CASE
+                WHEN NEW.table_name = 'payment_components'
+                     AND NULLIF(row_data ->> 'component_type_id', '')::integer
+                         IN ({manual_component_ids})
+                THEN 'included_in_export'
+                ELSE 'open'
+            END;
 
             INSERT INTO salary_impact_events (
+                status,
                 event_domain, event_type, source_table, source_id, source_action,
                 person_id, apartment_id, housing_array_id, work_date, work_year, work_month,
                 payment_year, payment_month, old_data, new_data, changed_fields,
                 reason, audit_log_id, actor_person_id, actor_kind, actor_label, created_by
             ) VALUES (
+                status_value,
                 domain_name, event_name, NEW.table_name, source_value, NEW.action,
                 NULLIF(row_data ->> 'person_id', '')::integer,
                 apartment_value, housing_value, work_date_value,

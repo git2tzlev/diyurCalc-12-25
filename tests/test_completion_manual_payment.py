@@ -194,5 +194,46 @@ class ManualCompletionAuditTests(unittest.TestCase):
         self.assertEqual(entries, [])
 
 
+class _RecordingCursor:
+    """קורסור מדומה שאוסף את פקודות ה-SQL שנשלחו אליו."""
+
+    def __init__(self):
+        self.statements: list[str] = []
+
+    def execute(self, sql, params=None):
+        self.statements.append(sql)
+
+
+class ManualCompletionAutoApprovalTests(unittest.TestCase):
+    """הטריגר מסמן אירוע של רכיב ידני כמאושר לייצוא כבר ביצירה."""
+
+    def _trigger_sql(self) -> str:
+        from core import audit
+
+        cursor = _RecordingCursor()
+        audit._ensure_salary_impact_capture(cursor)
+        function_statements = [
+            statement for statement in cursor.statements
+            if "capture_salary_impact_from_audit()" in statement
+            and "CREATE OR REPLACE FUNCTION" in statement
+        ]
+        self.assertEqual(len(function_statements), 1)
+        return function_statements[0]
+
+    def test_trigger_selects_the_status_by_component_type(self):
+        sql = self._trigger_sql()
+        self.assertIn("status_value", sql)
+        self.assertIn("'included_in_export'", sql)
+
+    def test_trigger_embeds_the_manual_component_ids_from_the_shared_constant(self):
+        sql = self._trigger_sql()
+        for component_type_id in MANUAL_COMPLETION_COMPONENT_TYPE_IDS:
+            self.assertIn(f"IN ({component_type_id})", sql)
+
+    def test_trigger_inserts_the_status_column(self):
+        sql = self._trigger_sql()
+        self.assertIn("INSERT INTO salary_impact_events (\n                status,", sql)
+
+
 if __name__ == "__main__":
     unittest.main()
