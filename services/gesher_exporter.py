@@ -10,7 +10,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
 
-from core.constants import TZOHAR_HALEV_HOUSING_ARRAY_ID
+from core.constants import MANUAL_COMPLETION_SYMBOLS, TZOHAR_HALEV_HOUSING_ARRAY_ID
 from core.database import get_housing_array_filter, get_multi_housing_guides
 from core.history import get_minimum_wage_for_month
 
@@ -24,13 +24,28 @@ EXCLUDED_EXPORT_CODES = {'130', '199'}
 
 COMPLETION_EXPORT_CODES = {
     "253": ("completion_non_pension", "money", "הפרשי השלמות לא לפנסיה"),
+    "306": ("completion_sick_pay", "completion_hours", "תשלום מחלה רטרו"),
     "317": ("completion_pension", "money", "הפרשי השלמות לפנסיה"),
+    "332": ("completion_vacation_pay", "completion_hours", "תשלום חופשה רטרו"),
+    "410": ("completion_sick_entitlement", "completion_days", "זכות מחלה רטרו"),
+    "414": ("completion_sick_days", "completion_days", "ניצול מחלה רטרו"),
+    "427": ("completion_vacation_days", "completion_days", "ניצול חופשה רטרו"),
+    "799": ("completion_vacation_entitlement", "completion_days", "זכות חופשה רטרו"),
 }
 
 COMPLETION_TOTAL_KEYS = {
-    "253": "completion_non_pension",
-    "317": "completion_pension",
+    symbol: value_tuple[0]
+    for symbol, value_tuple in COMPLETION_EXPORT_CODES.items()
 }
+
+
+def completion_days_total_keys() -> set:
+    """מפתחות הסיכום של רכיבי השלמה שהם ימים בלבד - לתצוגה ללא תעריף ותשלום."""
+    return {
+        internal_key
+        for internal_key, value_type, _display_name in COMPLETION_EXPORT_CODES.values()
+        if value_type == "completion_days"
+    }
 
 
 def with_completion_export_codes(export_codes: Dict[str, Tuple[str, str, str]]) -> Dict[str, Tuple[str, str, str]]:
@@ -58,6 +73,9 @@ def append_completion_rows_to_preview(preview: List[Dict], completion_rows: List
     }
 
     for row in completion_rows:
+        # התצוגה המקדימה חייבת להיות זהה לקובץ, ולכן מדלגת על שורות ידניות
+        if str(row.get("symbol") or "") in MANUAL_COMPLETION_SYMBOLS:
+            continue
         person = by_person_id.get(row.get("person_id"))
         employee_code = "".join(ch for ch in str(row.get("employee_code") or "") if ch.isdigit()).zfill(6)
         if person is None and employee_code:
@@ -77,12 +95,7 @@ def append_completion_rows_to_preview(preview: List[Dict], completion_rows: List
 
         symbol = str(row.get("symbol") or "")
         key, value_type, _ = COMPLETION_EXPORT_CODES.get(symbol, ("completion_difference", "money", ""))
-        if value_type == "money":
-            quantity = 0.0
-            payment = round(float(row.get("amount") or 0), 2)
-        else:
-            quantity = round(float(row.get("quantity") or 0), 2)
-            payment = 0.0
+        quantity, payment = _completion_quantity_and_rate(row)
 
         person.setdefault("lines", []).append({
             "symbol": symbol,
@@ -99,10 +112,13 @@ def append_completion_rows_to_preview(preview: List[Dict], completion_rows: List
 
 
 def _completion_quantity_and_rate(row: Dict[str, Any]) -> tuple[float, float]:
+    """כמות ותעריף של שורת השלמה לפי סוג הסמל: כסף, ימים או שעות בתעריף."""
     symbol = str(row.get("symbol") or "")
     value_type = COMPLETION_EXPORT_CODES.get(symbol, ("", "money", ""))[1]
     if value_type == "money":
         return 0.0, round(float(row.get("amount") or 0), 2)
+    if value_type == "completion_hours":
+        return round(float(row.get("quantity") or 0), 2), round(float(row.get("rate") or 0), 2)
     return round(float(row.get("quantity") or 0), 2), 0.0
 
 
@@ -112,29 +128,45 @@ def _clean_employee_code(value: Any) -> str:
 
 
 def empty_completion_totals() -> Dict[str, float]:
-    return {
-        "completion_non_pension": 0.0,
-        "completion_pension": 0.0,
-        "completion_retro_money_total": 0.0,
-    }
+    totals: Dict[str, float] = {"completion_retro_money_total": 0.0}
+    for symbol, (key, value_type, _display_name) in COMPLETION_EXPORT_CODES.items():
+        totals[key] = 0.0
+        if value_type == "completion_hours":
+            totals[f"{key}_quantity"] = 0.0
+            totals[f"{key}_rate"] = 0.0
+    return totals
+
+
+def _add_completion_money_to_totals(totals: Dict[str, Any], key: str, value: float) -> None:
+    totals[key] = round(float(totals.get(key) or 0) + value, 2)
+    totals["completion_retro_money_total"] = round(
+        float(totals.get("completion_retro_money_total") or 0) + value,
+        2,
+    )
+    for total_key in ("total_payment", "gesher_total", "display_total", "rounded_total"):
+        if total_key in totals:
+            totals[total_key] = round(float(totals.get(total_key) or 0) + value, 2)
 
 
 def add_completion_row_to_totals(totals: Dict[str, Any], row: Dict[str, Any]) -> None:
+    """צבירת שורת השלמה לסיכומים החודשיים לפי סוג הסמל."""
     symbol = str(row.get("symbol") or "")
     key = COMPLETION_TOTAL_KEYS.get(symbol)
     if not key:
         return
     value_type = COMPLETION_EXPORT_CODES.get(symbol, ("", "money", ""))[1]
     if value_type == "money":
-        value = round(float(row.get("amount") or 0), 2)
-        totals[key] = round(float(totals.get(key) or 0) + value, 2)
-        totals["completion_retro_money_total"] = round(
-            float(totals.get("completion_retro_money_total") or 0) + value,
-            2,
-        )
-        for total_key in ("total_payment", "gesher_total", "display_total", "rounded_total"):
-            if total_key in totals:
-                totals[total_key] = round(float(totals.get(total_key) or 0) + value, 2)
+        _add_completion_money_to_totals(totals, key, round(float(row.get("amount") or 0), 2))
+    elif value_type == "completion_hours":
+        quantity = round(float(row.get("quantity") or 0), 2)
+        rate = round(float(row.get("rate") or 0), 2)
+        _add_completion_money_to_totals(totals, key, round(quantity * rate, 2))
+        quantity_key = f"{key}_quantity"
+        rate_key = f"{key}_rate"
+        previous_rate = round(float(totals.get(rate_key) or 0), 2)
+        totals[quantity_key] = round(float(totals.get(quantity_key) or 0) + quantity, 2)
+        # תעריפים מעורבים (למשל תיקון תעריף רטרו) מוצגים ללא תעריף אחיד
+        totals[rate_key] = rate if previous_rate in (0.0, rate) else 0.0
     else:
         value = round(float(row.get("quantity") or 0), 2)
         totals[key] = round(float(totals.get(key) or 0) + value, 2)
@@ -218,6 +250,9 @@ def _write_completion_rows(
 ) -> int:
     line_count = 0
     for row in rows:
+        # השלמות שמשולמות ידנית מחושבות ומוצגות, אך אינן נכתבות לקובץ
+        if str(row.get("symbol") or "") in MANUAL_COMPLETION_SYMBOLS:
+            continue
         person_name = row.get("person_name") or ""
         if filter_name and filter_name.lower() not in person_name.lower():
             continue
