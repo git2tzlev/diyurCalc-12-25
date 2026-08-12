@@ -60,6 +60,8 @@ from routes.completions import (
     completion_difference_report,
     completion_guides_report_excel,
     completion_reports_bulk_send_stream,
+    completion_gesher_check,
+    completion_gesher_check_excel,
 )
 from routes.email import (
     email_settings_page,
@@ -723,11 +725,34 @@ async def completion_reports_bulk_send_stream_route(
     payment_month: int,
     token: str = "",
     demo_email: str = "",
+    task_ids: str = "",
 ):
     """Send work-month shift reports for guides with completions."""
     return await completion_reports_bulk_send_stream(
-        request, payment_year, payment_month, token, demo_email
+        request, payment_year, payment_month, token, demo_email, task_ids
     )
+
+
+@app.get("/api/completions/gesher-check")
+def completion_gesher_check_route(
+    request: Request,
+    payment_year: int,
+    payment_month: int,
+    token: str,
+):
+    """Audit payment-month completions against final work-month Gesher files."""
+    return completion_gesher_check(request, payment_year, payment_month, token)
+
+
+@app.get("/completions/gesher-check.xlsx")
+def completion_gesher_check_excel_route(
+    request: Request,
+    payment_year: int,
+    payment_month: int,
+    token: str,
+):
+    """Download the centralized completion Gesher audit."""
+    return completion_gesher_check_excel(request, payment_year, payment_month, token)
 
 
 # Statistics routes
