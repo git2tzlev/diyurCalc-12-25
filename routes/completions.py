@@ -5,11 +5,12 @@ import logging
 from typing import Optional
 
 from fastapi import HTTPException, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 from starlette.responses import StreamingResponse
 
 from core.config import config
+from core.constants import MANUAL_COMPLETION_SYMBOLS
 from core.database import (
     get_conn,
     get_default_period,
@@ -22,6 +23,9 @@ from core.auth import create_action_token, validate_action_token
 from core.payment_period import get_payment_period_completions
 from services.gesher_archive import get_gesher_export_file, list_gesher_export_files
 from services.gesher_difference import (
+    COMPLETION_QUANTITY_TARGET_SYMBOLS,
+    build_completion_gesher_audit,
+    build_completion_gesher_audit_excel,
     build_current_gesher_lines,
     build_difference_excel,
     compare_line_sets,
@@ -61,6 +65,12 @@ COMPLETION_STATUS_LABELS = {
     "cancelled": "בוטל",
     "superseded": "הוחלף",
 }
+COMPLETION_BADGE_STATUSES = {
+    "open": "open",
+    "approved": "included_in_export",
+    "paid": "exported",
+}
+COMPLETION_PAGE_STATUSES = tuple(COMPLETION_BADGE_STATUSES.values())
 COMPLETION_FIELD_LABELS = {
     "id": "מזהה רשומה",
     "date": "תאריך עבודה",
@@ -120,10 +130,20 @@ def _sse_event(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def _completion_report_tasks(completion_data: dict) -> list[dict]:
+def _completion_task_status(statuses: set[str]) -> tuple[bool, str]:
+    """סטטוס מסכם למשימת דוח: האם כולה שולמה, ותווית להצגה."""
+    if statuses == {"exported"}:
+        return True, COMPLETION_STATUS_LABELS["exported"]
+    if len(statuses) == 1:
+        status = next(iter(statuses))
+        return False, COMPLETION_STATUS_LABELS.get(status, "לא ידוע")
+    return False, "מעורב"
+
+
+def _completion_report_tasks(completion_events: list[dict]) -> list[dict]:
     """Build unique guide+work-month report tasks for marked completions."""
     tasks_by_key = {}
-    for item in completion_data["items"]:
+    for item in completion_events:
         work_year = item.get("work_year")
         work_month = item.get("work_month")
         person_id = item.get("person_id")
@@ -139,24 +159,49 @@ def _completion_report_tasks(completion_data: dict) -> list[dict]:
                 "work_year": int(work_year),
                 "work_month": int(work_month),
                 "items_count": 0,
+                "statuses": set(),
             }
         tasks_by_key[key]["items_count"] += 1
+        tasks_by_key[key]["statuses"].add(str(item.get("status") or ""))
+    tasks = []
+    for task in tasks_by_key.values():
+        is_paid, status_label = _completion_task_status(task.pop("statuses"))
+        tasks.append({**task, "is_paid": is_paid, "status_label": status_label})
     return sorted(
-        tasks_by_key.values(),
+        tasks,
         key=lambda task: (task["work_year"], task["work_month"], task["name"]),
     )
 
 
 def _completion_amount_badges(rows: list[dict]) -> list[dict]:
-    """Sum completion gesher rows into one amount per salary symbol."""
-    totals: dict[str, float] = {}
+    """Sum completion gesher rows into one badge per salary symbol."""
+    badges: dict[str, dict] = {}
     for row in rows:
         symbol = str(row.get("symbol") or "")
-        totals[symbol] = totals.get(symbol, 0.0) + float(row.get("amount") or 0)
-    return [
-        {"symbol": symbol, "amount": round(amount, 2)}
-        for symbol, amount in sorted(totals.items())
-    ]
+        badge = badges.setdefault(symbol, {
+            "symbol": symbol,
+            "display_name": row.get("display_name") or "הפרשי השלמות",
+            "is_quantity": symbol in COMPLETION_QUANTITY_TARGET_SYMBOLS,
+            "is_manual": symbol in MANUAL_COMPLETION_SYMBOLS,
+            "amount": 0.0,
+            "quantity": 0.0,
+        })
+        badge["amount"] += float(row.get("amount") or 0)
+        badge["quantity"] += float(row.get("quantity") or 0)
+    for badge in badges.values():
+        badge["amount"] = round(badge["amount"], 2)
+        badge["quantity"] = round(badge["quantity"], 2)
+    return [badges[symbol] for symbol in sorted(badges)]
+
+
+def _unique_texts(values) -> list[str]:
+    """רשימת טקסטים ייחודיים בסדר הופעתם, בלי ריקים."""
+    result: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if text and text not in result:
+            result.append(text)
+    return result
 
 
 def _completion_month_entry(work_year: int, work_month: int, final_files: list[dict]) -> dict:
@@ -169,41 +214,39 @@ def _completion_month_entry(work_year: int, work_month: int, final_files: list[d
     }
 
 
-def _finalize_completion_guide(
-    guide: dict,
-    open_group_rows: dict,
-    approved_group_rows: dict,
-) -> dict:
+def _finalize_completion_guide(guide: dict, group_rows_by_status: dict) -> dict:
     """Add per-month and guide-level counters, amounts and export links."""
     months = []
     for (work_year, work_month), month in sorted(guide["months"].items()):
         group_key = (guide["person_id"], work_year, work_month)
-        month["open_rows"] = open_group_rows.get(group_key, [])
-        month["approved_rows"] = approved_group_rows.get(group_key, [])
-        month["open_badges"] = _completion_amount_badges(month["open_rows"])
-        month["approved_badges"] = _completion_amount_badges(month["approved_rows"])
-        month["open_count"] = sum(1 for event in month["events"] if event.get("status") == "open")
-        month["approved_count"] = sum(
-            1 for event in month["events"] if event.get("status") == "included_in_export"
+        for name, status in COMPLETION_BADGE_STATUSES.items():
+            month[f"{name}_rows"] = group_rows_by_status[status].get(group_key, [])
+            month[f"{name}_badges"] = _completion_amount_badges(month[f"{name}_rows"])
+            month[f"{name}_count"] = sum(
+                1 for event in month["events"] if event.get("status") == status
+            )
+        month["validation_errors"] = _unique_texts(
+            event.get("validation_error") for event in month["events"]
         )
-        month["validation_errors"] = [
-            event["validation_error"] for event in month["events"] if event.get("validation_error")
-        ]
         months.append(month)
     return {
         **{key: guide[key] for key in ("person_id", "person_name", "meirav_code")},
+        **{
+            f"{name}_count": sum(month[f"{name}_count"] for month in months)
+            for name in COMPLETION_BADGE_STATUSES
+        },
+        **{
+            f"{name}_badges": _completion_amount_badges(
+                [row for month in months for row in month[f"{name}_rows"]]
+            )
+            for name in COMPLETION_BADGE_STATUSES
+        },
         "months": months,
         "events_count": sum(len(month["events"]) for month in months),
         "legacy_count": sum(len(month["legacy_items"]) for month in months),
-        "open_count": sum(month["open_count"] for month in months),
-        "approved_count": sum(month["approved_count"] for month in months),
-        "open_badges": _completion_amount_badges(
-            [row for month in months for row in month["open_rows"]]
+        "validation_errors": _unique_texts(
+            error for month in months for error in month["validation_errors"]
         ),
-        "approved_badges": _completion_amount_badges(
-            [row for month in months for row in month["approved_rows"]]
-        ),
-        "validation_errors": [error for month in months for error in month["validation_errors"]],
         "difference_links": [
             {"file": file, "work_year": month["work_year"], "work_month": month["work_month"]}
             for month in months
@@ -216,8 +259,7 @@ def _finalize_completion_guide(
 def _build_completion_guides(
     events: list[dict],
     legacy_items: list[dict],
-    open_group_rows: dict,
-    approved_group_rows: dict,
+    group_rows_by_status: dict,
     final_files_by_month: dict,
 ) -> list[dict]:
     """Group event and legacy completions per guide, ordered alphabetically."""
@@ -245,7 +287,7 @@ def _build_completion_guides(
 
     return sorted(
         (
-            _finalize_completion_guide(guide, open_group_rows, approved_group_rows)
+            _finalize_completion_guide(guide, group_rows_by_status)
             for guide in guides.values()
         ),
         key=lambda guide: guide["person_name"],
@@ -293,15 +335,19 @@ def completions_page(
         events = [
             _prepare_completion_event_for_display(event)
             for event in get_salary_impact_events(
-                conn, year, month, housing_array_id=housing_filter
+                conn,
+                year,
+                month,
+                housing_array_id=housing_filter,
+                statuses=COMPLETION_PAGE_STATUSES,
             )
         ]
-        open_result = build_salary_impact_completion_rows(
-            conn, year, month, statuses=("open",), housing_array_id=housing_filter
-        )
-        approved_result = build_salary_impact_completion_rows(
-            conn, year, month, statuses=("included_in_export",), housing_array_id=housing_filter
-        )
+        group_rows_by_status = {
+            status: build_salary_impact_completion_rows(
+                conn, year, month, statuses=(status,), housing_array_id=housing_filter
+            )["group_rows"]
+            for status in COMPLETION_PAGE_STATUSES
+        }
         work_month_keys = {
             (int(item.get("work_year") or 0), int(item.get("work_month") or 0))
             for item in events + legacy_items
@@ -321,18 +367,10 @@ def completions_page(
         guides = _build_completion_guides(
             events,
             legacy_items,
-            open_result["group_rows"],
-            approved_result["group_rows"],
+            group_rows_by_status,
             final_files_by_month,
         )
-        event_completion_items = [
-            {**event, "date": event.get("work_date")}
-            for event in events
-        ]
-        completion_data = {
-            "items": legacy_items + event_completion_items,
-        }
-        email_tasks = _completion_report_tasks(completion_data)
+        email_tasks = _completion_report_tasks(events)
 
     return templates.TemplateResponse("completions.html", {
         "request": request,
@@ -342,11 +380,59 @@ def completions_page(
         "guides": guides,
         "total_items": len(events) + len(legacy_items),
         "email_tasks": email_tasks,
-        "email_tasks_with_email": sum(1 for task in email_tasks if task.get("email")),
         "completion_bulk_send_token": create_action_token(request, "completion_bulk_send"),
         "completion_status_token": create_action_token(request, "completion_status"),
+        "completion_gesher_check_token": create_action_token(request, "completion_gesher_check"),
         "is_demo_mode": is_demo_mode(),
     })
+
+
+def completion_gesher_check(
+    request: Request,
+    payment_year: int,
+    payment_month: int,
+    token: str,
+) -> JSONResponse:
+    """Run a read-only audit of all payment-month completions against final Gesher files."""
+    if not validate_action_token(request, token, "completion_gesher_check"):
+        raise HTTPException(status_code=403, detail="אין הרשאה לבצע בדיקה מול הגשר")
+    if payment_year < 2023 or payment_month not in range(1, 13):
+        raise HTTPException(status_code=400, detail="חודש תשלום אינו תקין")
+    with get_conn() as conn:
+        result = build_completion_gesher_audit(
+            conn,
+            payment_year,
+            payment_month,
+            housing_array_id=get_housing_array_filter(),
+        )
+    return JSONResponse(result)
+
+
+def completion_gesher_check_excel(
+    request: Request,
+    payment_year: int,
+    payment_month: int,
+    token: str,
+) -> Response:
+    """Download the centralized Gesher audit as Excel."""
+    if not validate_action_token(request, token, "completion_gesher_check"):
+        raise HTTPException(status_code=403, detail="אין הרשאה להוריד בדיקה מול הגשר")
+    if payment_year < 2023 or payment_month not in range(1, 13):
+        raise HTTPException(status_code=400, detail="חודש תשלום אינו תקין")
+    with get_conn() as conn:
+        result = build_completion_gesher_audit(
+            conn,
+            payment_year,
+            payment_month,
+            housing_array_id=get_housing_array_filter(),
+        )
+        excel_bytes = build_completion_gesher_audit_excel(result)
+    filename = f"completion_gesher_check_{payment_year}_{payment_month:02d}.xlsx"
+    return Response(
+        content=excel_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
 
 def change_completion_group_status(
@@ -399,8 +485,9 @@ async def completion_reports_bulk_send_stream(
     payment_month: int,
     token: str = "",
     demo_email: str = "",
+    task_ids: str = "",
 ) -> StreamingResponse:
-    """Send one work-month shift report email for each guide completion task."""
+    """Send one work-month shift report email for each selected guide completion task."""
     import asyncio
 
     if not validate_action_token(request, token, "completion_bulk_send"):
@@ -426,20 +513,21 @@ async def completion_reports_bulk_send_stream(
 
             return StreamingResponse(settings_error_stream(), media_type="text/event-stream")
 
-        completion_events = get_salary_impact_events(
-            conn, payment_year, payment_month, housing_array_id=housing_filter
+        tasks = _completion_report_tasks(
+            get_salary_impact_events(
+                conn,
+                payment_year,
+                payment_month,
+                housing_array_id=housing_filter,
+                statuses=COMPLETION_PAGE_STATUSES,
+            )
         )
-        completion_data = {
-            "items": [
-                {**event, "date": event.get("work_date")}
-                for event in completion_events
-            ]
-        }
-        tasks = _completion_report_tasks(completion_data)
 
+    selected_ids = {part for part in (task_ids or "").split(",") if part}
+    tasks = [task for task in tasks if task["task_id"] in selected_ids]
     if not tasks:
         async def empty_stream():
-            yield _sse_event("error", {"message": "לא נמצאו דוחות השלמות לשליחה"})
+            yield _sse_event("error", {"message": "לא נבחרו דוחות השלמות לשליחה"})
 
         return StreamingResponse(empty_stream(), media_type="text/event-stream")
 

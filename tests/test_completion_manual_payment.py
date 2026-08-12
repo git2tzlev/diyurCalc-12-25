@@ -130,5 +130,20 @@ class ManualCompletionDoesNotTouchTotalsTests(unittest.TestCase):
         self.assertEqual(totals["total_payment"], 1090.0)
 
 
+class ManualCompletionBadgeTests(unittest.TestCase):
+    def test_manual_badge_is_flagged_so_the_symbol_can_be_hidden(self):
+        from routes import completions as completion_routes
+
+        badges = completion_routes._completion_amount_badges([
+            {"symbol": "243", "display_name": "תומך מקצועי - לתשלום ידני",
+             "amount": 150.0, "quantity": 0.0},
+            {"symbol": "253", "display_name": "הפרשי השלמות לא לפנסיה",
+             "amount": 90.0, "quantity": 0.0},
+        ])
+        by_symbol = {badge["symbol"]: badge for badge in badges}
+        self.assertTrue(by_symbol["243"]["is_manual"])
+        self.assertFalse(by_symbol["253"]["is_manual"])
+
+
 if __name__ == "__main__":
     unittest.main()
