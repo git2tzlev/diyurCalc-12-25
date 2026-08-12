@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 import pandas as pd
 
+from core.constants import MANUAL_COMPLETION_SYMBOLS
 from core.payment_period import get_payment_period_completions
 from core.logic import calculate_monthly_summary
 from services import gesher_exporter
@@ -461,7 +462,10 @@ def build_approved_completion_gesher_rows(
 ) -> dict[str, Any]:
     """Build one completion result from approved events and untracked legacy marks."""
     del allow_unverified_missing_final
-    from services.salary_impact import build_salary_impact_completion_rows
+    from services.salary_impact import (
+        build_salary_impact_completion_rows,
+        is_manual_completion_event,
+    )
 
     selected_person_ids = {int(person_id) for person_id in (person_ids or set())}
     cache_key = (
@@ -521,6 +525,8 @@ def build_approved_completion_gesher_rows(
         }
         for event in event_result["invalid_events"]
         if event.get("status") == "included_in_export"
+        # תשלום ידני לא יוצא בגשר, ולכן אירוע פגום שלו לא חוסם את הייצוא
+        and not is_manual_completion_event(event)
     ]
     missing_code_warnings = [
         notice for notice in invalid_notices
@@ -1109,6 +1115,14 @@ def _event_as_completion_item(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _drop_manual_completion_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """הסרת שורות שמשולמות ידנית - הן לעולם לא יופיעו בקובץ הגשר."""
+    return [
+        row for row in rows
+        if str(row.get("symbol") or "") not in MANUAL_COMPLETION_SYMBOLS
+    ]
+
+
 def build_completion_gesher_audit(
     conn,
     payment_year: int,
@@ -1215,7 +1229,9 @@ def build_completion_gesher_audit(
             and int(diff.get("work_month") or 0) == work_month
             and str(diff.get("employer_code") or "001") == company_code
         ]
-        expected_rows = finalize_completion_rows(build_completion_gesher_rows(event_diffs))
+        expected_rows = _drop_manual_completion_rows(
+            finalize_completion_rows(build_completion_gesher_rows(event_diffs))
+        )
         legacy_group = [item for item in legacy_items if item in items]
         if legacy_group:
             legacy_people = {int(item["person_id"]) for item in legacy_group if item.get("person_id")}
@@ -1226,7 +1242,9 @@ def build_completion_gesher_audit(
             )
             expected_rows = _merge_completion_rows(
                 expected_rows,
-                finalize_completion_rows(build_completion_gesher_rows(legacy_diffs)),
+                _drop_manual_completion_rows(
+                    finalize_completion_rows(build_completion_gesher_rows(legacy_diffs))
+                ),
             )
 
         entries = compare_completion_audit_rows(expected_rows, actual_rows)

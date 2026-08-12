@@ -7,11 +7,13 @@ from collections import defaultdict
 from datetime import date, datetime
 from typing import Any, Iterable, Optional
 
+from core.constants import MANUAL_COMPLETION_COMPONENT_TYPE_IDS
 from core.logic import calculate_monthly_summary
 from services.gesher_difference import (
     build_completion_gesher_rows,
     build_gesher_lines_from_summary,
     compare_line_sets,
+    finalize_completion_rows,
 )
 
 
@@ -50,6 +52,9 @@ def _event_error(event: dict[str, Any]) -> str:
         return "סוג מקור אינו נתמך"
     if not event.get("person_id"):
         return "חסר מדריך"
+    # בלי קוד מירב לא נבנית שום שורת גשר למדריך, וההשלמה הייתה נעלמת בשקט
+    if not str(event.get("meirav_code") or "").strip():
+        return "חסר קוד מירב למדריך"
     if not event.get("work_year") or not event.get("work_month"):
         return "חסר חודש עבודה"
     if not event.get("payment_year") or not event.get("payment_month"):
@@ -75,6 +80,17 @@ def _event_error(event: dict[str, Any]) -> str:
         if old_data.get("apartment_id") != new_data.get("apartment_id"):
             return "שינוי דירה ברשומה דורש פיצול ידני"
     return ""
+
+
+def is_manual_completion_event(event: dict[str, Any]) -> bool:
+    """האם האירוע שייך לרכיב שההשלמה שלו משולמת ידנית ולכן אינה יוצאת לגשר."""
+    if event.get("source_table") != "payment_components":
+        return False
+    data = event.get("new_data") or event.get("old_data") or {}
+    component_type_id = data.get("component_type_id")
+    if component_type_id in (None, ""):
+        return False
+    return int(component_type_id) in MANUAL_COMPLETION_COMPONENT_TYPE_IDS
 
 
 def get_salary_impact_events(
@@ -207,6 +223,7 @@ def build_salary_impact_completion_rows(
         return request_cache[cache_key]
 
     started = time.perf_counter()
+    calculation_statuses = tuple(sorted(set(PENDING_STATUSES) | set(selected_statuses)))
     all_events = get_salary_impact_events(
         conn,
         payment_year,
@@ -214,7 +231,7 @@ def build_salary_impact_completion_rows(
         housing_array_id=housing_array_id,
         company_code=company_code,
         person_ids=person_ids,
-        statuses=PENDING_STATUSES,
+        statuses=calculation_statuses,
     )
     valid_events = [event for event in all_events if not event["validation_error"]]
     invalid_events = [event for event in all_events if event["validation_error"]]
@@ -253,7 +270,7 @@ def build_salary_impact_completion_rows(
             diff["work_year"] = work_year
             diff["work_month"] = work_month
         diffs.extend(month_diffs)
-        for row in build_completion_gesher_rows(month_diffs):
+        for row in finalize_completion_rows(build_completion_gesher_rows(month_diffs)):
             person_id = row.get("person_id")
             if person_id is not None:
                 group_rows[(int(person_id), work_year, work_month)].append(row)
@@ -261,10 +278,7 @@ def build_salary_impact_completion_rows(
     rows = build_completion_gesher_rows(diffs)
     if company_code:
         rows = [row for row in rows if str(row.get("employer_code") or "001") == str(company_code)]
-    for row in rows:
-        row["display_name"] = "הפרשי השלמות לפנסיה" if row["symbol"] == "317" else "הפרשי השלמות לא לפנסיה"
-        row["quantity"] = 0.0
-        row["rate"] = round(float(row.get("amount") or 0), 2)
+    finalize_completion_rows(rows)
 
     elapsed = time.perf_counter() - started
     if elapsed > 3:

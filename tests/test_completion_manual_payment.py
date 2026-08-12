@@ -8,7 +8,7 @@ import unittest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from core.constants import MANUAL_COMPLETION_COMPONENT_TYPE_IDS, MANUAL_COMPLETION_SYMBOLS
-from services import gesher_difference, gesher_exporter
+from services import gesher_difference, gesher_exporter, salary_impact
 
 
 def _professional_support_diff(amount: float = 150.0) -> dict:
@@ -143,6 +143,55 @@ class ManualCompletionBadgeTests(unittest.TestCase):
         by_symbol = {badge["symbol"]: badge for badge in badges}
         self.assertTrue(by_symbol["243"]["is_manual"])
         self.assertFalse(by_symbol["253"]["is_manual"])
+
+
+def _manual_event(component_type_id=13, status="included_in_export") -> dict:
+    return {
+        "id": 1,
+        "source_table": "payment_components",
+        "status": status,
+        "person_name": "אבי",
+        "work_year": 2026,
+        "work_month": 5,
+        "validation_error": "חסר קוד מירב למדריך",
+        "new_data": {"component_type_id": component_type_id},
+        "old_data": None,
+    }
+
+
+class ManualCompletionEventTests(unittest.TestCase):
+    def test_professional_support_component_event_is_manual(self):
+        self.assertTrue(salary_impact.is_manual_completion_event(_manual_event()))
+
+    def test_other_component_event_is_not_manual(self):
+        self.assertFalse(salary_impact.is_manual_completion_event(_manual_event(component_type_id=2)))
+
+    def test_shift_event_is_not_manual(self):
+        event = {**_manual_event(), "source_table": "time_reports"}
+        self.assertFalse(salary_impact.is_manual_completion_event(event))
+
+    def test_deleted_component_is_read_from_the_old_snapshot(self):
+        event = {**_manual_event(), "new_data": None, "old_data": {"component_type_id": 13}}
+        self.assertTrue(salary_impact.is_manual_completion_event(event))
+
+    def test_missing_component_type_is_not_manual(self):
+        event = {**_manual_event(), "new_data": {"component_type_id": None}, "old_data": None}
+        self.assertFalse(salary_impact.is_manual_completion_event(event))
+
+
+class ManualCompletionAuditTests(unittest.TestCase):
+    def test_manual_rows_are_dropped_from_the_expected_side(self):
+        rows = gesher_difference._drop_manual_completion_rows([
+            _manual_completion_row(), _regular_completion_row()
+        ])
+        self.assertEqual([row["symbol"] for row in rows], ["253"])
+
+    def test_manual_row_is_not_reported_as_missing_from_the_bridge(self):
+        entries = gesher_difference.compare_completion_audit_rows(
+            gesher_difference._drop_manual_completion_rows([_manual_completion_row()]),
+            [],
+        )
+        self.assertEqual(entries, [])
 
 
 if __name__ == "__main__":
