@@ -1,14 +1,97 @@
 from services.gesher_difference import (
     _build_unverified_completion_diffs,
+    _merge_completion_rows,
     build_approved_completion_gesher_rows,
     build_legacy_completion_gesher_rows_from_final_file,
-    build_completion_gesher_file,
     build_completion_gesher_rows,
     build_current_gesher_lines,
+    build_completion_gesher_audit,
     compare_line_sets,
+    compare_completion_audit_rows,
+    finalize_completion_rows,
     get_legacy_completion_items,
     parse_gesher_file_lines,
 )
+
+
+def _audit_row(symbol="317", quantity=0.0, amount=100.0, rate=100.0):
+    return {
+        "employee_code": "000123",
+        "person_name": "מדריך",
+        "symbol": symbol,
+        "display_name": "השלמה",
+        "quantity": quantity,
+        "amount": amount,
+        "rate": rate,
+    }
+
+
+def test_completion_audit_rows_classifies_exact_match():
+    rows = compare_completion_audit_rows([_audit_row()], [_audit_row()])
+
+    assert len(rows) == 1
+    assert rows[0]["category"] == "matched"
+
+
+def test_completion_audit_rows_classifies_missing_and_extra():
+    missing = compare_completion_audit_rows([_audit_row()], [])
+    extra = compare_completion_audit_rows([], [_audit_row()])
+
+    assert missing[0]["category"] == "missing"
+    assert extra[0]["category"] == "extra"
+
+
+def test_completion_audit_rows_compares_badge_amount_and_quantity():
+    amount = compare_completion_audit_rows([_audit_row()], [_audit_row(amount=101.0, rate=101.0)])
+    quantity = compare_completion_audit_rows(
+        [_audit_row(symbol="414", quantity=1.0, amount=0.0, rate=0.0)],
+        [_audit_row(symbol="414", quantity=2.0, amount=0.0, rate=0.0)],
+    )
+    rate = compare_completion_audit_rows(
+        [_audit_row(symbol="306", quantity=2.0, amount=70.8, rate=35.4)],
+        [_audit_row(symbol="306", quantity=2.0, amount=70.8, rate=35.0)],
+    )
+
+    assert amount[0]["category"] == "mismatch"
+    assert quantity[0]["category"] == "mismatch"
+    # התגים בעמוד מציגים סכום/כמות מצטברים, לא את פיצול התעריפים.
+    assert rate[0]["category"] == "matched"
+
+
+def test_completion_gesher_audit_marks_month_without_final_file_as_skipped(monkeypatch):
+    import services.gesher_difference as gesher_difference
+
+    event = {
+        "id": 7,
+        "source_id": 17,
+        "source_table": "time_reports",
+        "status": "open",
+        "work_year": 2026,
+        "work_month": 5,
+        "employer_code": "400",
+    }
+    monkeypatch.setattr(
+        "services.salary_impact.get_salary_impact_events",
+        lambda *args, **kwargs: [event],
+    )
+    monkeypatch.setattr(
+        "services.salary_impact.build_salary_impact_completion_rows",
+        lambda *args, **kwargs: {"diffs": [], "invalid_events": []},
+    )
+    monkeypatch.setattr(
+        gesher_difference,
+        "get_payment_period_completions",
+        lambda *args, **kwargs: {"items": []},
+    )
+    monkeypatch.setattr(gesher_difference, "get_legacy_completion_items", lambda *args, **kwargs: [])
+    monkeypatch.setattr(gesher_difference, "list_gesher_export_files", lambda *args, **kwargs: [])
+
+    result = build_completion_gesher_audit(object(), 2026, 7)
+
+    assert result["is_valid"] is True
+    assert result["counts"]["skipped"] == 1
+    assert result["groups"][0]["status"] == "skipped"
+    assert result["groups"][0]["reason"] == "אין קובץ גשר סופי"
 
 
 def test_parse_gesher_file_lines_skips_headers_and_invalid_rows():
@@ -246,6 +329,53 @@ def test_approved_completion_rows_merge_events_and_legacy_without_duplication(mo
     assert captured["completion_items"] == [{"id": 11}]
 
 
+def test_approved_completion_without_meirav_code_warns_but_does_not_block(monkeypatch):
+    import services.gesher_difference as gesher_difference
+    import services.salary_impact as salary_impact
+
+    monkeypatch.setattr(
+        salary_impact,
+        "build_salary_impact_completion_rows",
+        lambda *args, **kwargs: {
+            "rows": [],
+            "events": [],
+            "invalid_events": [{
+                "id": 17,
+                "status": "included_in_export",
+                "validation_error": "חסר קוד מירב למדריך",
+                "person_name": "מדריכה ללא קוד",
+                "work_year": 2026,
+                "work_month": 6,
+                "employer_code": "400",
+            }],
+        },
+    )
+    monkeypatch.setattr(
+        gesher_difference,
+        "get_payment_period_completions",
+        lambda *args, **kwargs: {"items": []},
+    )
+    monkeypatch.setattr(gesher_difference, "get_legacy_completion_items", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        gesher_difference,
+        "build_legacy_completion_gesher_rows_from_final_file",
+        lambda *args, **kwargs: {"rows": [], "blocks": [], "approved_files": [], "diffs": []},
+    )
+
+    result = build_approved_completion_gesher_rows(object(), 2026, 7)
+
+    assert result["blocks"] == []
+    assert result["warnings"] == [{
+        "type": "invalid_salary_impact_event",
+        "message": "חסר קוד מירב למדריך",
+        "event_id": 17,
+        "person_name": "מדריכה ללא קוד",
+        "work_year": 2026,
+        "work_month": 6,
+        "company_code": "400",
+    }]
+
+
 def test_current_gesher_lines_skip_zero_quantity_hour_rates_even_for_completion_deltas(monkeypatch):
     import services.gesher_difference as gesher_difference
 
@@ -409,22 +539,117 @@ def test_completion_gesher_rows_treats_zero_quantity_rate_as_amount_diff():
         "person_id": None,
         "person_name": "מדריך",
         "symbol": "253",
+        "rate": 0.0,
         "amount": 32.0,
         "quantity": 0.0,
         "source_symbols": "370",
     }]
 
 
-def test_build_completion_gesher_file_uses_gesher_money_format():
-    rows = [
-        {"employee_code": "000123", "symbol": "317", "amount": -20.64},
-        {"employee_code": "000123", "symbol": "253", "amount": 32.0},
+def _retro_diff(internal_key, symbol, **overrides):
+    diff = {
+        "employee_code": "000123",
+        "person_name": "מדריך",
+        "employer_code": "400",
+        "internal_key": internal_key,
+        "symbol": symbol,
+        "quantity_diff": 0.0,
+        "amount_diff": 0.0,
+    }
+    diff.update(overrides)
+    return diff
+
+
+def test_completion_rows_map_sick_and_vacation_to_retro_symbols():
+    diffs = [
+        _retro_diff("sick_days_taken", "33", quantity_diff=2.0),
+        _retro_diff("vacation_days_taken", "32", quantity_diff=1.0),
+        _retro_diff("sick_days_accrued", "698", quantity_diff=0.07),
+        _retro_diff("vacation_days_accrued", "299", quantity_diff=0.07),
+        _retro_diff("sick_payment", "319", quantity_diff=8.0, amount_diff=283.2, rate=35.4),
+        _retro_diff("vacation", "376", quantity_diff=4.0, amount_diff=141.6, rate=35.4),
     ]
 
-    content = build_completion_gesher_file(rows, 2026, 3, company_code="400")
+    rows = finalize_completion_rows(build_completion_gesher_rows(diffs))
 
-    assert content.splitlines() == [
-        "400 26 03      0",
-        "000123 317 0000.00 -0020.64          201",
-        "000123 253 0000.00 00032.00          201",
+    assert [(row["symbol"], row["quantity"], row["rate"], row["amount"]) for row in rows] == [
+        ("306", 8.0, 35.4, 283.2),
+        ("332", 4.0, 35.4, 141.6),
+        ("410", 0.07, 0.0, 0.0),
+        ("414", 2.0, 0.0, 0.0),
+        ("427", 1.0, 0.0, 0.0),
+        ("799", 0.07, 0.0, 0.0),
+    ]
+    assert [row["display_name"] for row in rows] == [
+        "תשלום מחלה רטרו",
+        "תשלום חופשה רטרו",
+        "זכות מחלה רטרו",
+        "ניצול מחלה רטרו",
+        "ניצול חופשה רטרו",
+        "זכות חופשה רטרו",
+    ]
+
+
+def test_fractional_entitlement_diff_survives_the_amount_filter():
+    diffs = [_retro_diff("vacation_days_accrued", "299", quantity_diff=0.07, amount_diff=0.0)]
+
+    rows = finalize_completion_rows(build_completion_gesher_rows(diffs))
+
+    assert [(row["symbol"], row["quantity"]) for row in rows] == [("799", 0.07)]
+    assert _merge_completion_rows(rows)[0]["quantity"] == 0.07
+
+
+def test_completion_days_row_survives_although_amount_is_zero():
+    diffs = [_retro_diff("sick_days_taken", "33", quantity_diff=1.0, amount_diff=0.0)]
+
+    rows = finalize_completion_rows(build_completion_gesher_rows(diffs))
+
+    assert [(row["symbol"], row["quantity"]) for row in rows] == [("414", 1.0)]
+    assert _merge_completion_rows(rows)[0]["quantity"] == 1.0
+
+
+def test_completion_days_row_allows_negative_quantity():
+    diffs = [_retro_diff("vacation_days_taken", "32", quantity_diff=-1.0)]
+
+    rows = finalize_completion_rows(build_completion_gesher_rows(diffs))
+
+    assert [(row["symbol"], row["quantity"]) for row in rows] == [("427", -1.0)]
+
+
+def test_completion_hours_rows_keep_one_line_per_rate():
+    diffs = [
+        _retro_diff("vacation", "376", quantity_diff=-4.0, amount_diff=-137.6, rate=34.4),
+        _retro_diff("vacation", "376", quantity_diff=4.0, amount_diff=141.6, rate=35.4),
+    ]
+
+    rows = finalize_completion_rows(build_completion_gesher_rows(diffs))
+
+    assert [(row["symbol"], row["quantity"], row["rate"]) for row in rows] == [
+        ("332", -4.0, 34.4),
+        ("332", 4.0, 35.4),
+    ]
+    assert round(sum(row["amount"] for row in rows), 2) == 4.0
+
+
+def test_merge_completion_rows_keeps_hours_and_money_rows_apart():
+    event_rows = finalize_completion_rows([{
+        "employer_code": "400", "employee_code": "000123", "symbol": "306",
+        "quantity": 8.0, "rate": 35.4, "amount": 283.2, "source_symbols": "319",
+    }])
+    legacy_rows = finalize_completion_rows([
+        {
+            "employer_code": "400", "employee_code": "000123", "symbol": "306",
+            "quantity": 2.0, "rate": 35.4, "amount": 70.8, "source_symbols": "319",
+        },
+        {
+            "employer_code": "400", "employee_code": "000123", "symbol": "317",
+            "quantity": 0.0, "rate": 0.0, "amount": 100.0, "source_symbols": "360",
+        },
+    ])
+
+    merged = _merge_completion_rows(event_rows, legacy_rows)
+
+    assert [(row["symbol"], row["quantity"], row["rate"], row["amount"]) for row in merged] == [
+        ("306", 10.0, 35.4, 354.0),
+        ("317", 0.0, 100.0, 100.0),
     ]

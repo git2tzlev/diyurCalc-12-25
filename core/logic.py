@@ -48,7 +48,7 @@ def get_active_guides(housing_array_id: Optional[int] = None) -> List[Dict[str, 
             # סינון מדריכים לפי מערך דיור שלהם
             cursor.execute(
                 """
-                SELECT id, name, type, is_active, start_date, email
+                SELECT id, name, type, is_active, start_date, email, meirav_code, id_number
                 FROM people
                 WHERE is_active::integer = 1
                   AND housing_array_id = %s
@@ -59,7 +59,7 @@ def get_active_guides(housing_array_id: Optional[int] = None) -> List[Dict[str, 
         else:
             cursor.execute(
                 """
-                SELECT id, name, type, is_active, start_date, email
+                SELECT id, name, type, is_active, start_date, email, meirav_code, id_number
                 FROM people
                 WHERE is_active::integer = 1
                 ORDER BY name
@@ -579,7 +579,7 @@ def calculate_monthly_summary(
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     if housing_filter is not None and requested_person_ids:
         cursor.execute("""
-            SELECT id, name, start_date, is_married, meirav_code, type
+            SELECT id, name, start_date, is_married, meirav_code, id_number, type
             FROM people
             WHERE housing_array_id = %s
               AND id = ANY(%s)
@@ -587,7 +587,7 @@ def calculate_monthly_summary(
         """, (housing_filter, list(requested_person_ids)))
     elif housing_filter is not None:
         cursor.execute("""
-            SELECT id, name, start_date, is_married, meirav_code, type
+            SELECT id, name, start_date, is_married, meirav_code, id_number, type
             FROM people p
             WHERE p.housing_array_id = %s
               AND (
@@ -613,14 +613,14 @@ def calculate_monthly_summary(
         ))
     elif requested_person_ids:
         cursor.execute("""
-            SELECT id, name, start_date, is_married, meirav_code, type
+            SELECT id, name, start_date, is_married, meirav_code, id_number, type
             FROM people
             WHERE id = ANY(%s)
             ORDER BY name
         """, (list(requested_person_ids),))
     else:
         cursor.execute("""
-            SELECT id, name, start_date, is_married, meirav_code, type
+            SELECT id, name, start_date, is_married, meirav_code, id_number, type
             FROM people p
             WHERE p.is_active::integer = 1
                OR EXISTS (
@@ -983,7 +983,13 @@ def calculate_monthly_summary(
         should_include = monthly_totals.get("total_payment", 0) > 0 or monthly_totals.get("total_hours", 0) > 0
 
         if should_include:
-            summary_data.append({"name": p["name"], "person_id": p["id"], "merav_code": p["meirav_code"], "totals": monthly_totals})
+            summary_data.append({
+                "name": p["name"],
+                "person_id": p["id"],
+                "merav_code": p["meirav_code"],
+                "id_number": p.get("id_number"),
+                "totals": monthly_totals,
+            })
 
             grand_totals["payment"] += monthly_totals.get("payment", 0)
             grand_totals["total_payment"] += monthly_totals.get("total_payment", 0)

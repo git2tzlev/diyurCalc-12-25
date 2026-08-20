@@ -22,7 +22,7 @@ from services.gesher_exporter import (
     apply_completion_rows_to_summary_data,
     with_completion_export_codes,
 )
-from utils.utils import format_currency, human_date
+from utils.utils import format_currency, human_date, person_matches_search
 import logging
 
 logger = logging.getLogger(__name__)
@@ -102,13 +102,17 @@ def general_summary(
         loop_time = time.time() - pre_calc_time
         logger.info(f"Optimized calculation took: {loop_time:.4f}s")
 
-    # Filter by name if query provided
+    # סינון לפי שם, מספר עובד או מספר זהות
     filtered_summary_data = summary_data
     if q and q.strip():
-        query_lower = q.strip().lower()
         filtered_summary_data = [
             row for row in summary_data
-            if query_lower in row["name"].lower()
+            if person_matches_search(
+                q,
+                row.get("name"),
+                row.get("merav_code") or row.get("meirav_code"),
+                row.get("id_number"),
+            )
         ]
         logger.info(f"Filtered {len(summary_data)} -> {len(filtered_summary_data)} results")
 

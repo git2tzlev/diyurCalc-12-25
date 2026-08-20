@@ -20,7 +20,7 @@
       {% endfor %}
     </select>
     <label for="q">חיפוש:</label>
-    <input id="q" name="q" type="text" value="{{ q }}" placeholder="שם מדריך" oninput="filterInstructors()" style="padding: 6px 10px; border:1px solid #c8d1dc; border-radius:6px;">
+    <input id="q" name="q" type="text" value="{{ q }}" placeholder="שם, מספר עובד או ת.ז." oninput="filterInstructors()" style="padding: 6px 10px; border:1px solid #c8d1dc; border-radius:6px;">
     <button type="submit">עדכן</button>
     {% if selected_month and selected_year %}
       <span class="muted">חודש מוצג: {{ "%02d"|format(selected_month) }}/{{ selected_year }}</span>
@@ -74,6 +74,8 @@
     <thead>
       <tr>
         <th class="sortable" data-sort="name" data-type="text">שם <span class="sort-indicator">⇅</span></th>
+        <th class="sortable" data-sort="id-number" data-type="text">מספר זהות <span class="sort-indicator">⇅</span></th>
+        <th class="sortable" data-sort="employee" data-type="text">מספר עובד <span class="sort-indicator">⇅</span></th>
         <th class="sortable" data-sort="type" data-type="text">סוג <span class="sort-indicator">⇅</span></th>
         <th class="sortable" data-sort="seniority" data-type="number">ותק (חודשים) <span class="sort-indicator">⇅</span></th>
         <th class="sortable" data-sort="shifts" data-type="number">סה\"כ משמרות בחודש <span class="sort-indicator">⇅</span></th>
@@ -84,7 +86,7 @@
     </thead>
     <tbody>
       {% for g in guides %}
-      <tr class="instructor-row" data-name="{{ g['name'] }}">
+      <tr class="instructor-row" data-search="{{ g['name'] }} {{ g.get('meirav_code') or '' }} {{ g.get('id_number') or '' }}">
         <td data-sort-value="{{ g['name'] }}">
           <a href="/guide/{{ g['id'] }}{% if selected_month and selected_year %}?month={{ selected_month }}&year={{ selected_year }}{% endif %}" style="text-decoration: none; color: #0969da; font-weight: 500;" title="לחץ לצפייה בדוח מפורט">
             {{ g['name'] }}
@@ -93,6 +95,8 @@
           <span title="פעיל גם במערכים: {{ multi_housing[g['id']] | join(', ') }}" style="background: #fee2e2; color: #991b1b; padding: 1px 6px; border-radius: 10px; font-size: 11px; font-weight: 600; margin-right: 4px; cursor: help;">מרובה מערכים</span>
           {% endif %}
         </td>
+        <td data-sort-value="{{ g.get('id_number') or '' }}">{{ g.get('id_number') or '-' }}</td>
+        <td data-sort-value="{{ g.get('meirav_code') or '' }}">{{ g.get('meirav_code') or '-' }}</td>
         <td data-sort-value="{% if g['type'] == 'permanent' %}קבוע{% elif g['type'] == 'substitute' %}מחליף{% else %}{{ g['type'] or '-' }}{% endif %}">
           {% if g['type'] == 'permanent' %}קבוע
           {% elif g['type'] == 'substitute' %}מחליף
@@ -123,7 +127,7 @@
       </tr>
       {% else %}
       <tr>
-        <td colspan="7" class="muted">לא נמצאו מדריכים</td>
+        <td colspan="9" class="muted">לא נמצאו מדריכים</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -395,8 +399,8 @@
     let visibleCount = 0;
     
     rows.forEach(function(row) {
-      const name = row.getAttribute('data-name') || '';
-      if (filterValue === '' || name.toLowerCase().includes(filterValue)) {
+      const searchText = (row.getAttribute('data-search') || '').toLowerCase();
+      if (filterValue === '' || searchText.includes(filterValue) || searchText.replace(/[\s-]/g, '').includes(filterValue.replace(/[\s-]/g, ''))) {
         row.style.display = '';
         visibleCount++;
       } else {
@@ -423,7 +427,7 @@
         // Create the row if it doesn't exist
         filterNoResultsRow = document.createElement('tr');
         filterNoResultsRow.className = 'filter-no-results';
-        filterNoResultsRow.innerHTML = '<td colspan="5" class="muted">לא נמצאו מדריכים</td>';
+        filterNoResultsRow.innerHTML = '<td colspan="9" class="muted">לא נמצאו מדריכים</td>';
         tbody.appendChild(filterNoResultsRow);
       } else if (filterNoResultsRow) {
         filterNoResultsRow.style.display = '';

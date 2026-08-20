@@ -1257,19 +1257,27 @@ def get_guides_list() -> JSONResponse:
     with get_conn() as conn:
         if hf is not None:
             rows = conn.execute("""
-                SELECT id, name FROM people
+                SELECT id, name, meirav_code, id_number FROM people
                 WHERE is_active::integer = 1 AND housing_array_id = %s
                 ORDER BY name
             """, (hf,)).fetchall()
         else:
             rows = conn.execute("""
-                SELECT id, name FROM people
+                SELECT id, name, meirav_code, id_number FROM people
                 WHERE is_active::integer = 1
                 ORDER BY name
             """).fetchall()
 
     return JSONResponse({
-        "guides": [{"id": r["id"], "name": r["name"]} for r in rows]
+        "guides": [
+            {
+                "id": r["id"],
+                "name": r["name"],
+                "meirav_code": r["meirav_code"] or "",
+                "id_number": r["id_number"] or "",
+            }
+            for r in rows
+        ]
     })
 
 

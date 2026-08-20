@@ -28,7 +28,7 @@
         </h2>
         <div class="controls" style="flex-wrap: wrap; gap: 6px;">
             <div style="display: flex; gap: 6px; align-items: center;">
-                <input type="text" id="filterInput" value="{{ search_query }}" placeholder="סנן לפי שם..." 
+                <input type="text" id="filterInput" value="{{ search_query }}" placeholder="סנן לפי שם, מספר עובד או ת.ז..." 
                        style="padding: 4px 8px; font-size: 13px; border: 1px solid #ccc; border-radius: 4px; min-width: 150px;">
                 <button onclick="clearFilter()" style="padding: 4px 10px; font-size: 12px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">נקה</button>
             </div>
@@ -109,7 +109,9 @@
                     <th onclick="sortTable(19)" style="cursor: pointer; padding: 2px 4px; background: #e0f2fe; width: 55px; text-align: right;" title="דמי ביגוד">ביגוד<div style="font-size: 9px; color: #888;">{{ ns.clothing_pay }}</div></th>
                     <th onclick="sortTable(20)" style="cursor: pointer; padding: 2px 4px; background: #fff7ed; width: 65px; text-align: right;" title="השלמות לא לפנסיה">השלמה<div style="font-size: 9px; color: #888;">253</div></th>
                     <th onclick="sortTable(21)" style="cursor: pointer; padding: 2px 4px; background: #ecfdf5; width: 65px; text-align: right;" title="השלמות לפנסיה">השלמה פ.<div style="font-size: 9px; color: #888;">317</div></th>
-                    <th onclick="sortTable(22)" style="cursor: pointer; padding: 2px 4px; background: #e7f5ff; font-weight: bold; width: 70px; text-align: right;">סה"כ</th>
+                    <th onclick="sortTable(22)" style="cursor: pointer; padding: 2px 4px; background: #fff5f5; width: 65px; text-align: right;" title="תשלום מחלה רטרו">מחלה רטרו<div style="font-size: 9px; color: #888;">306</div></th>
+                    <th onclick="sortTable(23)" style="cursor: pointer; padding: 2px 4px; background: #f5f3ff; width: 65px; text-align: right;" title="תשלום חופשה רטרו">חופשה רטרו<div style="font-size: 9px; color: #888;">332</div></th>
+                    <th onclick="sortTable(24)" style="cursor: pointer; padding: 2px 4px; background: #e7f5ff; font-weight: bold; width: 70px; text-align: right;">סה"כ</th>
                 </tr>
             </thead>
             <tbody>
@@ -148,10 +150,12 @@
                 {% set p_clothing_pay = (row.totals.clothing_pay or 0) | round(1) %}
                 {% set p_completion_non_pension = (row.totals.completion_non_pension or 0) | round(1) %}
                 {% set p_completion_pension = (row.totals.completion_pension or 0) | round(1) %}
+                {% set p_completion_sick_pay = (row.totals.completion_sick_pay or 0) | round(1) %}
+                {% set p_completion_vacation_pay = (row.totals.completion_vacation_pay or 0) | round(1) %}
 
-                {% set row_payment = p100 + p125 + p150 + p150_shabbat_base + p150_shabbat_bonus + p175 + p200 + p_var + p_standby + p_vacation + p_sick + p_travel + p_extras + p_extras_for_pension + p_professional + p_holiday_payment + p_recovery_pay + p_clothing_pay + p_completion_non_pension + p_completion_pension %}
+                {% set row_payment = p100 + p125 + p150 + p150_shabbat_base + p150_shabbat_bonus + p175 + p200 + p_var + p_standby + p_vacation + p_sick + p_travel + p_extras + p_extras_for_pension + p_professional + p_holiday_payment + p_recovery_pay + p_clothing_pay + p_completion_non_pension + p_completion_pension + p_completion_sick_pay + p_completion_vacation_pay %}
                 {% set display_ns.total = display_ns.total + row_payment %}
-                <tr class="data-row" data-name="{{ row.name|lower }}">
+                <tr class="data-row" data-search="{{ row.name }} {{ row.merav_code or row.meirav_code or '' }} {{ row.id_number or '' }}">
                     <td style="position: sticky; right: 0; background: #fff; z-index: 1; border-left: 2px solid #eee; font-weight: bold; padding: 2px 6px;">
                         <a href="/guide/{{ row.person_id }}?year={{ selected_year }}&month={{ selected_month }}" style="text-decoration: none; color: #0969da; font-size: 12px;" title="לחץ לצפייה בדוח מפורט">{{ row.name }}</a>
                     </td>
@@ -176,6 +180,8 @@
                     <td style="text-align: right; padding: 2px; background: #e0f2fe;">{% if row.totals.clothing_pay and row.totals.clothing_pay > 0 %}{{ "%.0f"|format(row.totals.clothing_pay) }}{% else %}<span style="color:#ddd;">-</span>{% endif %}</td>
                     <td style="text-align: right; padding: 2px; background: #fff7ed;">{% set v = row.totals.completion_non_pension or 0 %}{% if v != 0 %}{{ "%.1f"|format(v) }}{% else %}<span style="color:#ddd;">-</span>{% endif %}</td>
                     <td style="text-align: right; padding: 2px; background: #ecfdf5;">{% set v = row.totals.completion_pension or 0 %}{% if v != 0 %}{{ "%.1f"|format(v) }}{% else %}<span style="color:#ddd;">-</span>{% endif %}</td>
+                    <td style="text-align: right; padding: 2px; background: #fff5f5;">{% set v = row.totals.completion_sick_pay or 0 %}{% if v != 0 %}{{ "%.1f"|format(v) }}{% else %}<span style="color:#ddd;">-</span>{% endif %}</td>
+                    <td style="text-align: right; padding: 2px; background: #f5f3ff;">{% set v = row.totals.completion_vacation_pay or 0 %}{% if v != 0 %}{{ "%.1f"|format(v) }}{% else %}<span style="color:#ddd;">-</span>{% endif %}</td>
                     <td style="background: #e7f5ff; font-weight: bold; padding: 2px; text-align: right;">{{ "{:,.1f}".format(row_payment) }}</td>
                 </tr>
                 {% endfor %}
@@ -205,6 +211,8 @@
                     <td style="text-align: right; padding: 2px; background: #075985;">{% if grand_totals.clothing_pay and grand_totals.clothing_pay > 0 %}{{ "%.0f"|format(grand_totals.clothing_pay) }}{% endif %}</td>
                     <td style="text-align: right; padding: 2px; background: #9a3412;">{% set v = grand_totals.completion_non_pension or 0 %}{% if v != 0 %}{{ "%.1f"|format(v) }}{% endif %}</td>
                     <td style="text-align: right; padding: 2px; background: #047857;">{% set v = grand_totals.completion_pension or 0 %}{% if v != 0 %}{{ "%.1f"|format(v) }}{% endif %}</td>
+                    <td style="text-align: right; padding: 2px; background: #b71c1c;">{% set v = grand_totals.completion_sick_pay or 0 %}{% if v != 0 %}{{ "%.1f"|format(v) }}{% endif %}</td>
+                    <td style="text-align: right; padding: 2px; background: #5b21b6;">{% set v = grand_totals.completion_vacation_pay or 0 %}{% if v != 0 %}{{ "%.1f"|format(v) }}{% endif %}</td>
                     {# שימוש בסכום המוצג - מתאים לחישוב ידני #}
                     <td style="background: #444; padding: 2px; text-align: right;">{{ "{:,.1f}".format(display_ns.total) }}</td>
                 </tr>
@@ -234,8 +242,10 @@ function filterTable(query) {
     let visibleCount = 0;
     
     rows.forEach(function(row) {
-        const name = row.getAttribute('data-name') || '';
-        if (filterValue === '' || name.includes(filterValue)) {
+        const searchText = (row.getAttribute('data-search') || '').toLowerCase();
+        const compactSearch = searchText.replace(/[\s-]/g, '');
+        const compactFilter = filterValue.replace(/[\s-]/g, '');
+        if (filterValue === '' || searchText.includes(filterValue) || compactSearch.includes(compactFilter)) {
             row.style.display = '';
             visibleCount++;
         } else {

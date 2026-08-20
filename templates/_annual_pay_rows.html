@@ -1,0 +1,10 @@
+{% macro render_annual_pay_rows(annual_payments, display_total, row_class='') %}
+{% for payment in annual_payments %}
+{% set display_total.sum = display_total.sum + payment.amount %}
+<tr{% if row_class %} class="{{ row_class }}"{% endif %} style="background:{{ payment.background }}; font-weight:bold; border-top:1px solid #ccc;">
+  <td colspan="2" style="text-align:right; padding:6px 8px;"><strong>{{ payment.name }}:</strong></td>
+  <td class="payment-cell" style="text-align:center; padding:6px 8px; font-weight:bold;">{{ "%.2f"|format(payment.amount) }}</td>
+  <td colspan="6"></td>
+</tr>
+{% endfor %}
+{% endmacro %}

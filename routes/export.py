@@ -169,7 +169,7 @@ def export_gesher(
                 allow_unverified_missing_final_completions=allow_missing_final,
             )
         except CompletionGesherBlockedError as exc:
-            details = "; ".join(_completion_block_message(block) for block in exc.blocks[:5])
+            details = "; ".join(_unique_block_messages(exc.blocks)[:5])
             raise HTTPException(
                 status_code=400,
                 detail=f"לא ניתן להפיק גשר למפעל {company}: יש השלמות חסומות. {details}",
@@ -412,10 +412,10 @@ def export_gesher_preview(
         blocked_multi_housing = gesher_exporter.get_blocked_multi_housing_for_gesher(conn, year, month)
         blocked_multi_housing = _filter_multi_housing_for_summary(blocked_multi_housing, summary_data)
         completion_blocks = completion_result["blocks"]
-        completion_block_messages = [
-            _completion_block_message(block)
-            for block in completion_blocks
-        ]
+        completion_block_messages = _unique_block_messages(completion_blocks)
+        completion_warning_messages = _unique_block_messages(
+            completion_result.get("warnings", [])
+        )
         completion_hard_blocked_companies = sorted({
             str(block.get("company_code") or "001")
             for block in completion_blocks
@@ -495,6 +495,7 @@ def export_gesher_preview(
         "completion_rows_count": completion_rows_count,
         "completion_rows_total": completion_rows_total,
         "completion_block_messages": completion_block_messages,
+        "completion_warning_messages": completion_warning_messages,
         "completion_blocked_companies": completion_blocked_companies,
         "completion_hard_blocked_companies": completion_hard_blocked_companies,
         "completion_missing_final_only_companies": completion_missing_final_only_companies,
@@ -588,7 +589,20 @@ def _completion_block_message(block: dict) -> str:
     period = f"{int(block.get('work_month') or 0):02d}/{block.get('work_year') or ''}"
     company = block.get("company_code") or ""
     message = block.get("message") or "השלמות חסומות"
+    person_name = (block.get("person_name") or "").strip()
+    if person_name:
+        message = f"{message} ({person_name})"
     return f"{company} {period}: {message}".strip()
+
+
+def _unique_block_messages(blocks: list[dict]) -> list[str]:
+    """הודעות חסימה ייחודיות - אירועים רבים של אותו מדריך מייצרים אותה הודעה."""
+    messages: list[str] = []
+    for block in blocks:
+        message = _completion_block_message(block)
+        if message not in messages:
+            messages.append(message)
+    return messages
 
 
 def gesher_archive_page(

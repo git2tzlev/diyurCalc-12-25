@@ -13,6 +13,7 @@ from typing import Dict, List, Tuple, Any
 from core.constants import MANUAL_COMPLETION_SYMBOLS, TZOHAR_HALEV_HOUSING_ARRAY_ID
 from core.database import get_housing_array_filter, get_multi_housing_guides
 from core.history import get_minimum_wage_for_month
+from utils.utils import person_matches_search
 
 logger = logging.getLogger(__name__)
 
@@ -254,7 +255,12 @@ def _write_completion_rows(
         if str(row.get("symbol") or "") in MANUAL_COMPLETION_SYMBOLS:
             continue
         person_name = row.get("person_name") or ""
-        if filter_name and filter_name.lower() not in person_name.lower():
+        if filter_name and not person_matches_search(
+            filter_name,
+            person_name,
+            row.get("employee_code"),
+            row.get("id_number"),
+        ):
             continue
         employee_code_text = "".join(ch for ch in str(row.get("employee_code") or "") if ch.isdigit()).zfill(6)
         if not employee_code_text:
@@ -766,7 +772,7 @@ def generate_gesher_file(
     # שליפת מיפוי עובדים למפעלים - עם סינון לפי מערך דיור אם מוגדר
     if housing_filter is not None:
         cursor = conn.execute("""
-            SELECT p.id, p.name, p.meirav_code, e.code as employer_code
+            SELECT p.id, p.name, p.meirav_code, p.id_number, e.code as employer_code
             FROM people p
             LEFT JOIN employers e ON p.employer_id = e.id
             WHERE p.is_active::integer = 1 AND p.meirav_code IS NOT NULL AND p.meirav_code != ''
@@ -775,7 +781,7 @@ def generate_gesher_file(
         """, (housing_filter,))
     else:
         cursor = conn.execute("""
-            SELECT p.id, p.name, p.meirav_code, e.code as employer_code
+            SELECT p.id, p.name, p.meirav_code, p.id_number, e.code as employer_code
             FROM people p
             LEFT JOIN employers e ON p.employer_id = e.id
             WHERE p.is_active::integer = 1 AND p.meirav_code IS NOT NULL AND p.meirav_code != ''
@@ -816,7 +822,12 @@ def generate_gesher_file(
             continue
 
         # סינון לפי שם (אם נדרש)
-        if filter_name and filter_name.lower() not in person['name'].lower():
+        if filter_name and not person_matches_search(
+            filter_name,
+            person.get("name"),
+            person.get("meirav_code"),
+            person.get("id_number"),
+        ):
             continue
 
         meirav_code = person['meirav_code']
@@ -1103,6 +1114,7 @@ def get_export_preview(
                 'person_id': person_id,
                 'name': person_name,
                 'meirav_code': meirav_code,
+                'id_number': person_data.get('id_number') or '',
                 'lines': person_lines
             })
 

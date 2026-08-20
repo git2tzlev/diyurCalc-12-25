@@ -17,7 +17,7 @@ from core.logic import get_active_guides
 from core.report_presence import get_report_overlap_counts, get_report_presence_counts
 from core.time_utils import calculate_seniority_months, get_shabbat_times_cache
 from core.holiday_payment import get_holiday_payment_setup
-from utils.utils import month_range_ts, available_months_from_db, format_currency, format_seniority_months, human_date
+from utils.utils import month_range_ts, available_months_from_db, format_currency, format_seniority_months, human_date, person_matches_search
 
 logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory=str(config.TEMPLATES_DIR))
@@ -110,11 +110,12 @@ def home(
 
     allowed_types = {"permanent", "substitute"}
     guides_filtered = []
-    q_norm = q.lower().strip() if q else None
     for g in guides:
         if g["type"] not in allowed_types:
             continue
-        if q_norm and q_norm not in (g["name"] or "").lower():
+        if q and not person_matches_search(
+            q, g.get("name"), g.get("meirav_code"), g.get("id_number")
+        ):
             continue
 
         if selected_year and selected_month:

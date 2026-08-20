@@ -138,12 +138,20 @@
         </div>
     </div>
 
-    {% if completion_rows_count or completion_block_messages %}
+    {% if completion_rows_count or completion_block_messages or completion_warning_messages %}
     <div style="margin-bottom: 10px; padding: 10px 15px; background: #eef6ff; border: 1px solid #93c5fd; border-radius: 6px; font-size: 13px; color: #1e3a8a;">
         {% if completion_rows_count %}
         <div>
             לקובץ הגשר יתווספו <strong>{{ completion_rows_count }}</strong> שורות הפרשי השלמות מאושרות
             בסך <strong>{{ "%.2f"|format(completion_rows_total or 0) }}</strong>.
+        </div>
+        {% endif %}
+        {% if completion_warning_messages %}
+        <div style="margin-top: 6px; color: #92400e;">
+            השלמות שידולגו ולא יחסמו את הייצוא:
+            {% for message in completion_warning_messages %}
+            <div>{{ message }}</div>
+            {% endfor %}
         </div>
         {% endif %}
         {% if completion_block_messages %}
@@ -203,7 +211,7 @@
     {% if preview %}
     <!-- חיפוש ובחירה -->
     <div style="margin-bottom: 10px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-        <input type="text" id="searchBox" class="search-box" placeholder="חיפוש שם או קוד..." oninput="filterTable()">
+        <input type="text" id="searchBox" class="search-box" placeholder="חיפוש שם, מספר עובד או ת.ז..." oninput="filterTable()">
         <span id="filterCount" style="font-size: 12px; color: #666;"></span>
         <div style="margin-right: auto;"></div>
         <button onclick="selectAll(true)" style="padding: 4px 10px; font-size: 12px;">בחר הכל</button>
@@ -229,7 +237,7 @@
             <tbody>
                 {% for person in preview %}
                 <!-- שורת כמות -->
-                <tr class="qty-row" data-person-id="{{ person.person_id }}">
+                <tr class="qty-row" data-person-id="{{ person.person_id }}" data-search="{{ person.name }} {{ person.meirav_code or '' }} {{ person.id_number or '' }}">
                     <td class="checkbox-cell" rowspan="2">
                         <input type="checkbox" class="person-checkbox" value="{{ person.person_id }}" data-name="{{ person.name }}">
                     </td>
@@ -438,11 +446,12 @@ function filterTable() {
     let visibleCount = 0;
 
     rows.forEach(row => {
-        const name = row.querySelector('.name-cell a')?.textContent.toLowerCase() || '';
-        const code = row.querySelector('td:nth-child(3)')?.textContent.toLowerCase() || '';
+        const searchHaystack = (row.getAttribute('data-search') || '').toLowerCase();
+        const compactHaystack = searchHaystack.replace(/[\s-]/g, '');
+        const compactSearch = searchText.replace(/[\s-]/g, '');
         const rateRow = row.nextElementSibling;
 
-        if (searchText === '' || name.includes(searchText) || code.includes(searchText)) {
+        if (searchText === '' || searchHaystack.includes(searchText) || compactHaystack.includes(compactSearch)) {
             row.classList.remove('hidden');
             if (rateRow) rateRow.classList.remove('hidden');
             visibleCount++;

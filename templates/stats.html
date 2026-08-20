@@ -755,7 +755,11 @@ async function loadGuidesList() {
     try {
         const res = await fetch('/api/stats/guides');
         const data = await res.json();
-        const options = data.guides.map(g => `<option value="${g.id}">${g.name}</option>`).join('');
+        const options = data.guides.map(g => {
+            const extras = [g.meirav_code, g.id_number].filter(Boolean).join(' / ');
+            const label = extras ? `${g.name} (${extras})` : g.name;
+            return `<option value="${g.id}">${label}</option>`;
+        }).join('');
         document.getElementById('guide-select').innerHTML = '<option value="">בחר מדריך...</option>' + options;
     } catch (err) {
         console.error('Error loading guides:', err);

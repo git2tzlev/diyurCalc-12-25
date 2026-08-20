@@ -408,3 +408,39 @@ def available_months_from_db(housing_array_id: int = None) -> List[Tuple[int, in
         return_connection(conn)
 
     return [(r["year"], r["month"]) for r in rows]
+
+
+def _compact_search_text(value: str) -> str:
+    return "".join(ch for ch in value if ch.isalnum())
+
+
+def person_matches_search(
+    query: str | None,
+    name: str | None = None,
+    meirav_code: str | None = None,
+    id_number: str | None = None,
+) -> bool:
+    """
+    האם מדריך תואם חיפוש לפי שם, מספר עובד או מספר זהות.
+
+    Args:
+        query: מחרוזת החיפוש.
+        name: שם המדריך.
+        meirav_code: מספר עובד במירב.
+        id_number: מספר זהות.
+
+    Returns:
+        True אם אין חיפוש או אם אחד השדות מכיל את המחרוזת.
+    """
+    needle = (query or "").strip().lower()
+    if not needle:
+        return True
+    compact_needle = _compact_search_text(needle)
+    for value in (name, meirav_code, id_number):
+        text = str(value or "").lower()
+        if needle in text:
+            return True
+        compact_text = _compact_search_text(text)
+        if compact_needle and compact_needle in compact_text:
+            return True
+    return False

@@ -30,7 +30,10 @@ from core.logic import (
 )
 from core.history import get_minimum_wage_for_month
 from services.gesher_difference import build_approved_completion_gesher_rows
-from services.gesher_exporter import apply_completion_rows_to_monthly_totals
+from services.gesher_exporter import (
+    apply_completion_rows_to_monthly_totals,
+    completion_days_total_keys,
+)
 from app_utils import get_daily_segments_data, aggregate_daily_segments_to_monthly
 from core.constants import (
     HIGH_FUNCTIONING_APT_TYPE, LOW_FUNCTIONING_APT_TYPE,
@@ -417,6 +420,24 @@ def _inject_clothing_pay(
         housing_filter=housing_filter,
     )
     apply_clothing_pay_to_totals(monthly_totals, clothing_data)
+
+
+def _annual_payments_for_report(monthly_totals: dict) -> list[dict]:
+    """שורות תצוגה אחידות לרכיבי השכר השנתיים בכל סוגי הדוחות."""
+    definitions = (
+        ("clothing_pay", "דמי ביגוד", "#e0f2fe"),
+        ("recovery_pay", "דמי הבראה", "#ede9fe"),
+    )
+    return [
+        {
+            "key": key,
+            "name": name,
+            "amount": round(float(monthly_totals.get(key, 0) or 0), 2),
+            "background": background,
+        }
+        for key, name, background in definitions
+        if (monthly_totals.get(key, 0) or 0) > 0
+    ]
 
 
 def _as_date(value) -> date | None:
@@ -1084,7 +1105,7 @@ def guide_view(
 
         person = conn.execute(
             """
-            SELECT p.id, p.name, p.phone, p.email, p.type, p.is_active, p.start_date, p.meirav_code, 
+            SELECT p.id, p.name, p.phone, p.email, p.type, p.is_active, p.start_date, p.meirav_code, p.id_number,
                    e.code as employer_code, e.name as employer_name
             FROM people p
             LEFT JOIN employers e ON p.employer_id = e.id
@@ -1214,16 +1235,22 @@ def guide_view(
             employee_code=person.get("meirav_code"),
         )
         existing_keys = {code.get("internal_key") for code in payment_codes}
-        for symbol, internal_key, display_name in (
+        for display_order, (symbol, internal_key, display_name) in enumerate((
             ("253", "completion_non_pension", "הפרשי השלמות לא לפנסיה"),
             ("317", "completion_pension", "הפרשי השלמות לפנסיה"),
-        ):
+            ("306", "completion_sick_pay", "תשלום מחלה רטרו"),
+            ("332", "completion_vacation_pay", "תשלום חופשה רטרו"),
+            ("414", "completion_sick_days", "ניצול מחלה רטרו"),
+            ("427", "completion_vacation_days", "ניצול חופשה רטרו"),
+            ("410", "completion_sick_entitlement", "זכות מחלה רטרו"),
+            ("799", "completion_vacation_entitlement", "זכות חופשה רטרו"),
+        ), start=190):
             if internal_key not in existing_keys:
                 payment_codes.append({
                     "internal_key": internal_key,
                     "display_name": display_name,
                     "merav_code": symbol,
-                    "display_order": 190 if symbol == "253" else 191,
+                    "display_order": display_order,
                 })
 
         daily_segments = _prepare_daily_segments_for_display(daily_segments)
@@ -1242,6 +1269,8 @@ def guide_view(
                     "name": person["name"],
                     "email": person["email"],
                     "type": person["type"],
+                    "meirav_code": person.get("meirav_code"),
+                    "id_number": person.get("id_number"),
                 },
                 "shifts_data": [],
                 "payments_data": [],
@@ -1295,8 +1324,10 @@ def guide_view(
             "selected_month": selected_month,
             "daily_segments": daily_segments,
             "monthly_totals": monthly_totals,
+            "annual_payments": _annual_payments_for_report(monthly_totals),
             "monthly_report": monthly_report,
             "payment_codes": payment_codes or {},
+            "completion_days_keys": completion_days_total_keys(),
             "minimum_wage": MINIMUM_WAGE,
             "total_standby_count": total_standby_count,
             "guide_notes": guide_notes,
@@ -1327,7 +1358,7 @@ def guide_history_view(
     with get_conn() as conn:
         person = conn.execute(
             """
-            SELECT p.id, p.name, p.meirav_code, p.type,
+            SELECT p.id, p.name, p.meirav_code, p.id_number, p.type,
                    e.code AS employer_code, e.name AS employer_name
             FROM people p
             LEFT JOIN employers e ON p.employer_id = e.id
@@ -1442,7 +1473,7 @@ def prepare_guide_pdf_data(
     from core.history import get_minimum_wage_for_month
 
     person = conn.execute(
-        "SELECT id, name, email, type FROM people WHERE id = %s",
+        "SELECT id, name, email, type, meirav_code, id_number FROM people WHERE id = %s",
         (person_id,)
     ).fetchone()
 
@@ -1855,30 +1886,14 @@ def prepare_guide_pdf_data(
         total_additions += monthly_totals["holiday_payment"]
         total_additions_no_travel += monthly_totals["holiday_payment"]
 
-    if monthly_totals.get("recovery_pay"):
-        recovery_details = monthly_totals.get("recovery_pay_details", {}) or {}
+    annual_payments = _annual_payments_for_report(monthly_totals)
+    for payment in annual_payments:
         payments_data.append({
-            "description": "דמי הבראה",
-            "detail": (
-                f"{recovery_details.get('recovery_days', 0)} ימים, "
-                f"{recovery_details.get('fte_percent', 0):.2f}% משרה"
-            ),
-            "amount": round(monthly_totals["recovery_pay"], 2),
-            "work_hours": round(recovery_details.get("total_hours", 0) or 0, 2),
+            "description": payment["name"],
+            "amount": payment["amount"],
         })
-        total_additions += monthly_totals["recovery_pay"]
-        total_additions_no_travel += monthly_totals["recovery_pay"]
-
-    if monthly_totals.get("clothing_pay"):
-        clothing_details = monthly_totals.get("clothing_pay_details", {}) or {}
-        payments_data.append({
-            "description": "דמי ביגוד",
-            "detail": f"{clothing_details.get('fte_percent', 0):.2f}% משרה",
-            "amount": round(monthly_totals["clothing_pay"], 2),
-            "work_hours": round(clothing_details.get("capped_hours", 0) or 0, 2),
-        })
-        total_additions += monthly_totals["clothing_pay"]
-        total_additions_no_travel += monthly_totals["clothing_pay"]
+        total_additions += payment["amount"]
+        total_additions_no_travel += payment["amount"]
 
     # פירוט שורות תלוש/גשר שבהן יש פילוג תעריפים.
     # ב-ASD מציגים רק רכיבי שכר שבהם אותה שורת תלוש מורכבת מיותר מתעריף בסיס אחד.
@@ -2088,6 +2103,7 @@ def prepare_guide_pdf_data(
         "person": dict(person),
         "shifts_data": shifts_data,
         "payments_data": payments_data,
+        "annual_payments": annual_payments,
         "completion_payments_data": completion_payments_data,
         "total_work_hours": round(total_work_hours, 2),
         "standby_count": standby_count,
@@ -2341,6 +2357,7 @@ def _prepare_chains_pdf_data(conn, person_id: int, year: int, month: int) -> Opt
         "person": person,
         "daily_segments": daily_segments,
         "monthly_totals": monthly_totals,
+        "annual_payments": _annual_payments_for_report(monthly_totals),
         "monthly_report": monthly_report,
         "minimum_wage": MINIMUM_WAGE,
         "selected_month": month,

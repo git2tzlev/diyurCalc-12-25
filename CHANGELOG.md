@@ -12,6 +12,29 @@
 
 ---
 
+## [2.35.1] - 2026-08-13
+
+### שינויים
+- בשורת פרטי המדריך נשאר רק `מספר עובד` במקום כפילות עם `מירב`
+- קבצים: `templates/guide.html`, `templates/guide_history.html`
+
+### סיבה
+מספר עובד הוא קוד מירב, ואין צורך להציג את אותו ערך פעמיים
+
+---
+
+## [2.35.0] - 2026-08-13
+
+### שינויים
+- חיפוש מדריכים לפי שם כולל גם מספר עובד (קוד מירב) ומספר זהות, כולל התאמה בלי מקפים או רווחים
+- בפרטי המדריך בדוח, בהיסטוריה, בטבלת מדריכים פעילים ובדוחות PDF מוצגים מספר עובד ומספר זהות
+- קבצים: `utils/utils.py`, `core/logic.py`, `routes/home.py`, `routes/summary.py`, `routes/guide.py`, `routes/stats.py`, `services/gesher_exporter.py`, `templates/index.html`, `templates/general_summary.html`, `templates/gesher_preview.html`, `templates/guide.html`, `templates/guide_history.html`, `templates/guide_chains_pdf.html`, `templates/guide_shifts_pdf.html`, `templates/stats.html`, `tests/test_person_search.py`
+
+### סיבה
+לא היה אפשר למצוא מדריך לפי מספר עובד או תעודת זהות, והמספרים לא הופיעו בשורת פרטי המדריך
+
+---
+
 ## [2.34.0] - 2026-08-12
 
 ### שינויים

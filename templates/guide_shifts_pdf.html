@@ -136,7 +136,11 @@
 <body>
   <div class="header">
     <h1>דוח משמרות</h1>
-    <div class="worker-name">עובד: {{ person['name'] }}</div>
+    <div class="worker-name">
+      עובד: {{ person['name'] }}
+      | מספר עובד: {{ person['meirav_code'] or '-' }}
+      | מספר זהות: {{ person['id_number'] or '-' }}
+    </div>
     <div class="period">תקופה: {{ period_start }} - {{ period_end }}</div>
   </div>
 

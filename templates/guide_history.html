@@ -111,7 +111,8 @@
       <h2 class="history-title">היסטוריית שינויים</h2>
       <div class="history-meta">
         {{ person.name }} |
-        מירב: {{ person.meirav_code or '-' }} |
+        מספר עובד: {{ person.meirav_code or '-' }} |
+        מספר זהות: {{ person.id_number or '-' }} |
         מפעל: {{ person.employer_code or '001' }}
       </div>
     </div>

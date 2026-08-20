@@ -124,5 +124,34 @@ class TestGesherExportPreview(unittest.TestCase):
         self.assertEqual(_mock_completion_rows.call_args.kwargs["person_ids"], {10})
 
 
+class TestCompletionBlockMessage(unittest.TestCase):
+    """הודעת חסימה חייבת לזהות את המדריך שגורם לה."""
+
+    def test_message_includes_guide_name_company_and_period(self):
+        from routes.export import _completion_block_message
+
+        message = _completion_block_message({
+            "message": "חסר קוד מירב למדריך",
+            "person_name": "לוי נעמי",
+            "company_code": "400",
+            "work_year": 2026,
+            "work_month": 6,
+        })
+
+        self.assertEqual(message, "400 06/2026: חסר קוד מירב למדריך (לוי נעמי)")
+
+    def test_message_without_guide_name_stays_unchanged(self):
+        from routes.export import _completion_block_message
+
+        message = _completion_block_message({
+            "message": "השלמה ללא קובץ גשר סופי",
+            "company_code": "001",
+            "work_year": 2026,
+            "work_month": 5,
+        })
+
+        self.assertEqual(message, "001 05/2026: השלמה ללא קובץ גשר סופי")
+
+
 if __name__ == "__main__":
     unittest.main()
