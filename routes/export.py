@@ -116,7 +116,7 @@ def _archive_gesher_file(
 ) -> None:
     """Best-effort archive of a generated Gesher file."""
     try:
-        save_gesher_export_file(
+        export_file_id = save_gesher_export_file(
             conn,
             year=year,
             month=month,
@@ -133,6 +133,20 @@ def _archive_gesher_file(
             created_by=_current_user_id(request),
             person_ids=person_ids,
         )
+        if export_file_id:
+            from services.missing_gesher_candidates import mark_approved_candidates_in_export
+            mark_approved_candidates_in_export(
+                conn,
+                payment_year=year,
+                payment_month=month,
+                company_code=str(company_code or "001"),
+                housing_array_id=(
+                    housing_array_id if housing_array_id is not None
+                    else get_housing_array_filter()
+                ),
+                export_file_id=int(export_file_id),
+                content=content,
+            )
     except Exception:
         import logging
         logging.getLogger(__name__).warning(
@@ -701,6 +715,9 @@ async def update_gesher_archive_status(request: Request, file_id: int) -> Redire
             updated_by=_current_user_id(request),
             housing_array_id=housing_filter,
         )
+        if updated and status in {"cancelled", "draft"}:
+            from services.missing_gesher_candidates import reopen_candidates_for_cancelled_export
+            reopen_candidates_for_cancelled_export(conn, file_id)
     if not updated:
         raise HTTPException(status_code=404, detail="קובץ גשר לא נמצא")
     return RedirectResponse(url="/admin/gesher-files", status_code=303)

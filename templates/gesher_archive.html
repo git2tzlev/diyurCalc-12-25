@@ -43,6 +43,7 @@
     <thead>
       <tr>
         <th>תאריך הפקה</th>
+        <th>הופק על ידי</th>
         <th>חודש</th>
         <th>מפעל</th>
         <th>מערך</th>
@@ -58,6 +59,7 @@
       {% for file in files %}
       <tr>
         <td style="white-space: nowrap;">{{ file.created_at.strftime("%d/%m/%Y %H:%M") if file.created_at else "" }}</td>
+        <td>{{ file.created_by_name or "-" }}</td>
         <td>{{ "%02d"|format(file.month) }}/{{ file.year }}</td>
         <td>{{ file.company_code or "-" }}</td>
         <td>{{ file.housing_array_name or "כל המערכים" }}</td>
@@ -133,7 +135,7 @@
       </tr>
       {% else %}
       <tr>
-        <td colspan="10" class="muted">עדיין אין קבצי גשר בארכיון</td>
+        <td colspan="11" class="muted">עדיין אין קבצי גשר בארכיון</td>
       </tr>
       {% endfor %}
     </tbody>

@@ -5,6 +5,7 @@ import logging
 from typing import Optional
 
 from fastapi import HTTPException, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 from starlette.responses import StreamingResponse
@@ -37,6 +38,12 @@ from services.salary_impact import (
     build_salary_impact_completion_rows,
     get_salary_impact_events,
     update_salary_impact_group_status,
+)
+from services.missing_gesher_candidates import (
+    list_missing_gesher_candidates,
+    sync_missing_gesher_candidates,
+    update_missing_gesher_candidate_status,
+    is_missing_final_candidate_item,
 )
 from services.email_service import (
     generate_batch_id,
@@ -332,6 +339,10 @@ def completions_page(
             payment_year=year,
             payment_month=month,
         )
+        legacy_items = [
+            item for item in legacy_items
+            if not is_missing_final_candidate_item(item)
+        ]
         events = [
             _prepare_completion_event_for_display(event)
             for event in get_salary_impact_events(
@@ -371,6 +382,9 @@ def completions_page(
             final_files_by_month,
         )
         email_tasks = _completion_report_tasks(events)
+        missing_gesher_candidates = list_missing_gesher_candidates(
+            conn, year, month, housing_array_id=housing_filter
+        )
 
     return templates.TemplateResponse("completions.html", {
         "request": request,
@@ -380,10 +394,62 @@ def completions_page(
         "guides": guides,
         "total_items": len(events) + len(legacy_items),
         "email_tasks": email_tasks,
+        "missing_gesher_candidates": missing_gesher_candidates,
         "completion_bulk_send_token": create_action_token(request, "completion_bulk_send"),
         "completion_status_token": create_action_token(request, "completion_status"),
         "completion_gesher_check_token": create_action_token(request, "completion_gesher_check"),
+        "missing_gesher_scan_token": create_action_token(request, "missing_gesher_scan"),
+        "missing_gesher_status_token": create_action_token(request, "missing_gesher_status"),
         "is_demo_mode": is_demo_mode(),
+    })
+
+
+def scan_missing_gesher_candidates(
+    request: Request, payment_year: int, payment_month: int, token: str,
+) -> JSONResponse:
+    """Run the explicit heavy scan and persist separately approved candidates."""
+    if not validate_action_token(request, token, "missing_gesher_scan"):
+        raise HTTPException(status_code=403, detail="אין הרשאה לבצע איתור מול הגשר")
+    if payment_year < 2023 or payment_month not in range(1, 13):
+        raise HTTPException(status_code=400, detail="חודש תשלום אינו תקין")
+    housing_filter = get_housing_array_filter()
+    with get_conn() as conn:
+        result = build_completion_gesher_audit(
+            conn, payment_year, payment_month, housing_array_id=housing_filter
+        )
+        candidates = sync_missing_gesher_candidates(
+            conn, result, housing_array_id=housing_filter
+        )
+    return JSONResponse(jsonable_encoder({"count": len(candidates), "candidates": candidates}))
+
+
+def change_missing_gesher_candidate_status(
+    request: Request,
+    *,
+    candidate_id: int,
+    action: str,
+    payment_year: int,
+    payment_month: int,
+    token: str,
+) -> Response:
+    """Apply one general employee-level decision."""
+    if not validate_action_token(request, token, "missing_gesher_status"):
+        raise HTTPException(status_code=403, detail="אין הרשאה לשנות החלטת השלמה")
+    current_user = getattr(request.state, "current_user", None) or {}
+    with get_conn() as conn:
+        try:
+            update_missing_gesher_candidate_status(
+                conn,
+                candidate_id,
+                action=action,
+                actor_person_id=current_user.get("person_id"),
+                housing_array_id=get_housing_array_filter(),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    from urllib.parse import urlencode
+    return Response(status_code=303, headers={
+        "Location": f"/completions?{urlencode({'year': payment_year, 'month': payment_month})}"
     })
 
 

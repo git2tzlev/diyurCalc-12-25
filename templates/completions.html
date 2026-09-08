@@ -24,12 +24,63 @@
        style="padding: 6px 10px; border: none; border-radius: 6px; background: #0369a1; color: white; cursor: pointer;">
       בדיקה מול הגשר
     </button>
+    <button type="button" id="missingGesherScanBtn" onclick="scanMissingGesherCandidates()"
+       style="padding: 6px 10px; border: none; border-radius: 6px; background: #9a3412; color: white; cursor: pointer;">
+      אתר עובדים שלא הופיעו בגשר
+    </button>
     <button type="button" onclick="openCompletionEmailDialog()"
        style="padding: 6px 10px; border: none; border-radius: 6px; background: #6f42c1; color: white; cursor: pointer;">
       שלח דוחות למדריכים
     </button>
     <span class="muted">{{ total_items }} השלמות</span>
   </form>
+
+  <section style="margin:16px 0 22px; border:2px solid #fed7aa; border-radius:10px; overflow:hidden;">
+    <div style="padding:12px 14px; background:#fff7ed;">
+      <strong>עובדים שלא נכללו בגשר הסופי</strong>
+      <span class="muted"> · אישור כללי ונפרד מהשלמות רגילות</span>
+    </div>
+    {% if missing_gesher_candidates %}
+    <table style="margin:0;">
+      <thead><tr><th>מדריך</th><th>חודש עבודה</th><th>מפעל</th><th>קוד מירב</th><th>סכום</th><th>סטטוס</th><th>פעולות</th></tr></thead>
+      <tbody>
+      {% set status_labels = {'pending':'ממתין לאישור','approved':'מאושר להוצאה','rejected':'לא להוצאה','included_in_export':'נכלל בגשר','cancelled':'בוטל'} %}
+      {% for candidate in missing_gesher_candidates if candidate.status != 'cancelled' %}
+      <tr>
+        <td>{{ candidate.person_name }}</td>
+        <td><bdi>{{ "%02d"|format(candidate.work_month) }}/{{ candidate.work_year }}</bdi></td>
+        <td><bdi>{{ candidate.company_code }}</bdi></td>
+        <td><bdi>{{ candidate.employee_code }}</bdi></td>
+        <td><bdi>{{ "%.2f"|format(candidate.total_amount) }} ₪</bdi></td>
+        <td>
+          {{ status_labels.get(candidate.status, candidate.status) }}
+          {% if candidate.block_reason %}<div class="cmp-error-box">{{ candidate.block_reason }}</div>{% endif %}
+        </td>
+        <td><div class="cmp-actions">
+          {% if candidate.status in ('pending','rejected') and not candidate.block_reason %}
+          <form method="post" action="/completions/missing-gesher/status?candidate_id={{ candidate.id }}&action=approve&payment_year={{ selected_year }}&payment_month={{ selected_month }}&token={{ missing_gesher_status_token|urlencode }}" onsubmit="return confirm('לאשר את כל דיווחי העובד להוצאה בחודש התשלום?');">
+            <button class="cmp-btn approve" type="submit">אשר להוצאה</button>
+          </form>
+          {% endif %}
+          {% if candidate.status in ('pending','approved') %}
+          <form method="post" action="/completions/missing-gesher/status?candidate_id={{ candidate.id }}&action=reject&payment_year={{ selected_year }}&payment_month={{ selected_month }}&token={{ missing_gesher_status_token|urlencode }}">
+            <button class="cmp-btn reopen" type="submit">לא להוצאה</button>
+          </form>
+          {% endif %}
+          {% if candidate.status == 'rejected' %}
+          <form method="post" action="/completions/missing-gesher/status?candidate_id={{ candidate.id }}&action=reopen&payment_year={{ selected_year }}&payment_month={{ selected_month }}&token={{ missing_gesher_status_token|urlencode }}">
+            <button class="cmp-btn reopen" type="submit">החזר להמתנה</button>
+          </form>
+          {% endif %}
+        </div></td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="muted" style="padding:14px;">טרם אותרו מועמדים בחודש זה. האיתור מתבצע רק בלחיצה יזומה.</div>
+    {% endif %}
+  </section>
 
   {% for guide in guides %}
   <details class="cmp-guide">
@@ -600,8 +651,27 @@
   const completionEmailTasks = {{ email_tasks|tojson }};
   const completionIsDemoMode = {{ 'true' if is_demo_mode else 'false' }};
   const completionGesherCheckToken = {{ completion_gesher_check_token|tojson }};
+  const missingGesherScanToken = {{ missing_gesher_scan_token|tojson }};
   let completionEmailEventSource = null;
   let completionEmailStartTime = null;
+
+  async function scanMissingGesherCandidates() {
+    const button = document.getElementById('missingGesherScanBtn');
+    button.disabled = true;
+    const originalText = button.textContent;
+    button.textContent = 'מאתר מול הגשר הסופי...';
+    const query = `payment_year=${completionPaymentYear}&payment_month=${completionPaymentMonth}&token=${encodeURIComponent(missingGesherScanToken)}`;
+    try {
+      const response = await fetch(`/api/completions/missing-gesher/scan?${query}`, {method: 'POST', headers: {'Accept':'application/json'}});
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || 'האיתור נכשל');
+      window.location.reload();
+    } catch (error) {
+      alert(error.message || 'האיתור נכשל');
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  }
 
   function completionEscapeHtml(value) {
     const el = document.createElement('div');

@@ -692,7 +692,7 @@ def _payment_marker_text(marker: dict) -> str:
     payment_month = marker.get("payment_month")
     if not payment_year or not payment_month:
         return ""
-    return f"שולם ב-{int(payment_month):02d}/{int(payment_year)}"
+    return f"לתשלום ב-{int(payment_month):02d}/{int(payment_year)}"
 
 
 def _marked_payment_windows_for_report(report: dict, work_year: int, work_month: int) -> list[dict]:
@@ -1184,15 +1184,19 @@ def guide_view(
 
             segments_calc_start = time.time()
             daily_segments, person_name = get_daily_segments_data(
-                conn, person_id, selected_year, selected_month, shabbat_cache, MINIMUM_WAGE
+                conn, person_id, selected_year, selected_month, shabbat_cache, MINIMUM_WAGE,
+                include_deferred_payment_items=True,
             )
             logger.info(f"get_daily_segments_data took: {time.time() - segments_calc_start:.4f}s")
 
             # חישוב monthly_totals ממקור אחד - daily_segments
             # זה מחליף את calculate_person_monthly_totals והדריסות הידניות
             totals_start = time.time()
+            payable_daily_segments, _ = get_daily_segments_data(
+                conn, person_id, selected_year, selected_month, shabbat_cache, MINIMUM_WAGE
+            )
             monthly_totals = aggregate_daily_segments_to_monthly(
-                conn, daily_segments, person_id, selected_year, selected_month, MINIMUM_WAGE,
+                conn, payable_daily_segments, person_id, selected_year, selected_month, MINIMUM_WAGE,
                 housing_filter=housing_filter,
             )
             logger.info(f"aggregate_daily_segments_to_monthly took: {time.time() - totals_start:.4f}s")
@@ -1592,7 +1596,7 @@ def prepare_guide_pdf_data(
             return ""
         if int(payment_year) == report_date.year and int(payment_month) == report_date.month:
             return ""
-        return f"שולם ב-{int(payment_month):02d}/{int(payment_year)}"
+        return f"לתשלום ב-{int(payment_month):02d}/{int(payment_year)}"
 
     def _compose_shift_note(r: dict) -> str:
         """שילוב הערת הדיווח, סימון חודש תשלום והערת ASD לעמודת ההערה בדוח."""
@@ -1818,10 +1822,14 @@ def prepare_guide_pdf_data(
     shabbat_cache = get_shabbat_times_cache(conn.conn)
 
     daily_segments, _ = get_daily_segments_data(
+        conn, person_id, year, month, shabbat_cache, MINIMUM_WAGE,
+        include_deferred_payment_items=True,
+    )
+    payable_daily_segments, _ = get_daily_segments_data(
         conn, person_id, year, month, shabbat_cache, MINIMUM_WAGE
     )
     monthly_totals = aggregate_daily_segments_to_monthly(
-        conn, daily_segments, person_id, year, month, MINIMUM_WAGE,
+        conn, payable_daily_segments, person_id, year, month, MINIMUM_WAGE,
         housing_filter=housing_filter,
     )
     _inject_holiday_payment(
@@ -2094,9 +2102,9 @@ def prepare_guide_pdf_data(
             if label and label not in payment_period_labels:
                 payment_period_labels.append(label)
     payment_period_months = [
-        label.replace("שולם ב-", "").strip()
+        label.replace("לתשלום ב-", "").strip()
         for label in payment_period_labels
-        if label.startswith("שולם ב-")
+        if label.startswith("לתשלום ב-")
     ]
 
     return {
@@ -2324,10 +2332,16 @@ def _prepare_chains_pdf_data(conn, person_id: int, year: int, month: int) -> Opt
 
     MINIMUM_WAGE = get_minimum_wage_for_month(conn.conn, year, month)
     shabbat_cache = get_shabbat_times_cache(conn.conn)
-    daily_segments, _ = get_daily_segments_data(conn, person_id, year, month, shabbat_cache, MINIMUM_WAGE)
+    daily_segments, _ = get_daily_segments_data(
+        conn, person_id, year, month, shabbat_cache, MINIMUM_WAGE,
+        include_deferred_payment_items=True,
+    )
+    payable_daily_segments, _ = get_daily_segments_data(
+        conn, person_id, year, month, shabbat_cache, MINIMUM_WAGE
+    )
     hf = get_housing_array_filter()
     monthly_totals = aggregate_daily_segments_to_monthly(
-        conn, daily_segments, person_id, year, month, MINIMUM_WAGE, housing_filter=hf
+        conn, payable_daily_segments, person_id, year, month, MINIMUM_WAGE, housing_filter=hf
     )
     _inject_holiday_payment(
         conn, monthly_totals, person_id,

@@ -526,6 +526,8 @@ def _apply_payment_component_overrides(
             "person_id": component.get("person_id"),
             "total_amount": quantity * rate,
             "component_type_id": type_id,
+            "payment_year": component.get("payment_year"),
+            "payment_month": component.get("payment_month"),
             "for_pension": pension_by_type.get(type_id, bool(component.get("for_pension"))),
         }
     return list(by_id.values())
@@ -541,6 +543,8 @@ def calculate_monthly_summary(
     excluded_payment_component_ids: Optional[set[int]] = None,
     time_report_overrides: Optional[Dict[int, Optional[Dict]]] = None,
     payment_component_overrides: Optional[Dict[int, Optional[Dict]]] = None,
+    include_deferred_payment_items: bool = False,
+    deferred_payment_period: Optional[tuple[int, int]] = None,
 ) -> Tuple[List[Dict], Dict]:
     """
     Calculate monthly summary for all active people.
@@ -558,6 +562,7 @@ def calculate_monthly_summary(
         get_all_housing_rates_for_month,
     )
     from core.database import PostgresConnection
+    from core.payment_period import filter_items_for_work_month
     from app_utils import (
         _fetch_weekday_overrides_for_month,
         aggregate_daily_segments_to_monthly,
@@ -729,6 +734,13 @@ def calculate_monthly_summary(
             report for report in all_reports
             if report.get("id") not in excluded_time_report_ids
         ]
+    all_reports = filter_items_for_work_month(
+        all_reports,
+        year,
+        month,
+        include_deferred=include_deferred_payment_items,
+        deferred_payment_period=deferred_payment_period,
+    )
     all_reports = [
         report for report in all_reports
         if not should_exclude_asd_completion_report(
@@ -765,6 +777,7 @@ def calculate_monthly_summary(
         if housing_filter is not None:
             cursor.execute("""
                 SELECT tr.person_id, tr.date, tr.start_time, tr.end_time, tr.shift_type_id, tr.apartment_id,
+                       tr.payment_year, tr.payment_month,
                        tr.rate_apartment_type_id,
                        st.name AS shift_name,
                        ap.housing_array_id, at.hourly_wage_supplement,
@@ -784,6 +797,7 @@ def calculate_monthly_summary(
         else:
             cursor.execute("""
                 SELECT tr.person_id, tr.date, tr.start_time, tr.end_time, tr.shift_type_id, tr.apartment_id,
+                       tr.payment_year, tr.payment_month,
                        tr.rate_apartment_type_id,
                        st.name AS shift_name,
                        ap.housing_array_id, at.hourly_wage_supplement,
@@ -800,7 +814,14 @@ def calculate_monthly_summary(
                 ORDER BY tr.person_id, tr.date, tr.start_time
             """, (person_ids, prev_start_date, prev_end_date))
 
-        for r in cursor.fetchall():
+        previous_reports = filter_items_for_work_month(
+            cursor.fetchall(),
+            prev_year,
+            prev_month,
+            include_deferred=include_deferred_payment_items,
+            deferred_payment_period=deferred_payment_period,
+        )
+        for r in previous_reports:
             prev_reports_by_person.setdefault(r["person_id"], []).append(r)
             if r["shift_type_id"]:
                 all_shift_ids.add(r["shift_type_id"])
@@ -827,6 +848,7 @@ def calculate_monthly_summary(
     if housing_filter is not None:
         cursor.execute("""
             SELECT pc.id, pc.person_id, (pc.quantity * pc.rate) as total_amount, pc.component_type_id,
+                   pc.payment_year, pc.payment_month,
                    COALESCE(pct.for_pension, FALSE) as for_pension
             FROM payment_components pc
             JOIN apartments ap ON ap.id = pc.apartment_id
@@ -837,6 +859,7 @@ def calculate_monthly_summary(
     else:
         cursor.execute("""
             SELECT pc.id, pc.person_id, (pc.quantity * pc.rate) as total_amount, pc.component_type_id,
+                   pc.payment_year, pc.payment_month,
                    COALESCE(pct.for_pension, FALSE) as for_pension
             FROM payment_components pc
             LEFT JOIN payment_component_types pct ON pc.component_type_id = pct.id
@@ -855,6 +878,13 @@ def calculate_monthly_summary(
             pc for pc in all_payment_comps
             if pc.get("id") not in excluded_payment_component_ids
         ]
+    all_payment_comps = filter_items_for_work_month(
+        all_payment_comps,
+        year,
+        month,
+        include_deferred=include_deferred_payment_items,
+        deferred_payment_period=deferred_payment_period,
+    )
 
     # Group payment_components by person_id
     payment_comps_by_person = {}
@@ -930,6 +960,8 @@ def calculate_monthly_summary(
             preloaded_prev_month_sick_dates=prev_month_sick_dates_by_person.get(pid, []),
             preloaded_prev_month_reports=prev_reports_by_person.get(pid, []),
             preloaded_prev_month_housing_rates_cache=prev_month_housing_rates_cache,
+            include_deferred_payment_items=include_deferred_payment_items,
+            deferred_payment_period=deferred_payment_period,
         )
 
         monthly_totals = aggregate_daily_segments_to_monthly(
@@ -937,6 +969,8 @@ def calculate_monthly_summary(
             preloaded_payment_comps=payment_comps_by_person.get(pid, []),
             person_start_date=person_start_dates.get(pid),
             housing_filter=housing_filter,
+            include_deferred_payment_items=include_deferred_payment_items,
+            deferred_payment_period=deferred_payment_period,
         )
 
         hp_data = holiday_payments.get(pid)

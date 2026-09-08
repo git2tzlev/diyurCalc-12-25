@@ -1378,6 +1378,8 @@ def _calculate_previous_month_carryover(
     preloaded_reports: list[dict[str, Any]] | None = None,
     preloaded_segments: dict[int, list[dict]] | None = None,
     preloaded_housing_rates_cache: dict | None = None,
+    include_deferred_payment_items: bool = False,
+    deferred_payment_period: tuple[int, int] | None = None,
 ) -> tuple[int, int, int | None, int, int | None]:
     """
     חישוב carryover מהחודש הקודם - חיפוש איטרטיבי אחורה עד שבירת רצף.
@@ -1468,6 +1470,7 @@ def _calculate_previous_month_carryover(
         if housing_filter is not None:
             cursor.execute("""
                 SELECT tr.date, tr.start_time, tr.end_time, tr.shift_type_id, tr.apartment_id,
+                       tr.payment_year, tr.payment_month,
                        st.name AS shift_name,
                        ap.housing_array_id, at.hourly_wage_supplement, p.is_married
                 FROM time_reports tr
@@ -1482,6 +1485,7 @@ def _calculate_previous_month_carryover(
         else:
             cursor.execute("""
                 SELECT tr.date, tr.start_time, tr.end_time, tr.shift_type_id, tr.apartment_id,
+                       tr.payment_year, tr.payment_month,
                        st.name AS shift_name,
                        ap.housing_array_id, at.hourly_wage_supplement, p.is_married
                 FROM time_reports tr
@@ -1520,6 +1524,15 @@ def _calculate_previous_month_carryover(
             if earliest_date <= report_date <= last_day_date:
                 all_reports.append(report)
 
+    from core.payment_period import filter_items_for_work_month
+
+    all_reports = filter_items_for_work_month(
+        all_reports,
+        prev_year,
+        prev_month,
+        include_deferred=include_deferred_payment_items,
+        deferred_payment_period=deferred_payment_period,
+    )
     all_reports = _filter_previous_month_carryover_reports(all_reports, person_id)
 
     if not all_reports:
@@ -1813,6 +1826,8 @@ def get_daily_segments_data(
     preloaded_prev_month_sick_dates: Optional[list[date]] = None,
     preloaded_prev_month_reports: Optional[list[dict[str, Any]]] = None,
     preloaded_prev_month_housing_rates_cache: Optional[Dict] = None,
+    include_deferred_payment_items: bool = False,
+    deferred_payment_period: tuple[int, int] | None = None,
 ):
     """
     Calculates detailed daily segments for a given employee and month.
@@ -1900,6 +1915,15 @@ def get_daily_segments_data(
                 ORDER BY tr.date, tr.start_time
             """, (person_id, start_date, end_date)).fetchall()
 
+    from core.payment_period import filter_items_for_work_month
+
+    reports = filter_items_for_work_month(
+        reports,
+        year,
+        month,
+        include_deferred=include_deferred_payment_items,
+        deferred_payment_period=deferred_payment_period,
+    )
     reports = _filter_asd_completion_reports_for_one_time_exclusion(reports, year, month)
     person_name = reports[0]["person_name"] if reports else ""
 
@@ -2839,6 +2863,8 @@ def get_daily_segments_data(
         preloaded_reports=preloaded_prev_month_reports,
         preloaded_segments=preloaded_segments,
         preloaded_housing_rates_cache=preloaded_prev_month_housing_rates_cache,
+        include_deferred_payment_items=include_deferred_payment_items,
+        deferred_payment_period=deferred_payment_period,
     )
     prev_day_carryover_minutes = prev_month_carryover_minutes
     prev_day_chain_end_time = prev_month_chain_end  # זמן סיום הרצף מהחודש הקודם
@@ -4219,7 +4245,9 @@ def aggregate_daily_segments_to_monthly(
     minimum_wage: float,
     preloaded_payment_comps: Optional[List] = None,
     person_start_date: Optional[Any] = None,
-    housing_filter: Optional[int] = None
+    housing_filter: Optional[int] = None,
+    include_deferred_payment_items: bool = False,
+    deferred_payment_period: tuple[int, int] | None = None,
 ) -> Dict[str, Any]:
     """
     מאחד את כל הנתונים מ-daily_segments למילון monthly_totals.
@@ -4241,6 +4269,7 @@ def aggregate_daily_segments_to_monthly(
     from utils.utils import calculate_accruals
     from datetime import datetime
     from zoneinfo import ZoneInfo
+    from core.payment_period import filter_items_for_work_month
 
     LOCAL_TZ = ZoneInfo("Asia/Jerusalem")
 
@@ -4583,6 +4612,7 @@ def aggregate_daily_segments_to_monthly(
         if housing_filter is not None:
             payment_comps = conn.execute("""
                 SELECT (pc.quantity * pc.rate) as total_amount, pc.component_type_id,
+                       pc.payment_year, pc.payment_month,
                        COALESCE(pct.for_pension, FALSE) as for_pension
                 FROM payment_components pc
                 JOIN apartments ap ON ap.id = pc.apartment_id
@@ -4593,11 +4623,20 @@ def aggregate_daily_segments_to_monthly(
         else:
             payment_comps = conn.execute("""
                 SELECT pc.quantity * pc.rate as total_amount, pc.component_type_id,
+                       pc.payment_year, pc.payment_month,
                        COALESCE(pct.for_pension, FALSE) as for_pension
                 FROM payment_components pc
                 LEFT JOIN payment_component_types pct ON pc.component_type_id = pct.id
                 WHERE pc.person_id = %s AND pc.date >= %s AND pc.date < %s
             """, (person_id, month_start, month_end)).fetchall()
+
+    payment_comps = filter_items_for_work_month(
+        payment_comps,
+        year,
+        month,
+        include_deferred=include_deferred_payment_items,
+        deferred_payment_period=deferred_payment_period,
+    )
 
     for pc in payment_comps:
         amount = (pc["total_amount"] or 0) / 100

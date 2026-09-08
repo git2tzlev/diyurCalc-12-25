@@ -124,13 +124,27 @@ def parse_gesher_file_lines(content: str) -> list[dict[str, Any]]:
     return rows
 
 
-def _person_lookup(conn) -> dict[str, dict[str, Any]]:
-    rows = conn.execute("""
-        SELECT p.id, p.name, p.meirav_code, e.code AS employer_code
+def _person_lookup(
+    conn,
+    *,
+    housing_array_id: Optional[int] = None,
+    company_code: Optional[str] = None,
+) -> dict[str, dict[str, Any]]:
+    conditions = ["p.meirav_code IS NOT NULL", "p.meirav_code != ''"]
+    params: list[Any] = []
+    if housing_array_id is not None:
+        conditions.append("p.housing_array_id = %s")
+        params.append(housing_array_id)
+    if company_code is not None:
+        conditions.append("e.code = %s")
+        params.append(str(company_code))
+    rows = conn.execute(f"""
+        SELECT p.id, p.name, p.meirav_code, p.housing_array_id,
+               e.code AS employer_code
         FROM people p
         LEFT JOIN employers e ON e.id = p.employer_id
-        WHERE p.meirav_code IS NOT NULL AND p.meirav_code != ''
-    """).fetchall()
+        WHERE {' AND '.join(conditions)}
+    """, tuple(params)).fetchall()
     result = {}
     for row in rows:
         code = _clean_employee_code(row["meirav_code"])
@@ -141,6 +155,36 @@ def _person_lookup(conn) -> dict[str, dict[str, Any]]:
                 "employer_code": row["employer_code"],
             }
     return result
+
+
+def _scope_person_ids(
+    conn,
+    person_ids: Optional[set[int]],
+    *,
+    housing_array_id: Optional[int],
+    company_code: Optional[str],
+) -> Optional[set[int]]:
+    """Keep recalculation people inside the archived export's requested scope."""
+    conditions = []
+    params: list[Any] = []
+    if person_ids is not None:
+        conditions.append("p.id = ANY(%s)")
+        params.append(sorted(person_ids))
+    if housing_array_id is not None:
+        conditions.append("p.housing_array_id = %s")
+        params.append(housing_array_id)
+    if company_code is not None:
+        conditions.append("e.code = %s")
+        params.append(str(company_code))
+    if not conditions:
+        return person_ids
+    rows = conn.execute(f"""
+        SELECT p.id
+        FROM people p
+        LEFT JOIN employers e ON e.id = p.employer_id
+        WHERE {' AND '.join(conditions)}
+    """, tuple(params)).fetchall()
+    return {int(row["id"]) for row in rows}
 
 
 def _export_code_lookup(conn) -> dict[str, dict[str, str]]:
@@ -172,6 +216,8 @@ def build_current_gesher_lines(
     excluded_time_report_ids: Optional[set[int]] = None,
     excluded_payment_component_ids: Optional[set[int]] = None,
     include_negative_values: bool = False,
+    include_deferred_payment_items: bool = False,
+    deferred_payment_period: Optional[tuple[int, int]] = None,
 ) -> list[dict[str, Any]]:
     """Build comparable Gesher lines from the current monthly calculation."""
     export_codes = gesher_exporter.load_export_config_from_db(conn)
@@ -189,6 +235,8 @@ def build_current_gesher_lines(
         person_ids=person_ids,
         excluded_time_report_ids=excluded_time_report_ids,
         excluded_payment_component_ids=excluded_payment_component_ids,
+        include_deferred_payment_items=include_deferred_payment_items,
+        deferred_payment_period=deferred_payment_period,
     )
 
     return build_gesher_lines_from_summary(
@@ -433,6 +481,7 @@ def _build_current_completion_diffs(
         excluded_time_report_ids=report_ids,
         excluded_payment_component_ids=component_ids,
         include_negative_values=True,
+        include_deferred_payment_items=True,
     )
     current_with = build_current_gesher_lines(
         conn,
@@ -441,6 +490,7 @@ def _build_current_completion_diffs(
         company_code=company_code,
         person_ids=person_ids,
         include_negative_values=True,
+        include_deferred_payment_items=True,
     )
     return _build_unverified_completion_diffs(
         current_without,
@@ -788,6 +838,7 @@ def build_legacy_completion_gesher_rows_from_final_file(
             person_ids=file_person_ids,
             excluded_time_report_ids=report_ids,
             excluded_payment_component_ids=component_ids,
+            include_deferred_payment_items=True,
         )
         unrelated_diffs = compare_line_sets(paid_lines, current_without)
         if unrelated_diffs:
@@ -797,6 +848,7 @@ def build_legacy_completion_gesher_rows_from_final_file(
                 work_month,
                 company_code=item_company,
                 person_ids=file_person_ids,
+                include_deferred_payment_items=True,
             )
             completion_diffs = compare_line_sets(paid_lines, current_with)
             for diff in completion_diffs:
@@ -824,6 +876,7 @@ def build_legacy_completion_gesher_rows_from_final_file(
             work_month,
             company_code=item_company,
             person_ids=file_person_ids,
+            include_deferred_payment_items=True,
         )
         completion_diffs = compare_line_sets(paid_lines, current_with)
         for diff in completion_diffs:
@@ -859,9 +912,19 @@ def build_legacy_completion_gesher_rows_from_final_file(
     }
 
 
-def enrich_paid_lines(conn, lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def enrich_paid_lines(
+    conn,
+    lines: list[dict[str, Any]],
+    *,
+    housing_array_id: Optional[int] = None,
+    company_code: Optional[str] = None,
+) -> list[dict[str, Any]]:
     """Add person and display metadata to parsed paid lines when possible."""
-    people_by_code = _person_lookup(conn)
+    people_by_code = _person_lookup(
+        conn,
+        housing_array_id=housing_array_id,
+        company_code=company_code,
+    )
     symbols = _export_code_lookup(conn)
     enriched = []
     for line in lines:
@@ -1209,11 +1272,23 @@ def build_completion_gesher_audit(
         group["file_id"] = file_row.get("id")
         group["filename"] = file_row.get("filename") or ""
 
-        paid_lines = enrich_paid_lines(conn, parse_gesher_file_lines(file_row.get("content") or ""))
-        file_person_ids = _file_person_ids(file_row)
+        paid_lines = enrich_paid_lines(
+            conn,
+            parse_gesher_file_lines(file_row.get("content") or ""),
+            housing_array_id=housing_array_id,
+            company_code=company_code,
+        )
+        file_person_ids = _scope_person_ids(
+            conn,
+            _file_person_ids(file_row),
+            housing_array_id=housing_array_id,
+            company_code=company_code,
+        )
         current_lines = build_current_gesher_lines(
             conn, work_year, work_month,
             company_code=company_code,
+            include_deferred_payment_items=True,
+            deferred_payment_period=(payment_year, payment_month),
             person_ids=file_person_ids,
         )
         paid_employee_codes = {line["employee_code"] for line in paid_lines}

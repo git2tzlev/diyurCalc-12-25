@@ -13,6 +13,7 @@
       {{ "%02d"|format(file.month) }}/{{ file.year }}
       | מפעל {{ file.company_code or "-" }}
       | {{ file.housing_array_name or "כל המערכים" }}
+      | הופק על ידי {{ file.created_by_name or "-" }}
       | {{ file.line_count }} שורות
     </span>
     {% if file.is_cancelled %}

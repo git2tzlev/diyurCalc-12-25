@@ -1,5 +1,7 @@
 from services.gesher_difference import (
     _build_unverified_completion_diffs,
+    _person_lookup,
+    _scope_person_ids,
     _merge_completion_rows,
     build_approved_completion_gesher_rows,
     build_legacy_completion_gesher_rows_from_final_file,
@@ -12,6 +14,52 @@ from services.gesher_difference import (
     get_legacy_completion_items,
     parse_gesher_file_lines,
 )
+
+
+def test_person_lookup_scopes_duplicate_meirav_code_to_housing_and_company():
+    class Result:
+        def fetchall(self):
+            return [{
+                "id": 363,
+                "name": "מדריכה מצוהר הלב",
+                "meirav_code": "9348",
+                "employer_code": "400",
+                "housing_array_id": 1,
+            }]
+
+    class Conn:
+        def execute(self, query, params):
+            assert "p.housing_array_id = %s" in query
+            assert "e.code = %s" in query
+            assert params == (1, "400")
+            return Result()
+
+    people = _person_lookup(Conn(), housing_array_id=1, company_code="400")
+
+    assert people["009348"]["person_id"] == 363
+
+
+def test_scope_person_ids_removes_people_from_other_housing_arrays():
+    class Result:
+        def fetchall(self):
+            return [{"id": 363}]
+
+    class Conn:
+        def execute(self, query, params):
+            assert "p.id = ANY(%s)" in query
+            assert "p.housing_array_id = %s" in query
+            assert "e.code = %s" in query
+            assert params == ([275, 363], 1, "400")
+            return Result()
+
+    scoped = _scope_person_ids(
+        Conn(),
+        {275, 363},
+        housing_array_id=1,
+        company_code="400",
+    )
+
+    assert scoped == {363}
 
 
 def _audit_row(symbol="317", quantity=0.0, amount=100.0, rate=100.0):

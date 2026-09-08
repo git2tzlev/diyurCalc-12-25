@@ -44,6 +44,34 @@ def month_key(year: int, month: int) -> int:
     return year * 100 + month
 
 
+def filter_items_for_work_month(
+    items: list[Any],
+    year: int,
+    month: int,
+    *,
+    include_deferred: bool = False,
+    deferred_payment_period: Optional[tuple[int, int]] = None,
+) -> list[Any]:
+    """Exclude items explicitly assigned to a later payment month from regular payroll."""
+    if include_deferred and deferred_payment_period is None:
+        return list(items)
+
+    work_month_key = month_key(year, month)
+    payable = []
+    for item in items:
+        payment_year = item.get("payment_year")
+        payment_month = item.get("payment_month")
+        if payment_year and payment_month:
+            item_payment_key = month_key(int(payment_year), int(payment_month))
+            if item_payment_key > work_month_key:
+                if not include_deferred:
+                    continue
+                if (int(payment_year), int(payment_month)) != deferred_payment_period:
+                    continue
+        payable.append(item)
+    return payable
+
+
 def _as_date(value: Any) -> Optional[date]:
     if value is None:
         return None

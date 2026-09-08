@@ -190,6 +190,7 @@ def _calculate_group_lines(
         person_ids=person_ids,
         time_report_overrides=report_overrides,
         payment_component_overrides=component_overrides,
+        include_deferred_payment_items=True,
     )
     return build_gesher_lines_from_summary(
         conn,

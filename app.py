@@ -62,6 +62,8 @@ from routes.completions import (
     completion_reports_bulk_send_stream,
     completion_gesher_check,
     completion_gesher_check_excel,
+    scan_missing_gesher_candidates,
+    change_missing_gesher_candidate_status,
 )
 from routes.email import (
     email_settings_page,
@@ -753,6 +755,34 @@ def completion_gesher_check_excel_route(
 ):
     """Download the centralized completion Gesher audit."""
     return completion_gesher_check_excel(request, payment_year, payment_month, token)
+
+
+@app.post("/api/completions/missing-gesher/scan")
+def missing_gesher_scan_route(
+    request: Request, payment_year: int, payment_month: int, token: str,
+):
+    """Find employees entirely absent from the selected final Gesher file."""
+    return scan_missing_gesher_candidates(request, payment_year, payment_month, token)
+
+
+@app.post("/completions/missing-gesher/status")
+def missing_gesher_status_route(
+    request: Request,
+    candidate_id: int,
+    action: str,
+    payment_year: int,
+    payment_month: int,
+    token: str,
+):
+    """Approve, reject or reopen a missing-employee candidate."""
+    return change_missing_gesher_candidate_status(
+        request,
+        candidate_id=candidate_id,
+        action=action,
+        payment_year=payment_year,
+        payment_month=payment_month,
+        token=token,
+    )
 
 
 # Statistics routes
