@@ -113,6 +113,92 @@ def get_report_presence_counts(
     return counts, has_payment_components
 
 
+def get_payment_period_presence_counts(
+    conn,
+    payment_year: int,
+    payment_month: int,
+    housing_array_id: Optional[int] = None,
+) -> dict[int, int]:
+    """Return guides with completion records that are eligible for this payment month."""
+    event_params: list = [
+        payment_year,
+        payment_month,
+        ["included_in_export", "exported"],
+        ["time_reports", "payment_components"],
+    ]
+    report_params: list = [
+        payment_year,
+        payment_month,
+        payment_year,
+        payment_month,
+    ]
+    component_params: list = [
+        payment_year,
+        payment_month,
+        payment_year,
+        payment_month,
+    ]
+    event_housing_sql = ""
+    report_housing_sql = ""
+    component_housing_sql = ""
+    if housing_array_id is not None:
+        event_housing_sql = "AND sie.housing_array_id = %s"
+        report_housing_sql = "AND ap.housing_array_id = %s"
+        component_housing_sql = "AND ap.housing_array_id = %s"
+        event_params.append(housing_array_id)
+        report_params.append(housing_array_id)
+        component_params.append(housing_array_id)
+
+    rows = conn.execute(
+        f"""
+        SELECT person_id, COUNT(*) AS cnt
+        FROM (
+            SELECT sie.person_id, sie.source_table, sie.source_id
+            FROM salary_impact_events sie
+            WHERE sie.payment_year = %s AND sie.payment_month = %s
+              AND sie.status = ANY(%s)
+              AND sie.source_table = ANY(%s)
+              {event_housing_sql}
+
+            UNION ALL
+
+            SELECT tr.person_id, 'time_reports', tr.id
+            FROM time_reports tr
+            JOIN apartments ap ON ap.id = tr.apartment_id
+            WHERE tr.payment_year = %s AND tr.payment_month = %s
+              AND (EXTRACT(YEAR FROM tr.date)::int * 100 + EXTRACT(MONTH FROM tr.date)::int)
+                  < (%s * 100 + %s)
+              AND NOT EXISTS (
+                  SELECT 1 FROM salary_impact_events sie
+                  WHERE sie.source_table = 'time_reports' AND sie.source_id = tr.id
+                    AND sie.payment_year = tr.payment_year
+                    AND sie.payment_month = tr.payment_month
+              )
+              {report_housing_sql}
+
+            UNION ALL
+
+            SELECT pc.person_id, 'payment_components', pc.id
+            FROM payment_components pc
+            JOIN apartments ap ON ap.id = pc.apartment_id
+            WHERE pc.payment_year = %s AND pc.payment_month = %s
+              AND (EXTRACT(YEAR FROM pc.date)::int * 100 + EXTRACT(MONTH FROM pc.date)::int)
+                  < (%s * 100 + %s)
+              AND NOT EXISTS (
+                  SELECT 1 FROM salary_impact_events sie
+                  WHERE sie.source_table = 'payment_components' AND sie.source_id = pc.id
+                    AND sie.payment_year = pc.payment_year
+                    AND sie.payment_month = pc.payment_month
+              )
+              {component_housing_sql}
+        ) payment_items
+        GROUP BY person_id
+        """,
+        tuple(event_params + report_params + component_params),
+    )
+    return {row["person_id"]: row["cnt"] for row in rows}
+
+
 def _parse_report_time(value) -> time | None:
     if value is None:
         return None

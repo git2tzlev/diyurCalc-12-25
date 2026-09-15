@@ -15,7 +15,7 @@ from fastapi.templating import Jinja2Templates
 from core.config import config
 from core.database import get_conn, get_housing_array_filter, get_default_period
 from core.logic import get_active_guides
-from core.report_presence import get_report_presence_counts
+from core.report_presence import get_payment_period_presence_counts, get_report_presence_counts
 from core.auth import create_action_token, get_user_housing_array
 from routes.guide import prepare_guide_pdf_data
 from services.guide_reports_excel_export import build_guide_reports_excel
@@ -53,12 +53,19 @@ def _guides_with_reports_for_period(
         counts, has_payment_components = get_report_presence_counts(
             conn, start_date, end_date, housing_array_id,
         )
+        payment_period_counts = get_payment_period_presence_counts(
+            conn, year, month, housing_array_id,
+        )
 
     allowed_types = {"permanent", "substitute"}
     return [
         g for g in guides
         if g["type"] in allowed_types
-        and (counts.get(g["id"], 0) >= 1 or g["id"] in has_payment_components)
+        and (
+            counts.get(g["id"], 0) >= 1
+            or g["id"] in has_payment_components
+            or g["id"] in payment_period_counts
+        )
     ]
 
 
@@ -121,6 +128,7 @@ def reports_management(
     guides_with_reports = []
     counts: dict[int, int] = {}
     has_payment_components: set[int] = set()
+    payment_period_counts: dict[int, int] = {}
 
     if selected_year and selected_month:
         start_dt, end_dt = month_range_ts(selected_year, selected_month)
@@ -135,13 +143,20 @@ def reports_management(
             counts, has_payment_components = get_report_presence_counts(
                 conn, start_date, end_date, effective_filter,
             )
+            payment_period_counts = get_payment_period_presence_counts(
+                conn, selected_year, selected_month, effective_filter,
+            )
 
         # סינון מדריכים עם דוחות בלבד
         allowed_types = {"permanent", "substitute"}
         for g in guides:
             if g["type"] not in allowed_types:
                 continue
-            if counts.get(g["id"], 0) < 1 and g["id"] not in has_payment_components:
+            if (
+                counts.get(g["id"], 0) < 1
+                and g["id"] not in has_payment_components
+                and g["id"] not in payment_period_counts
+            ):
                 continue
 
             guides_with_reports.append({
@@ -150,6 +165,7 @@ def reports_management(
                 "email": g.get("email") or "",
                 "type": "קבוע" if g["type"] == "permanent" else "מחליף",
                 "shift_count": counts.get(g["id"], 0),
+                "payment_period_count": payment_period_counts.get(g["id"], 0),
                 "has_email": bool(g.get("email")),
             })
 

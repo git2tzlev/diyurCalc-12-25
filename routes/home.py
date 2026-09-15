@@ -14,7 +14,11 @@ from fastapi.templating import Jinja2Templates
 from core.config import config
 from core.database import get_conn, get_housing_array_filter, get_default_period, get_multi_housing_guides
 from core.logic import get_active_guides
-from core.report_presence import get_report_overlap_counts, get_report_presence_counts
+from core.report_presence import (
+    get_payment_period_presence_counts,
+    get_report_overlap_counts,
+    get_report_presence_counts,
+)
 from core.time_utils import calculate_seniority_months, get_shabbat_times_cache
 from core.holiday_payment import get_holiday_payment_setup
 from utils.utils import month_range_ts, available_months_from_db, format_currency, format_seniority_months, human_date, person_matches_search
@@ -67,6 +71,7 @@ def home(
     counts: dict[int, int] = {}
     notes_counts: dict[int, int] = {}
     has_payment_components: set[int] = set()
+    payment_period_counts: dict[int, int] = {}
     multi_housing: dict[int, list[str]] = {}
     overlap_counts: dict[int, int] = {}
     holiday_payment_setup: dict | None = None
@@ -79,6 +84,9 @@ def home(
         with get_conn() as conn:
             counts, has_payment_components = get_report_presence_counts(
                 conn, start_date, end_date, housing_filter,
+            )
+            payment_period_counts = get_payment_period_presence_counts(
+                conn, selected_year, selected_month, housing_filter,
             )
             overlap_counts = get_report_overlap_counts(
                 conn, start_date, end_date, housing_filter,
@@ -121,7 +129,11 @@ def home(
         if selected_year and selected_month:
             # הצג מדריכים עם משמרות או רכיבי תשלום
             # (כשיש סינון לפי מערך דיור, has_payment_components כבר מסונן)
-            if counts.get(g["id"], 0) < 1 and g["id"] not in has_payment_components:
+            if (
+                counts.get(g["id"], 0) < 1
+                and g["id"] not in has_payment_components
+                and g["id"] not in payment_period_counts
+            ):
                 continue
 
         seniority_months = None
@@ -158,6 +170,7 @@ def home(
             "notes_counts": notes_counts,
             "multi_housing": multi_housing,
             "overlap_counts": overlap_counts,
+            "payment_period_counts": payment_period_counts,
             "q": q or "",
             "holiday_payment_setup": holiday_payment_setup,
         },

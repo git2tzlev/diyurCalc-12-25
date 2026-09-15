@@ -91,6 +91,9 @@
           <a href="/guide/{{ g['id'] }}{% if selected_month and selected_year %}?month={{ selected_month }}&year={{ selected_year }}{% endif %}" style="text-decoration: none; color: #0969da; font-weight: 500;" title="לחץ לצפייה בדוח מפורט">
             {{ g['name'] }}
           </a>
+          {% if payment_period_counts.get(g['id'], 0) > 0 %}
+          <span title="קיימות שורות השלמה המאושרות לייצוא בחודש התשלום" style="background:#ffedd5;color:#9a3412;padding:2px 7px;border-radius:10px;font-size:11px;font-weight:700;margin-right:4px;">לתשלום בחודש</span>
+          {% endif %}
           {% if multi_housing is defined and g['id'] in multi_housing %}
           <span title="פעיל גם במערכים: {{ multi_housing[g['id']] | join(', ') }}" style="background: #fee2e2; color: #991b1b; padding: 1px 6px; border-radius: 10px; font-size: 11px; font-weight: 600; margin-right: 4px; cursor: help;">מרובה מערכים</span>
           {% endif %}
@@ -553,4 +556,3 @@
 
 </script>
 {% endblock %}
-

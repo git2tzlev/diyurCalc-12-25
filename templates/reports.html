@@ -74,6 +74,7 @@
         <th>שם</th>
         <th>סוג</th>
         <th>משמרות</th>
+        <th>השלמות לתשלום</th>
         <th style="width: 220px;">מייל</th>
         <th style="width: 160px;">פעולות</th>
       </tr>
@@ -88,6 +89,7 @@
         </td>
         <td>{{ g.type }}</td>
         <td>{{ g.shift_count }}</td>
+        <td>{% if g.payment_period_count %}{{ g.payment_period_count }}{% else %}-{% endif %}</td>
         <td>
           <input type="email" class="guide-email-input" value="{{ g.email }}" placeholder="הזן מייל" style="width: 100%; padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px;">
         </td>
@@ -101,7 +103,7 @@
       </tr>
       {% else %}
       <tr>
-        <td colspan="5" class="muted">לא נמצאו מדריכים עם דוחות לחודש זה</td>
+        <td colspan="6" class="muted">לא נמצאו מדריכים עם דוחות לחודש זה</td>
       </tr>
       {% endfor %}
     </tbody>

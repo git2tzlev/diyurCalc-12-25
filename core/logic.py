@@ -100,9 +100,24 @@ def get_available_months_for_person(conn, person_id: int) -> List[Tuple[int, int
                     FROM payment_components pc
                     JOIN apartments ap ON ap.id = pc.apartment_id
                     WHERE pc.person_id = %s AND ap.housing_array_id = %s
+                    UNION
+                    SELECT tr.payment_year AS year, tr.payment_month AS month
+                    FROM time_reports tr
+                    JOIN apartments ap ON ap.id = tr.apartment_id
+                    WHERE tr.person_id = %s AND ap.housing_array_id = %s
+                      AND tr.payment_year IS NOT NULL AND tr.payment_month IS NOT NULL
+                    UNION
+                    SELECT pc.payment_year AS year, pc.payment_month AS month
+                    FROM payment_components pc
+                    JOIN apartments ap ON ap.id = pc.apartment_id
+                    WHERE pc.person_id = %s AND ap.housing_array_id = %s
+                      AND pc.payment_year IS NOT NULL AND pc.payment_month IS NOT NULL
                 ) combined
                 ORDER BY year DESC, month DESC
-            """, (person_id, housing_filter, person_id, housing_filter))
+            """, (
+                person_id, housing_filter, person_id, housing_filter,
+                person_id, housing_filter, person_id, housing_filter,
+            ))
         else:
             # ללא סינון
             cursor.execute("""
@@ -118,9 +133,19 @@ def get_available_months_for_person(conn, person_id: int) -> List[Tuple[int, int
                         CAST(EXTRACT(MONTH FROM date) AS INTEGER) as month
                     FROM payment_components
                     WHERE person_id = %s
+                    UNION
+                    SELECT payment_year AS year, payment_month AS month
+                    FROM time_reports
+                    WHERE person_id = %s
+                      AND payment_year IS NOT NULL AND payment_month IS NOT NULL
+                    UNION
+                    SELECT payment_year AS year, payment_month AS month
+                    FROM payment_components
+                    WHERE person_id = %s
+                      AND payment_year IS NOT NULL AND payment_month IS NOT NULL
                 ) combined
                 ORDER BY year DESC, month DESC
-            """, (person_id, person_id))
+            """, (person_id, person_id, person_id, person_id))
         rows = cursor.fetchall()
         return [(r[0], r[1]) for r in rows]
     except Exception as e:

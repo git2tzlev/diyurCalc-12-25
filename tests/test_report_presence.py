@@ -7,7 +7,11 @@ from datetime import date
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from core.report_presence import get_report_overlap_counts, get_report_presence_counts
+from core.report_presence import (
+    get_payment_period_presence_counts,
+    get_report_overlap_counts,
+    get_report_presence_counts,
+)
 
 
 class _FakeConnection:
@@ -21,6 +25,21 @@ class _FakeConnection:
 
 
 class TestReportPresence(unittest.TestCase):
+    def test_payment_period_presence_includes_guides_with_exportable_completion_rows(self):
+        conn = _FakeConnection([[
+            {"person_id": 10, "cnt": 13},
+            {"person_id": 20, "cnt": 2},
+        ]])
+
+        counts = get_payment_period_presence_counts(conn, 2026, 8, housing_array_id=2)
+
+        self.assertEqual(counts, {10: 13, 20: 2})
+        sql, params = conn.calls[0]
+        self.assertIn("salary_impact_events", sql)
+        self.assertIn("housing_array_id", sql)
+        self.assertEqual(params[2], ["included_in_export", "exported"])
+        self.assertEqual(params[-1], 2)
+
     def test_without_housing_filter_uses_plain_month_queries(self):
         conn = _FakeConnection([
             [{"person_id": 10, "cnt": 3}],

@@ -71,6 +71,28 @@ templates.env.filters["format_currency_total"] = format_currency_total
 templates.env.filters["human_date"] = human_date
 templates.env.globals["app_version"] = config.VERSION
 
+
+def _completion_rows_for_guide_report(
+    rows: list[dict[str, Any]],
+    *,
+    payment_year: int,
+    payment_month: int,
+) -> list[dict[str, Any]]:
+    """Convert the exact completion Gesher rows into visible guide-report rows."""
+    result = []
+    for row in rows:
+        symbol = str(row.get("symbol") or "")
+        display_name = row.get("display_name") or "השלמה"
+        source_symbols = str(row.get("source_symbols") or "").strip()
+        result.append({
+            "description": f"סמל {symbol} - {display_name}",
+            "detail": f"סמלי מקור: {source_symbols}" if source_symbols else "",
+            "amount": round(float(row.get("amount") or 0), 2),
+            "note": f"לתשלום ב-{payment_month:02d}/{payment_year}",
+            "is_payment_period_completion": True,
+        })
+    return result
+
 COMPLETION_APARTMENT_NAME = "השלמות"
 GENERIC_ERROR = "שגיאת מערכת. נסי שוב מאוחר יותר"
 DISPLAY_PRIORITY_SHIFT_IDS = {
@@ -1264,6 +1286,7 @@ def guide_view(
             selected_year,
             selected_month,
             housing_filter,
+            completion_rows=completion_result["rows"],
         )
         if not monthly_report:
             last_day = calendar.monthrange(selected_year, selected_month)[1]
@@ -1457,6 +1480,7 @@ def prepare_guide_pdf_data(
     month: int,
     housing_filter: Optional[int] = None,
     public_report: bool = True,
+    completion_rows: Optional[list[dict[str, Any]]] = None,
 ) -> Optional[Dict]:
     """
     הכנת נתונים לדוח PDF של מדריך.
@@ -1477,7 +1501,13 @@ def prepare_guide_pdf_data(
     from core.history import get_minimum_wage_for_month
 
     person = conn.execute(
-        "SELECT id, name, email, type, meirav_code, id_number FROM people WHERE id = %s",
+        """
+        SELECT p.id, p.name, p.email, p.type, p.meirav_code, p.id_number,
+               COALESCE(e.code, '001') AS employer_code
+        FROM people p
+        LEFT JOIN employers e ON e.id = p.employer_id
+        WHERE p.id = %s
+        """,
         (person_id,)
     ).fetchone()
 
@@ -1845,6 +1875,27 @@ def prepare_guide_pdf_data(
         conn, monthly_totals, person_id,
         year, month, housing_filter,
     )
+    if completion_rows is None:
+        completion_result = build_approved_completion_gesher_rows(
+            conn,
+            year,
+            month,
+            company_code=person.get("employer_code"),
+            housing_array_id=housing_filter,
+            person_ids={person_id},
+        )
+        completion_rows = completion_result["rows"]
+    apply_completion_rows_to_monthly_totals(
+        monthly_totals,
+        completion_rows,
+        person_id=person_id,
+        employee_code=person.get("meirav_code"),
+    )
+    completion_payments_data.extend(_completion_rows_for_guide_report(
+        completion_rows,
+        payment_year=year,
+        payment_month=month,
+    ))
     total_work_hours, standby_count = _apply_calculated_hours_to_shift_rows(
         shifts_data, daily_segments
     )
