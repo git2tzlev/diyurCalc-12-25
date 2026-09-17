@@ -135,6 +135,44 @@ class TestEmailLogHousingScope(unittest.TestCase):
         args = mock_process.call_args.args
         self.assertEqual(args[1], 2026)
         self.assertEqual(args[2], 4)
+        self.assertEqual(args[6], 7)
+
+    def test_retry_failed_uses_validated_backup_ids_when_batch_logs_are_missing(self):
+        request = _FakeRequest(
+            user={"role": "framework_manager", "housing_array_id": 7, "person_id": 10},
+            body={
+                "batch_id": "batch-1",
+                "year": 2026,
+                "month": 8,
+                "token": "signed",
+                "failed_guide_ids": [20, 21],
+            },
+        )
+        guides = [
+            {"id": 20, "name": "א", "email": "a@example.com"},
+            {"id": 21, "name": "ב", "email": "b@example.com"},
+        ]
+        conn = _FakeConnection(rows=guides)
+
+        with (
+            patch.object(email_routes, "validate_action_token", return_value=True),
+            patch.object(email_routes, "get_conn", return_value=_FakeConnectionManager(conn)),
+            patch.object(email_routes, "get_email_settings", return_value={"smtp_host": "smtp"}),
+            patch.object(email_routes, "get_email_logs", return_value=[]),
+            patch.object(
+                email_routes,
+                "process_guide_for_bulk",
+                return_value={"status": "sent", "name": "מדריך"},
+            ) as mock_process,
+        ):
+            response = asyncio.run(email_routes.retry_failed_route(request))
+
+        self.assertEqual(response.status_code, 200)
+        sql, params = conn.calls[-1]
+        self.assertIn("p.housing_array_id = %s", sql)
+        self.assertEqual(params, (20, 21, 7))
+        self.assertEqual(mock_process.call_count, 2)
+        self.assertTrue(all(call.args[6] == 7 for call in mock_process.call_args_list))
 
     def test_retry_failed_requires_signed_action_token(self):
         request = _FakeRequest(

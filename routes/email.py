@@ -433,6 +433,7 @@ async def retry_failed_route(request: Request) -> JSONResponse:
         batch_id = body.get("batch_id")
         fallback_year = body.get("year")
         fallback_month = body.get("month")
+        backup_guide_ids = body.get("failed_guide_ids", [])
         token = body.get("token", "")
 
         if not validate_action_token(request, token, "retry_failed_email"):
@@ -454,6 +455,37 @@ async def retry_failed_route(request: Request) -> JSONResponse:
                 housing_array_id=hid,
             )
 
+            if not failed_logs and backup_guide_ids:
+                try:
+                    guide_ids = list(dict.fromkeys(int(value) for value in backup_guide_ids))
+                except (TypeError, ValueError):
+                    return JSONResponse({"success": False, "error": "רשימת המדריכים אינה תקינה"})
+                guide_ids = [guide_id for guide_id in guide_ids if guide_id > 0][:500]
+                if guide_ids:
+                    placeholders = ",".join(["%s"] * len(guide_ids))
+                    housing_sql = ""
+                    params: tuple = tuple(guide_ids)
+                    if hid is not None:
+                        housing_sql = "AND p.housing_array_id = %s"
+                        params += (hid,)
+                    guides = conn.execute(f"""
+                        SELECT p.id, p.name, p.email
+                        FROM people p
+                        WHERE p.id IN ({placeholders})
+                        {housing_sql}
+                        ORDER BY p.name
+                    """, params).fetchall()
+                    failed_logs = [
+                        {
+                            "recipient_id": guide["id"],
+                            "recipient_name": guide["name"],
+                            "recipient_email": guide["email"],
+                            "year": fallback_year,
+                            "month": fallback_month,
+                        }
+                        for guide in guides
+                    ]
+
         if not failed_logs:
             return JSONResponse({"success": False, "error": "לא נמצאו שליחות שנכשלו ב-batch זה"})
 
@@ -461,8 +493,9 @@ async def retry_failed_route(request: Request) -> JSONResponse:
         sent_by = user.get("person_id") if user else None
         retry_batch_id = f"{batch_id}-retry"
 
-        results = {"success": [], "failed": []}
-        for log in failed_logs:
+        results = {"success": [], "failed": [], "failed_ids": []}
+        unique_failed_logs = list({log["recipient_id"]: log for log in failed_logs}.values())
+        for log in unique_failed_logs:
             guide = {
                 "id": log["recipient_id"],
                 "name": log["recipient_name"],
@@ -475,15 +508,17 @@ async def retry_failed_route(request: Request) -> JSONResponse:
                 retry_batch_id,
                 settings,
                 sent_by,
+                hid,
             )
             if result["status"] == "sent":
                 results["success"].append(result["name"])
             else:
                 results["failed"].append(result["name"])
+                results["failed_ids"].append(log["recipient_id"])
 
         return JSONResponse({
             "success": True,
-            "message": f"נשלחו מחדש {len(results['success'])} מתוך {len(failed_logs)}",
+            "message": f"נשלחו מחדש {len(results['success'])} מתוך {len(unique_failed_logs)}",
             "details": results,
             "retry_batch_id": retry_batch_id,
         })

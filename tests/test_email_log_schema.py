@@ -11,11 +11,11 @@ from services.email_service import ensure_email_logs_table
 
 class _WrapperConnection:
     def __init__(self):
-        self.executed_sql = None
+        self.executed_sql = []
         self.committed = False
 
     def execute(self, sql):
-        self.executed_sql = sql
+        self.executed_sql.append(sql)
 
     def commit(self):
         self.committed = True
@@ -23,11 +23,11 @@ class _WrapperConnection:
 
 class _RawCursor:
     def __init__(self):
-        self.executed_sql = None
+        self.executed_sql = []
         self.closed = False
 
     def execute(self, sql):
-        self.executed_sql = sql
+        self.executed_sql.append(sql)
 
     def close(self):
         self.closed = True
@@ -51,7 +51,10 @@ class TestEmailLogSchema(unittest.TestCase):
 
         ensure_email_logs_table(conn)
 
-        self.assertIn("CREATE TABLE IF NOT EXISTS email_logs", conn.executed_sql)
+        executed_sql = "\n".join(conn.executed_sql)
+        self.assertIn("CREATE TABLE IF NOT EXISTS email_logs", executed_sql)
+        self.assertIn("ADD COLUMN IF NOT EXISTS batch_id", executed_sql)
+        self.assertIn("idx_email_logs_batch_id", executed_sql)
         self.assertTrue(conn.committed)
 
     def test_ensure_email_logs_table_supports_raw_psycopg_connection(self):
@@ -59,7 +62,10 @@ class TestEmailLogSchema(unittest.TestCase):
 
         ensure_email_logs_table(conn)
 
-        self.assertIn("CREATE TABLE IF NOT EXISTS email_logs", conn.cursor_obj.executed_sql)
+        executed_sql = "\n".join(conn.cursor_obj.executed_sql)
+        self.assertIn("CREATE TABLE IF NOT EXISTS email_logs", executed_sql)
+        self.assertIn("ADD COLUMN IF NOT EXISTS batch_id", executed_sql)
+        self.assertIn("idx_email_logs_batch_id", executed_sql)
         self.assertTrue(conn.cursor_obj.closed)
         self.assertTrue(conn.committed)
 

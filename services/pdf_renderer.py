@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -59,6 +60,7 @@ def render_html_to_pdf_bytes(
     """Render HTML content to PDF bytes using installed Edge/Chrome."""
     temp_html_path = None
     temp_pdf_path = None
+    browser_profile_dir = None
     try:
         fd, temp_html_path = tempfile.mkstemp(suffix=".html")
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -66,6 +68,7 @@ def render_html_to_pdf_bytes(
 
         fd_pdf, temp_pdf_path = tempfile.mkstemp(suffix=".pdf")
         os.close(fd_pdf)
+        browser_profile_dir = tempfile.mkdtemp(prefix="diyur-pdf-profile-")
 
         browser_exe = next((path for path in BROWSER_PATHS if os.path.exists(path)), None)
         if not browser_exe:
@@ -76,34 +79,36 @@ def render_html_to_pdf_bytes(
             browser_exe,
             "--headless",
             "--disable-gpu",
+            "--no-first-run",
+            "--no-default-browser-check",
             "--run-all-compositor-stages-before-draw",
             "--virtual-time-budget=10000",
             "--no-pdf-header-footer",
+            f"--user-data-dir={browser_profile_dir}",
             f"--print-to-pdf={temp_pdf_path}",
             temp_html_path,
         ]
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-        )
-
         try:
-            process.communicate(timeout=timeout_seconds)
+            process = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout_seconds,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                check=False,
+            )
         except subprocess.TimeoutExpired:
             logger.error("Browser process timed out")
-            process.kill()
-            process.wait()
             return None
-        finally:
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
+
+        if process.returncode != 0:
+            stderr = process.stderr.decode("utf-8", errors="replace").strip()
+            logger.error(
+                "Browser PDF process failed with exit code %s: %s",
+                process.returncode,
+                stderr[-2000:] if stderr else "no stderr",
+            )
+            return None
 
         time.sleep(settle_seconds)
 
@@ -117,3 +122,5 @@ def render_html_to_pdf_bytes(
             safe_delete_file(temp_html_path, initial_wait=1.0)
         if temp_pdf_path:
             safe_delete_file(temp_pdf_path, initial_wait=1.0)
+        if browser_profile_dir:
+            shutil.rmtree(browser_profile_dir, ignore_errors=True)

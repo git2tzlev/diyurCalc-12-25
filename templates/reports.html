@@ -278,6 +278,7 @@
   const selectedMonth = {{ selected_month or 'null' }};
   let bulkEventSource = null;
   let currentBatchId = null;
+  let currentFailedGuideIds = [];
   let bulkStartTime = null;
 
   function getDisplayedGuideIds() {
@@ -525,6 +526,7 @@
 
       // כפתור retry אם יש נכשלים
       const failedItems = data.skipped.filter(s => s.status === 'failed');
+      currentFailedGuideIds = failedItems.map(item => item.id);
       if (failedItems.length > 0) {
         document.getElementById('bulkRetryBtn').style.display = '';
       }
@@ -569,11 +571,17 @@
           batch_id: currentBatchId,
           year: selectedYear,
           month: selectedMonth,
+          failed_guide_ids: currentFailedGuideIds,
           token: {{ retry_failed_token|tojson }}
         })
       });
       const result = await response.json();
       if (result.success) {
+        currentBatchId = result.retry_batch_id;
+        currentFailedGuideIds = result.details?.failed_ids || [];
+        if (currentFailedGuideIds.length === 0) {
+          retryBtn.style.display = 'none';
+        }
         alert(result.message);
       } else {
         alert('שגיאה: ' + (result.error || 'שגיאה לא ידועה'));

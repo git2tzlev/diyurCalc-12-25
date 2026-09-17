@@ -927,8 +927,8 @@ def _generate_combined_guides_pdf(
 
 
 def ensure_email_logs_table(conn) -> None:
-    """יצירת טבלת email_logs אם לא קיימת."""
-    sql = """
+    """Create or additively upgrade the email delivery log schema."""
+    statements = ["""
         CREATE TABLE IF NOT EXISTS email_logs (
             id SERIAL PRIMARY KEY,
             recipient_id INTEGER,
@@ -944,13 +944,21 @@ def ensure_email_logs_table(conn) -> None:
             sent_at TIMESTAMP DEFAULT NOW(),
             batch_id VARCHAR(100)
         )
-    """
+    """, """
+        ALTER TABLE email_logs
+        ADD COLUMN IF NOT EXISTS batch_id VARCHAR(100)
+    """, """
+        CREATE INDEX IF NOT EXISTS idx_email_logs_batch_id
+        ON email_logs(batch_id)
+    """]
     if hasattr(conn, "execute"):
-        conn.execute(sql)
+        for statement in statements:
+            conn.execute(statement)
     else:
         cursor = conn.cursor()
         try:
-            cursor.execute(sql)
+            for statement in statements:
+                cursor.execute(statement)
         finally:
             cursor.close()
     conn.commit()
