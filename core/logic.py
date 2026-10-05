@@ -423,6 +423,23 @@ def calculate_person_monthly_totals(
 # and app_utils.aggregate_daily_segments_to_monthly (source of truth).
 
 
+def _fetch_snapshot_lookup(
+    conn,
+    snapshots: List[Dict],
+    id_field: str,
+    query: str,
+) -> Dict[int, Dict]:
+    """טוען שדות משלימים לתמונות דיווח לפי מזהה, כמו ה-JOIN בשאילתת הדיווחים."""
+    ids = {int(row[id_field]) for row in snapshots if row.get(id_field)}
+    if not ids:
+        return {}
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cursor.execute(query, (list(ids),))
+    lookup = {int(row["id"]): dict(row) for row in cursor.fetchall()}
+    cursor.close()
+    return lookup
+
+
 def _apply_time_report_overrides(
     conn,
     rows,
@@ -433,50 +450,30 @@ def _apply_time_report_overrides(
     """Apply an in-memory report state without changing the database."""
     by_id = {int(row["id"]): dict(row) for row in rows}
     snapshots = [dict(value) for value in overrides.values() if value]
-    apartment_ids = {int(row["apartment_id"]) for row in snapshots if row.get("apartment_id")}
-    shift_ids = {int(row["shift_type_id"]) for row in snapshots if row.get("shift_type_id")}
-    rate_type_ids = {
-        int(row["rate_apartment_type_id"])
-        for row in snapshots
-        if row.get("rate_apartment_type_id")
-    }
 
-    apartments = {}
-    if apartment_ids:
-        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-        cursor.execute("""
-            SELECT ap.id, ap.name AS apartment_name, ap.apartment_type_id,
-                   ap.housing_array_id, at.hourly_wage_supplement,
-                   at.name AS apartment_type_name, ha.name AS housing_array_name
-            FROM apartments ap
-            LEFT JOIN apartment_types at ON at.id = ap.apartment_type_id
-            LEFT JOIN housing_arrays ha ON ha.id = ap.housing_array_id
-            WHERE ap.id = ANY(%s)
-        """, (list(apartment_ids),))
-        apartments = {int(row["id"]): dict(row) for row in cursor.fetchall()}
-        cursor.close()
-
-    shifts = {}
-    if shift_ids:
-        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-        cursor.execute("""
-            SELECT id, name AS shift_name, color AS shift_color,
-                   is_special_hourly AS shift_is_special_hourly
-            FROM shift_types WHERE id = ANY(%s)
-        """, (list(shift_ids),))
-        shifts = {int(row["id"]): dict(row) for row in cursor.fetchall()}
-        cursor.close()
-
-    rate_types = {}
-    if rate_type_ids:
-        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-        cursor.execute("""
-            SELECT id, name AS rate_apartment_type_name,
-                   hourly_wage_supplement AS rate_hourly_wage_supplement
-            FROM apartment_types WHERE id = ANY(%s)
-        """, (list(rate_type_ids),))
-        rate_types = {int(row["id"]): dict(row) for row in cursor.fetchall()}
-        cursor.close()
+    apartments = _fetch_snapshot_lookup(conn, snapshots, "apartment_id", """
+        SELECT ap.id, ap.name AS apartment_name, ap.apartment_type_id,
+               ap.housing_array_id, at.hourly_wage_supplement,
+               at.name AS apartment_type_name, ha.name AS housing_array_name
+        FROM apartments ap
+        LEFT JOIN apartment_types at ON at.id = ap.apartment_type_id
+        LEFT JOIN housing_arrays ha ON ha.id = ap.housing_array_id
+        WHERE ap.id = ANY(%s)
+    """)
+    shifts = _fetch_snapshot_lookup(conn, snapshots, "shift_type_id", """
+        SELECT id, name AS shift_name, color AS shift_color,
+               is_special_hourly AS shift_is_special_hourly
+        FROM shift_types WHERE id = ANY(%s)
+    """)
+    rate_types = _fetch_snapshot_lookup(conn, snapshots, "rate_apartment_type_id", """
+        SELECT id, name AS rate_apartment_type_name,
+               hourly_wage_supplement AS rate_hourly_wage_supplement
+        FROM apartment_types WHERE id = ANY(%s)
+    """)
+    people = _fetch_snapshot_lookup(conn, snapshots, "person_id", """
+        SELECT id, name AS person_name, is_married
+        FROM people WHERE id = ANY(%s)
+    """)
 
     for report_id, snapshot in overrides.items():
         report_id = int(report_id)
@@ -491,6 +488,7 @@ def _apply_time_report_overrides(
         report.update(apartment)
         report.update(shifts.get(int(report.get("shift_type_id") or 0), {}))
         report.update(rate_types.get(int(report.get("rate_apartment_type_id") or 0), {}))
+        report.update(people.get(int(report.get("person_id") or 0), {}))
         report["id"] = report_id
         by_id[report_id] = report
 

@@ -117,7 +117,7 @@
         <td data-sort-value="{{ overlap_counts.get(g['id'], 0) if overlap_counts is defined else 0 }}">
           {% set oc = overlap_counts.get(g['id'], 0) if overlap_counts is defined else 0 %}
           {% if oc > 0 %}
-          <span title="יש חפיפת שעות בדיווחים לחודש זה. בדוח הרצפים החפיפה נחתכת לפי התעריף הגבוה יותר." style="background: #fee2e2; color: #991b1b; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 700; cursor: help;">חפיפה</span>
+          <span title="יש חפיפת שעות עבודה באותו יום עבודה. בדוח הרצפים החפיפה נחתכת לפי התעריף הגבוה יותר." style="background: #fee2e2; color: #991b1b; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 700; cursor: help;">חפיפה</span>
           {% endif %}
         </td>
         <td data-sort-value="{{ notes_counts.get(g['id'], 0) if notes_counts is defined else 0 }}">

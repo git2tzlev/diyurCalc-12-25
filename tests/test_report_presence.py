@@ -142,6 +142,36 @@ class TestReportPresence(unittest.TestCase):
 
         self.assertEqual(counts, {})
 
+    def test_overlap_counts_ignores_standalone_morning_after_previous_night(self):
+        conn = _FakeConnection([
+            [
+                {"id": 1, "person_id": 10, "date": date(2026, 9, 19), "start_time": "22:00", "end_time": "06:30", "shift_type_id": 149},
+                {"id": 2, "person_id": 10, "date": date(2026, 9, 20), "start_time": "00:30", "end_time": "03:00", "shift_type_id": 149},
+            ],
+            [],
+        ])
+
+        counts = get_report_overlap_counts(
+            conn, date(2026, 9, 1), date(2026, 10, 1),
+        )
+
+        self.assertEqual(counts, {})
+
+    def test_overlap_counts_flags_two_reports_on_the_same_night(self):
+        conn = _FakeConnection([
+            [
+                {"id": 1, "person_id": 10, "date": date(2026, 9, 19), "start_time": "22:00", "end_time": "06:30", "shift_type_id": 149},
+                {"id": 2, "person_id": 10, "date": date(2026, 9, 19), "start_time": "23:00", "end_time": "01:00", "shift_type_id": 149},
+            ],
+            [],
+        ])
+
+        counts = get_report_overlap_counts(
+            conn, date(2026, 9, 1), date(2026, 10, 1),
+        )
+
+        self.assertEqual(counts, {10: 1})
+
     def test_overlap_counts_scopes_by_housing_filter(self):
         conn = _FakeConnection([[]])
 

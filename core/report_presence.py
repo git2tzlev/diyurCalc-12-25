@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import date
-from datetime import datetime, time, timedelta
+from datetime import time, timedelta
 from typing import Optional
 
 from core.constants import (
@@ -10,7 +10,9 @@ from core.constants import (
     ASD_COMPLETION_EXCLUSION_YEAR,
     ASD_HOUSING_ARRAY_ID,
     COMPLETION_APARTMENT_IDS,
+    NIGHT_SHIFT_MORNING_END,
 )
+from core.time_utils import MINUTES_PER_DAY
 
 
 def _is_asd_completion_exclusion_period(
@@ -211,13 +213,95 @@ def _parse_report_time(value) -> time | None:
         return None
 
 
+def _split_onto_workday(
+    report_date: date,
+    report_start_min: int,
+    part_date: date,
+    part_start: int,
+    part_end: int,
+) -> list[tuple[date, int, int]]:
+    """משייך מקטע ליום עבודה 08:00-08:00, כמו בדוח הרצפים."""
+    pieces = (
+        [(part_start, NIGHT_SHIFT_MORNING_END), (NIGHT_SHIFT_MORNING_END, part_end)]
+        if part_start < NIGHT_SHIFT_MORNING_END < part_end
+        else [(part_start, part_end)]
+    )
+    is_standalone = part_date == report_date and report_start_min < NIGHT_SHIFT_MORNING_END
+    intervals: list[tuple[date, int, int]] = []
+    for start_min, end_min in pieces:
+        if end_min <= NIGHT_SHIFT_MORNING_END and not is_standalone:
+            intervals.append((
+                part_date - timedelta(days=1),
+                start_min + MINUTES_PER_DAY,
+                end_min + MINUTES_PER_DAY,
+            ))
+        else:
+            intervals.append((part_date, start_min, end_min))
+    return intervals
+
+
+def _workday_intervals(
+    report_date: date,
+    report_start_min: int,
+    work_start: int,
+    work_end: int,
+) -> list[tuple[date, int, int]]:
+    """מפצל טווח עבודה לימי עבודה. שעת סיום יכולה לעבור חצות."""
+    intervals: list[tuple[date, int, int]] = []
+    cursor = work_start
+    while cursor < work_end:
+        day_offset = cursor // MINUTES_PER_DAY
+        day_origin = day_offset * MINUTES_PER_DAY
+        part_end = min(work_end, day_origin + MINUTES_PER_DAY)
+        intervals.extend(_split_onto_workday(
+            report_date,
+            report_start_min,
+            report_date + timedelta(days=day_offset),
+            cursor - day_origin,
+            part_end - day_origin,
+        ))
+        cursor = part_end
+    return intervals
+
+
+def _merge_same_report_intervals(
+    intervals: list[tuple[int, int, int]],
+) -> list[tuple[int, int, int]]:
+    """מאחד מקטעים צמודים של אותו דיווח לטווח אחד."""
+    merged: list[tuple[int, int, int]] = []
+    for report_id, start_min, end_min in sorted(intervals, key=lambda item: (item[0], item[1])):
+        if merged and merged[-1][0] == report_id and start_min <= merged[-1][2]:
+            merged[-1] = (report_id, merged[-1][1], max(merged[-1][2], end_min))
+            continue
+        merged.append((report_id, start_min, end_min))
+    return merged
+
+
+def _count_overlapping_pairs(intervals: list[tuple[int, int, int]]) -> int:
+    """סופר זוגות דיווחים שונים ששעות העבודה שלהם נחתכות."""
+    ordered = sorted(_merge_same_report_intervals(intervals), key=lambda item: item[1])
+    overlap_count = 0
+    for idx, (left_id, left_start, left_end) in enumerate(ordered):
+        for right_id, right_start, right_end in ordered[idx + 1:]:
+            if right_start >= left_end:
+                break
+            if left_id != right_id and left_start < right_end and right_start < left_end:
+                overlap_count += 1
+    return overlap_count
+
+
 def get_report_overlap_counts(
     conn,
     start_date: date,
     end_date: date,
     housing_array_id: Optional[int] = None,
 ) -> dict[int, int]:
-    """Return number of overlapping time-report pairs per guide for a period."""
+    """מחזיר כמה זוגות דיווחי עבודה חופפים יש לכל מדריך בתקופה.
+
+    החפיפה נספרת כמו בדוח הרצפים: רק מקטעי עבודה, ורק בתוך אותו יום עבודה
+    מ-08:00 עד 08:00. דיווח בוקר שמתחיל אחרי חצות נשאר ביומו ולא נחשב המשך
+    של משמרת שנכנסה ביום הקודם.
+    """
     params: list = [start_date, end_date]
     housing_join = ""
     housing_filter = ""
@@ -266,7 +350,24 @@ def get_report_overlap_counts(
         for row in segment_rows:
             segments_by_shift.setdefault(row["shift_type_id"], []).append(row)
 
-    by_person: dict[int, list[tuple[int, datetime, datetime]]] = {}
+    by_person_day = _collect_workday_intervals(rows, segments_by_shift, start_date, end_date)
+    counts: dict[int, int] = {}
+    for (person_id, _workday), intervals in by_person_day.items():
+        overlap_count = _count_overlapping_pairs(intervals)
+        if overlap_count:
+            counts[person_id] = counts.get(person_id, 0) + overlap_count
+
+    return counts
+
+
+def _collect_workday_intervals(
+    rows,
+    segments_by_shift: dict[int, list[dict]],
+    start_date: date,
+    end_date: date,
+) -> dict[tuple[int, date], list[tuple[int, int, int]]]:
+    """מקבץ מקטעי עבודה לפי מדריך ויום עבודה."""
+    by_person_day: dict[tuple[int, date], list[tuple[int, int, int]]] = {}
     for row in rows:
         report_date = row["date"]
         if hasattr(report_date, "date"):
@@ -279,45 +380,46 @@ def get_report_overlap_counts(
         report_start_min = start_t.hour * 60 + start_t.minute
         report_end_min = end_t.hour * 60 + end_t.minute
         if report_end_min <= report_start_min:
-            report_end_min += 24 * 60
+            report_end_min += MINUTES_PER_DAY
 
-        shift_segments = segments_by_shift.get(row.get("shift_type_id"), [])
-        work_parts: list[tuple[int, int]] = []
-        for segment in shift_segments:
-            if segment.get("segment_type") != "work":
-                continue
-            seg_start_t = _parse_report_time(segment.get("start_time"))
-            seg_end_t = _parse_report_time(segment.get("end_time"))
-            if not seg_start_t or not seg_end_t:
-                continue
-            seg_start = seg_start_t.hour * 60 + seg_start_t.minute
-            seg_end = seg_end_t.hour * 60 + seg_end_t.minute
-            if seg_end <= seg_start:
-                seg_end += 24 * 60
-            overlap_start = max(report_start_min, seg_start)
-            overlap_end = min(report_end_min, seg_end)
-            if overlap_end > overlap_start:
-                work_parts.append((overlap_start, overlap_end))
-
-        if not shift_segments:
-            work_parts.append((report_start_min, report_end_min))
-
+        work_parts = _report_work_parts(
+            report_start_min,
+            report_end_min,
+            segments_by_shift.get(row.get("shift_type_id"), []),
+        )
         for work_start, work_end in work_parts:
-            start_dt = datetime.combine(report_date, time()) + timedelta(minutes=work_start)
-            end_dt = datetime.combine(report_date, time()) + timedelta(minutes=work_end)
-            by_person.setdefault(row["person_id"], []).append((row["id"], start_dt, end_dt))
+            for workday, start_min, end_min in _workday_intervals(
+                report_date, report_start_min, work_start, work_end,
+            ):
+                if start_date <= workday < end_date:
+                    by_person_day.setdefault((row["person_id"], workday), []).append(
+                        (row["id"], start_min, end_min)
+                    )
+    return by_person_day
 
-    counts: dict[int, int] = {}
-    for person_id, intervals in by_person.items():
-        intervals.sort(key=lambda item: item[1])
-        overlap_count = 0
-        for idx, (left_id, left_start, left_end) in enumerate(intervals):
-            for right_id, right_start, right_end in intervals[idx + 1:]:
-                if right_start >= left_end:
-                    break
-                if left_start < right_end and right_start < left_end:
-                    overlap_count += 1
-        if overlap_count:
-            counts[person_id] = overlap_count
 
-    return counts
+def _report_work_parts(
+    report_start_min: int,
+    report_end_min: int,
+    shift_segments: list[dict],
+) -> list[tuple[int, int]]:
+    """מחזיר את מקטעי העבודה של דיווח. בלי סגמנטים, כל הדיווח הוא עבודה."""
+    work_parts: list[tuple[int, int]] = []
+    for segment in shift_segments:
+        if segment.get("segment_type") != "work":
+            continue
+        seg_start_t = _parse_report_time(segment.get("start_time"))
+        seg_end_t = _parse_report_time(segment.get("end_time"))
+        if not seg_start_t or not seg_end_t:
+            continue
+        seg_start = seg_start_t.hour * 60 + seg_start_t.minute
+        seg_end = seg_end_t.hour * 60 + seg_end_t.minute
+        if seg_end <= seg_start:
+            seg_end += MINUTES_PER_DAY
+        overlap_start = max(report_start_min, seg_start)
+        overlap_end = min(report_end_min, seg_end)
+        if overlap_end > overlap_start:
+            work_parts.append((overlap_start, overlap_end))
+    if not shift_segments:
+        work_parts.append((report_start_min, report_end_min))
+    return work_parts
