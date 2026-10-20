@@ -30,6 +30,7 @@ from core.constants import (
     HOSPITAL_ESCORT_SHIFT_ID,
     KALANIYOT_APT_TYPE,
     LOW_FUNCTIONING_APT_TYPE,
+    NURSING_APT_TYPE,
     MAX_CANCELLED_STANDBY_DEDUCTION,
     MEDICAL_ESCORT_SHIFT_ID,
     MINIMUM_ESCORT_MINUTES,
@@ -246,6 +247,12 @@ BUSINESS_RULE_TABLES: tuple[BusinessRuleTable, ...] = (
                 APT_TYPE_NAMES[LOW_FUNCTIONING_APT_TYPE],
                 "ASD",
                 "שייך לקבוצת ASD; כוננות לילה מסומנת יכולה להפוך לעבודה.",
+            ),
+            (
+                str(NURSING_APT_TYPE),
+                APT_TYPE_NAMES[NURSING_APT_TYPE],
+                "ASD",
+                "כמו תפקוד נמוך (ערות בלילה הופכת כוננות לעבודה); נבדל רק בתוספת השעתית של סוג הדירה.",
             ),
             (
                 ", ".join(str(apt_id) for apt_id in sorted(COMPLETION_APARTMENT_IDS)),
@@ -555,7 +562,7 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
                 details=(
                     "הכלל מופעל רק כאשר הדיווח מסומן כ-ASD night marking.",
                     f"תפקוד גבוה מקבל כוננות לילה בסך {ASD_NIGHT_STANDBY_RATE:.0f} ש\"ח.",
-                    "תפקוד נמוך: מקטע standby בלילה הופך ל-work.",
+                    "תפקוד נמוך וסיעודית: מקטע standby בלילה הופך ל-work.",
                     "ללא סימון ASD לילה, משמרת ASD משתמשת במקטעי המשמרת הרגילים.",
                     "הדוח מסמן תוויות 'שינה בסלון' ו'ערות בלילה'.",
                 ),

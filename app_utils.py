@@ -50,7 +50,7 @@ from core.constants import (
     BERESHIT_APT_TYPE,
     KALANIYOT_APT_TYPE,
     HIGH_FUNCTIONING_APT_TYPE,
-    LOW_FUNCTIONING_APT_TYPE,
+    NIGHT_WAKEFULNESS_APT_TYPES,
     SPECIAL_ABSENCE_PAYMENT_APT_TYPES,
     APT_TYPE_NAMES,
     ASD_SENIORITY_SUPPLEMENT,
@@ -579,10 +579,10 @@ def _register_asd_night_labels(
         if apt_nm:
             entry.setdefault("asd_night_label_by_apt", {})[apt_nm] = "שינה בסלון"
         entry.setdefault("asd_night_label_by_apt_type", {})[HIGH_FUNCTIONING_APT_TYPE] = "שינה בסלון"
-    elif actual_apt_id_for_asd == LOW_FUNCTIONING_APT_TYPE:
+    elif actual_apt_id_for_asd in NIGHT_WAKEFULNESS_APT_TYPES:
         if apt_nm:
             entry.setdefault("asd_night_label_by_apt", {})[apt_nm] = "ערות בלילה"
-        entry.setdefault("asd_night_label_by_apt_type", {})[LOW_FUNCTIONING_APT_TYPE] = "ערות בלילה"
+        entry.setdefault("asd_night_label_by_apt_type", {})[actual_apt_id_for_asd] = "ערות בלילה"
 
 
 def _asd_night_label_for_row(
@@ -1814,6 +1814,46 @@ def _calculate_previous_month_carryover(
     return (chain_total_minutes, last_end_time, current_chain_shift_id, chain_night_minutes, current_chain_housing_array_id)
 
 
+def _load_apartment_types_info(conn, type_ids: set[int]) -> dict[int, dict]:
+    """טעינת שם ותוספת שעתית לסוגי דירה (לדירות שסוגן בחודש שונה מהסוג הנוכחי)."""
+    if not type_ids:
+        return {}
+    rows = conn.execute(
+        "SELECT id, name, hourly_wage_supplement FROM apartment_types WHERE id = ANY(%s)",
+        (list(type_ids),),
+    ).fetchall()
+    return {row["id"]: dict(row) for row in rows}
+
+
+def _apply_report_apartment_types(
+    r_dict: dict,
+    month_apt_type: int | None,
+    month_apartment_types: dict[int, dict],
+) -> None:
+    """
+    קביעת סוג הדירה של דיווח לחודש החישוב.
+
+    - סוג בפועל (actual): סוג הדירה באותו חודש לפי ההיסטוריה, כולל השם והתוספת השעתית שלו.
+      קובע את התנהגות ASD (ערות בלילה / שינה בסלון) ואת התוספת לתשלום.
+    - סוג לתעריף (apartment_type_id): rate_apartment_type_id אם הוגדר בדיווח, אחרת הסוג בפועל.
+    """
+    if month_apt_type is not None and month_apt_type != r_dict.get("apartment_type_id"):
+        type_info = month_apartment_types[month_apt_type]
+        r_dict["apartment_type_id"] = month_apt_type
+        r_dict["apartment_type_name"] = type_info["name"]
+        r_dict["hourly_wage_supplement"] = type_info["hourly_wage_supplement"] or 0
+
+    r_dict["actual_apartment_type_id"] = r_dict.get("apartment_type_id")
+    r_dict["actual_hourly_wage_supplement"] = r_dict.get("hourly_wage_supplement") or 0
+
+    rate_apt_type = r_dict.get("rate_apartment_type_id")
+    if rate_apt_type:
+        r_dict["apartment_type_id"] = rate_apt_type
+        rate_supplement = r_dict.get("rate_hourly_wage_supplement")
+        if rate_supplement is not None:
+            r_dict["hourly_wage_supplement"] = rate_supplement
+
+
 def get_daily_segments_data(
     conn, person_id: int, year: int, month: int, shabbat_cache: Dict, minimum_wage: float,
     person_status_cache: Optional[Dict[int, dict]] = None,
@@ -2024,31 +2064,18 @@ def get_daily_segments_data(
         )
 
     # Apply historical overrides to reports
+    month_apartment_types = _load_apartment_types_info(conn, {
+        apartment_type_cache[r["apartment_id"]]
+        for r in reports
+        if apartment_type_cache.get(r["apartment_id"]) not in (None, r.get("apartment_type_id"))
+    })
     processed_reports = []
     for r in reports:
         r_dict = dict(r)
+        _apply_report_apartment_types(
+            r_dict, apartment_type_cache.get(r_dict.get("apartment_id")), month_apartment_types
+        )
 
-        # Save actual apartment type for visual indicator (from apartments table)
-        r_dict["actual_apartment_type_id"] = r_dict.get("apartment_type_id")
-        # תוספת שעתית של סוג הדירה בפועל (לפני החלפת apartment_type_id לחישוב תעריף)
-        r_dict["actual_hourly_wage_supplement"] = r_dict.get("hourly_wage_supplement") or 0
-
-        # Override apartment_type_id for rate calculation
-        # Priority: rate_apartment_type_id (if set) > historical > current
-        rate_apt_type = r_dict.get("rate_apartment_type_id")
-        if rate_apt_type:
-            # Use the explicit rate_apartment_type_id from the report
-            r_dict["apartment_type_id"] = rate_apt_type
-            # Also use the rate apartment type's hourly_wage_supplement for rate calculation
-            rate_supplement = r_dict.get("rate_hourly_wage_supplement")
-            if rate_supplement is not None:
-                r_dict["hourly_wage_supplement"] = rate_supplement
-        else:
-            # Fall back to historical apartment type
-            apt_id = r_dict.get("apartment_id")
-            if apt_id and apt_id in apartment_type_cache:
-                r_dict["apartment_type_id"] = apartment_type_cache[apt_id]
-        
         # Override is_married
         report_date = r_dict.get("date")
         if hasattr(report_date, "date"):
@@ -2382,8 +2409,8 @@ def get_daily_segments_data(
                 standby_end_time = NIGHT_SHIFT_STANDBY_END + MINUTES_PER_DAY
             standby_end = min(standby_end_time, exit_time)
             if standby_end > standby_start:
-                # ASD + תפקוד נמוך: כוננות הופכת לשעות עבודה
-                if has_asd_night and actual_apt_id_for_asd == LOW_FUNCTIONING_APT_TYPE:
+                # ASD + ערות בלילה (תפקוד נמוך / סיעודית): כוננות הופכת לשעות עבודה
+                if has_asd_night and actual_apt_id_for_asd in NIGHT_WAKEFULNESS_APT_TYPES:
                     dynamic_segments.append({
                         "start_time": f"{(standby_start // 60) % 24:02d}:{standby_start % 60:02d}",
                         "end_time": f"{(standby_end // 60) % 24:02d}:{standby_end % 60:02d}",
@@ -2522,8 +2549,8 @@ def get_daily_segments_data(
                     effective_seg_type = "standby" if special_absence_shift_id and seg.get("segment_type") == "standby" else "vacation"
                 else:
                     effective_seg_type = seg["segment_type"]
-                    # ASD + תפקוד נמוך: כוננות הופכת לשעות עבודה
-                    if effective_seg_type == "standby" and has_asd_night and actual_apt_id_for_asd == LOW_FUNCTIONING_APT_TYPE:
+                    # ASD + ערות בלילה (תפקוד נמוך / סיעודית): כוננות הופכת לשעות עבודה
+                    if effective_seg_type == "standby" and has_asd_night and actual_apt_id_for_asd in NIGHT_WAKEFULNESS_APT_TYPES:
                         effective_seg_type = "work"
 
                 # קביעת תווית לפי סוג הסגמנט
@@ -2752,8 +2779,8 @@ def get_daily_segments_data(
                          effective_seg_type = "vacation"
                     else:
                          effective_seg_type = seg["segment_type"]
-                         # ASD + תפקוד נמוך: כוננות הופכת לשעות עבודה
-                         if effective_seg_type == "standby" and has_asd_night and actual_apt_id_for_asd == LOW_FUNCTIONING_APT_TYPE:
+                         # ASD + ערות בלילה (תפקוד נמוך / סיעודית): כוננות הופכת לשעות עבודה
+                         if effective_seg_type == "standby" and has_asd_night and actual_apt_id_for_asd in NIGHT_WAKEFULNESS_APT_TYPES:
                              effective_seg_type = "work"
 
                     # קביעת תווית לפי סוג הסגמנט

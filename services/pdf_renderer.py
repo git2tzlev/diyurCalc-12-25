@@ -6,10 +6,17 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+# Edge/Chrome headless is unreliable when several print-to-PDF processes are
+# started at the same time on Windows. Keep data preparation and email sending
+# concurrent, but serialize the short browser process itself.
+_BROWSER_PROCESS_LOCK = threading.Lock()
 
 
 BROWSER_PATHS = [
@@ -88,34 +95,53 @@ def render_html_to_pdf_bytes(
             f"--print-to-pdf={temp_pdf_path}",
             temp_html_path,
         ]
-        try:
-            process = subprocess.run(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=timeout_seconds,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            logger.error("Browser process timed out")
-            return None
+        # Keep the lock through the settle/read phase too. On Windows the
+        # browser process may exit before its PDF child has fully flushed the
+        # file; starting another headless browser in that window causes the
+        # characteristic "one success per concurrent batch" empty PDFs.
+        with _BROWSER_PROCESS_LOCK:
+            for attempt in range(1, 3):
+                if attempt > 1:
+                    # Remove partial output before the retry so success cannot be
+                    # confused with bytes left behind by the first process.
+                    with open(temp_pdf_path, "wb"):
+                        pass
 
-        if process.returncode != 0:
-            stderr = process.stderr.decode("utf-8", errors="replace").strip()
-            logger.error(
-                "Browser PDF process failed with exit code %s: %s",
-                process.returncode,
-                stderr[-2000:] if stderr else "no stderr",
-            )
-            return None
+                try:
+                    process = subprocess.run(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=timeout_seconds,
+                        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                        check=False,
+                    )
+                except subprocess.TimeoutExpired:
+                    logger.warning(
+                        "Browser PDF process timed out (attempt %s/2)", attempt
+                    )
+                    continue
 
-        time.sleep(settle_seconds)
+                if process.returncode != 0:
+                    stderr = process.stderr.decode("utf-8", errors="replace").strip()
+                    logger.warning(
+                        "Browser PDF process failed on attempt %s/2 with exit code %s: %s",
+                        attempt,
+                        process.returncode,
+                        stderr[-2000:] if stderr else "no stderr",
+                    )
+                    continue
 
-        if os.path.exists(temp_pdf_path) and os.path.getsize(temp_pdf_path) > 0:
-            with open(temp_pdf_path, "rb") as f:
-                return f.read()
-        logger.error("PDF file was not created or is empty")
+                time.sleep(settle_seconds)
+
+                if os.path.exists(temp_pdf_path) and os.path.getsize(temp_pdf_path) > 0:
+                    with open(temp_pdf_path, "rb") as f:
+                        return f.read()
+                logger.warning(
+                    "PDF file was not created or is empty (attempt %s/2)", attempt
+                )
+
+        logger.error("PDF generation failed after 2 attempts")
         return None
     finally:
         if temp_html_path:

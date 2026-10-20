@@ -78,6 +78,7 @@ from routes.email import (
     send_bulk_stream,
     email_logs_route,
     email_batch_summary_route,
+    retry_failed_stream,
     retry_failed_route,
 )
 from routes.stats import (
@@ -963,9 +964,15 @@ async def send_selected_guides_to_single_email_api(request: Request, year: int, 
 
 
 @app.get("/api/send-bulk-stream")
-async def send_bulk_stream_api(request: Request, year: int, month: int, token: str = ""):
+async def send_bulk_stream_api(
+    request: Request,
+    year: int,
+    month: int,
+    token: str = "",
+    housing_array_id: int | None = None,
+):
     """שליחה מרוכזת עם SSE לעדכון התקדמות בזמן אמת."""
-    return await send_bulk_stream(request, year, month, token)
+    return await send_bulk_stream(request, year, month, token, housing_array_id)
 
 
 @app.get("/api/email-logs")
@@ -984,6 +991,28 @@ async def email_batch_summary_api(request: Request, batch_id: str):
 async def retry_failed_emails_api(request: Request):
     """שליחה מחדש של מיילים שנכשלו."""
     return await retry_failed_route(request)
+
+
+@app.get("/api/retry-failed-emails-stream")
+async def retry_failed_emails_stream_api(
+    request: Request,
+    batch_id: str,
+    year: int,
+    month: int,
+    token: str = "",
+    failed_guide_ids: str = "",
+    housing_array_id: int | None = None,
+):
+    """שליחה מחדש עם SSE לעדכון התקדמות בזמן אמת."""
+    return await retry_failed_stream(
+        request,
+        batch_id,
+        year,
+        month,
+        token,
+        failed_guide_ids,
+        housing_array_id,
+    )
 
 
 @app.post("/api/toggle-demo-mode")

@@ -9,7 +9,7 @@ from datetime import date
 from typing import Dict, List, Tuple
 
 from core.constants import (
-    LOW_FUNCTIONING_APT_TYPE,
+    NIGHT_WAKEFULNESS_APT_TYPES,
     NIGHT_SHIFT_ID,
     NIGHT_SHIFT_WORK_FIRST_MINUTES,
     NIGHT_SHIFT_STANDBY_END,
@@ -167,6 +167,7 @@ def calculate_shift_hours(
     segments_by_shift: Dict[int, List[dict]],
     apartment_type_id: int | None = None,
     housing_array_id: int | None = None,
+    asd_night_marking: str | None = None,
 ) -> Tuple[float, float]:
     """
     חישוב שעות עבודה/כוננות למשמרת - פונקציה מרכזית.
@@ -174,8 +175,12 @@ def calculate_shift_hours(
     מרכזת את כל הלוגיקה:
     - משמרת לילה (107) מחוץ למערך ASD → אלגוריתם דינמי
     - משמרת לילה במערך ASD → לפי סגמנטים מהטבלה
-    - ערות בלילה (LOW_FUNCTIONING) → כוננות נספרת כעבודה
+    - ערות בלילה (תפקוד נמוך / סיעודית, דיווח עם סימון לילה ASD) → כוננות נספרת כעבודה
     - שאר המשמרות → לפי סגמנטים
+
+    Args:
+        apartment_type_id: סוג הדירה בחודש הדיווח (לא סוג "משולם כ-")
+        asd_night_marking: סימון לילה ASD מהדיווח
 
     Returns:
         (work_hours, standby_hours)
@@ -191,8 +196,8 @@ def calculate_shift_hours(
             start_time, end_time, shift_type_id, segments_by_shift
         )
 
-    # ערות בלילה: כל הכוננות נספרת כעבודה
-    if apartment_type_id == LOW_FUNCTIONING_APT_TYPE and standby_hours > 0:
+    # ערות בלילה: בדיווח מסומן כל הכוננות נספרת כעבודה (כמו בחישוב השכר)
+    if asd_night_marking and apartment_type_id in NIGHT_WAKEFULNESS_APT_TYPES and standby_hours > 0:
         work_hours += standby_hours
         standby_hours = 0.0
 

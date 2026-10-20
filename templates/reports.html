@@ -143,6 +143,7 @@
     <div id="bulkFinalSummary" style="display: none;" class="bulk-final-summary">
       <div id="bulkFinalSent" class="bulk-stat sent"></div>
       <div id="bulkFinalSkipped" class="bulk-stat skipped"></div>
+      <div id="bulkFinalFailed" class="bulk-stat failed"></div>
     </div>
 
     <!-- כפתורים -->
@@ -246,8 +247,9 @@
     padding: 12px 24px;
     background: #f0fdf4;
     border-top: 1px solid #bbf7d0;
-    display: flex; gap: 16px; font-size: 14px;
+    display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 14px;
   }
+  .bulk-final-detail { display: block; margin-top: 3px; font-size: 12px; color: #64748b; }
 
   .bulk-footer {
     display: flex; gap: 10px; justify-content: flex-end;
@@ -276,10 +278,13 @@
 <script>
   const selectedYear = {{ selected_year or 'null' }};
   const selectedMonth = {{ selected_month or 'null' }};
+  const selectedHousingArray = {{ selected_housing_array or 'null' }};
   let bulkEventSource = null;
   let currentBatchId = null;
   let currentFailedGuideIds = [];
   let bulkStartTime = null;
+  let bulkSuccessfulGuideIds = new Set();
+  let bulkSkippedByGuideId = new Map();
 
   function getDisplayedGuideIds() {
     const rows = document.querySelectorAll('#reportsTable tbody tr[data-guide-id]');
@@ -406,6 +411,10 @@
     document.getElementById('bulkRetryBtn').style.display = 'none';
     document.getElementById('bulkCancelBtn').textContent = 'ביטול';
     document.getElementById('bulkPreSend').style.display = 'flex';
+    currentBatchId = null;
+    currentFailedGuideIds = [];
+    bulkSuccessfulGuideIds = new Set();
+    bulkSkippedByGuideId = new Map();
 
     document.getElementById('bulkDialog').style.display = 'flex';
   }
@@ -418,6 +427,27 @@
     document.getElementById('bulkDialog').style.display = 'none';
   }
 
+  function renderBulkFinalSummary() {
+    const sentEl = document.getElementById('bulkFinalSent');
+    const skippedEl = document.getElementById('bulkFinalSkipped');
+    const failedEl = document.getElementById('bulkFinalFailed');
+
+    sentEl.textContent = `✅ נשלחו בהצלחה: ${bulkSuccessfulGuideIds.size}`;
+    skippedEl.textContent = `⏭️ לא נשלחו בגלל נתונים חסרים: ${bulkSkippedByGuideId.size}`;
+    failedEl.textContent = `❌ עדיין נכשלו: ${currentFailedGuideIds.length}`;
+
+    if (bulkSkippedByGuideId.size > 0) {
+      const detail = document.createElement('span');
+      detail.className = 'bulk-final-detail';
+      detail.textContent = Array.from(bulkSkippedByGuideId.values())
+        .map(item => `${item.name}: ${item.reason}`)
+        .join(' • ');
+      skippedEl.appendChild(detail);
+    }
+
+    document.getElementById('bulkFinalSummary').style.display = 'flex';
+  }
+
   function startBulkSend() {
     const sendBtn = document.getElementById('bulkSendBtn');
     sendBtn.disabled = true;
@@ -428,7 +458,15 @@
     bulkStartTime = Date.now();
 
     // SSE connection
-    const url = `/api/send-bulk-stream?year=${selectedYear}&month=${selectedMonth}&token={{ bulk_send_token|urlencode }}`;
+    const bulkParams = new URLSearchParams({
+      year: selectedYear,
+      month: selectedMonth,
+      token: {{ bulk_send_token|tojson }}
+    });
+    if (selectedHousingArray !== null) {
+      bulkParams.set('housing_array_id', selectedHousingArray);
+    }
+    const url = `/api/send-bulk-stream?${bulkParams.toString()}`;
     bulkEventSource = new EventSource(url);
 
     bulkEventSource.addEventListener('start', function(e) {
@@ -477,10 +515,15 @@
           icon.className = 'bulk-guide-icon sent';
           icon.textContent = '✓';
           reason.textContent = '';
+          bulkSuccessfulGuideIds.add(data.currentId);
         } else if (data.status === 'skipped') {
           icon.className = 'bulk-guide-icon skipped';
           icon.textContent = '⏭️';
           reason.textContent = data.reason || 'דולג';
+          bulkSkippedByGuideId.set(data.currentId, {
+            name: data.currentName,
+            reason: data.reason || 'דולג'
+          });
         } else {
           icon.className = 'bulk-guide-icon failed';
           icon.textContent = '✗';
@@ -514,12 +557,12 @@
       document.getElementById('bulkProgressText').textContent = '100%';
       document.getElementById('bulkTimeEstimate').textContent = 'הושלם';
 
-      const sentCount = data.sent.length;
-      const skippedCount = data.skipped.length;
-
-      document.getElementById('bulkFinalSent').innerHTML = `✅ נשלחו בהצלחה: <strong>${sentCount}</strong>`;
-      document.getElementById('bulkFinalSkipped').innerHTML = `⏭️ דולגו/נכשלו: <strong>${skippedCount}</strong>`;
-      document.getElementById('bulkFinalSummary').style.display = 'flex';
+      bulkSuccessfulGuideIds = new Set(data.sent.map(item => item.id));
+      bulkSkippedByGuideId = new Map(
+        data.skipped
+          .filter(item => item.status === 'skipped')
+          .map(item => [item.id, { name: item.name, reason: item.reason || 'דולג' }])
+      );
 
       sendBtn.style.display = 'none';
       document.getElementById('bulkCancelBtn').textContent = 'סגור';
@@ -527,6 +570,7 @@
       // כפתור retry אם יש נכשלים
       const failedItems = data.skipped.filter(s => s.status === 'failed');
       currentFailedGuideIds = failedItems.map(item => item.id);
+      renderBulkFinalSummary();
       if (failedItems.length > 0) {
         document.getElementById('bulkRetryBtn').style.display = '';
       }
@@ -556,42 +600,135 @@
     };
   }
 
-  async function retryFailed() {
-    if (!currentBatchId) return;
+  function retryFailed() {
+    if (!currentBatchId || currentFailedGuideIds.length === 0) return;
 
     const retryBtn = document.getElementById('bulkRetryBtn');
     retryBtn.disabled = true;
     retryBtn.textContent = '🔄 שולח מחדש...';
 
-    try {
-      const response = await fetch('/api/retry-failed-emails', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          batch_id: currentBatchId,
-          year: selectedYear,
-          month: selectedMonth,
-          failed_guide_ids: currentFailedGuideIds,
-          token: {{ retry_failed_token|tojson }}
-        })
+    document.getElementById('bulkProgressSection').style.display = 'block';
+    document.getElementById('bulkProgressBar').style.width = '0%';
+    document.getElementById('bulkProgressText').textContent = `0% (0/${currentFailedGuideIds.length})`;
+    document.getElementById('bulkTimeEstimate').textContent = '';
+    bulkStartTime = Date.now();
+
+    const params = new URLSearchParams({
+      batch_id: currentBatchId,
+      year: selectedYear,
+      month: selectedMonth,
+      token: {{ retry_failed_token|tojson }},
+      failed_guide_ids: currentFailedGuideIds.join(',')
+    });
+    if (selectedHousingArray !== null) {
+      params.set('housing_array_id', selectedHousingArray);
+    }
+    bulkEventSource = new EventSource(`/api/retry-failed-emails-stream?${params.toString()}`);
+
+    bulkEventSource.addEventListener('start', function(e) {
+      const data = JSON.parse(e.data);
+      (data.originalSkipped || []).forEach(item => {
+        bulkSkippedByGuideId.set(item.id, {
+          name: item.recipientName,
+          reason: item.reason || 'דולג'
+        });
       });
-      const result = await response.json();
-      if (result.success) {
-        currentBatchId = result.retry_batch_id;
-        currentFailedGuideIds = result.details?.failed_ids || [];
-        if (currentFailedGuideIds.length === 0) {
-          retryBtn.style.display = 'none';
+    });
+
+    bulkEventSource.addEventListener('sending', function(e) {
+      const data = JSON.parse(e.data);
+      const item = document.querySelector(`.bulk-guide-item[data-guide-id="${data.id}"]`);
+      if (!item) return;
+      const icon = item.querySelector('.bulk-guide-icon');
+      icon.className = 'bulk-guide-icon sending';
+      icon.textContent = '⏳';
+      item.querySelector('.bulk-guide-reason').textContent = 'שולח מחדש...';
+      item.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+
+    bulkEventSource.addEventListener('progress', function(e) {
+      const data = JSON.parse(e.data);
+      const pct = Math.round((data.processed / data.total) * 100);
+      document.getElementById('bulkProgressBar').style.width = pct + '%';
+      document.getElementById('bulkProgressText').textContent = `${pct}% (${data.processed}/${data.total})`;
+
+      const elapsed = (Date.now() - bulkStartTime) / 1000;
+      const remaining = Math.ceil((elapsed / data.processed) * (data.total - data.processed));
+      document.getElementById('bulkTimeEstimate').textContent = remaining > 0
+        ? (remaining > 60 ? `~${Math.ceil(remaining / 60)} דקות` : `~${remaining} שניות`)
+        : '';
+
+      const item = document.querySelector(`.bulk-guide-item[data-guide-id="${data.currentId}"]`);
+      if (item) {
+        const icon = item.querySelector('.bulk-guide-icon');
+        const reason = item.querySelector('.bulk-guide-reason');
+        if (data.status === 'sent') {
+          icon.className = 'bulk-guide-icon sent';
+          icon.textContent = '✓';
+          reason.textContent = '';
+          bulkSuccessfulGuideIds.add(data.currentId);
+        } else if (data.status === 'skipped') {
+          icon.className = 'bulk-guide-icon skipped';
+          icon.textContent = '⏭️';
+          reason.textContent = data.reason || 'דולג';
+          bulkSkippedByGuideId.set(data.currentId, {
+            name: data.currentName,
+            reason: data.reason || 'דולג'
+          });
+        } else {
+          icon.className = 'bulk-guide-icon failed';
+          icon.textContent = '✗';
+          reason.textContent = data.reason || 'נכשל';
         }
-        alert(result.message);
-      } else {
-        alert('שגיאה: ' + (result.error || 'שגיאה לא ידועה'));
       }
-    } catch (error) {
-      alert('שגיאת רשת: ' + error.message);
-    } finally {
+
+      const tableRow = document.querySelector(`#reportsTable tr[data-guide-id="${data.currentId}"]`);
+      if (tableRow) {
+        const statusSpan = tableRow.querySelector('.status-indicator');
+        if (statusSpan) {
+          statusSpan.className = data.status === 'sent'
+            ? 'status-indicator success'
+            : 'status-indicator error';
+          statusSpan.textContent = data.status === 'sent'
+            ? '✓ נשלח'
+            : '✗ ' + (data.reason || 'נכשל');
+        }
+      }
+    });
+
+    bulkEventSource.addEventListener('complete', function(e) {
+      const data = JSON.parse(e.data);
+      bulkEventSource.close();
+      bulkEventSource = null;
+      currentBatchId = data.batchId;
+      currentFailedGuideIds = data.failedIds || [];
+      (data.skipped || []).forEach(item => {
+        bulkSkippedByGuideId.set(item.id, {
+          name: item.recipientName,
+          reason: item.reason || 'דולג'
+        });
+      });
+
+      document.getElementById('bulkProgressBar').style.width = '100%';
+      document.getElementById('bulkProgressText').textContent = '100%';
+      document.getElementById('bulkTimeEstimate').textContent = 'הושלם';
+      renderBulkFinalSummary();
+
       retryBtn.disabled = false;
       retryBtn.textContent = '🔄 שלח מחדש נכשלים';
-    }
+      retryBtn.style.display = currentFailedGuideIds.length > 0 ? '' : 'none';
+    });
+
+    bulkEventSource.addEventListener('error', function(e) {
+      const data = e.data ? JSON.parse(e.data) : {};
+      if (bulkEventSource) {
+        bulkEventSource.close();
+        bulkEventSource = null;
+      }
+      retryBtn.disabled = false;
+      retryBtn.textContent = '🔄 שלח מחדש נכשלים';
+      alert('שגיאה בשליחה מחדש: ' + (data.message || 'חיבור נותק'));
+    });
   }
 
   // ─── שליחה למייל אחד ──────────────────────────────

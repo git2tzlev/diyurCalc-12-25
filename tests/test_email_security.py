@@ -50,6 +50,9 @@ class _FakeRequest:
     async def json(self):
         return self._body
 
+    async def is_disconnected(self):
+        return False
+
 
 async def _stream_text(response):
     chunks = []
@@ -205,6 +208,175 @@ class TestEmailLogHousingScope(unittest.TestCase):
 
         mock_get_conn.assert_not_called()
         self.assertIn("אין הרשאה", text)
+
+    def test_bulk_stream_uses_super_admin_selected_housing_array(self):
+        request = _FakeRequest(
+            user={"role": "super_admin", "housing_array_id": None, "person_id": 10}
+        )
+        conn = _FakeConnection(rows=[
+            {"id": 20, "name": "מדריך ASD", "email": "asd@example.com"},
+        ])
+
+        with (
+            patch.object(email_routes, "validate_action_token", return_value=True),
+            patch.object(email_routes, "get_conn", return_value=_FakeConnectionManager(conn)),
+            patch.object(email_routes, "get_email_settings", return_value={"smtp_host": "smtp"}),
+            patch.object(
+                email_routes,
+                "_guides_with_reports_for_period",
+                return_value=[{"id": 20, "name": "מדריך ASD", "email": "asd@example.com"}],
+                create=True,
+            ) as mock_guides,
+        ):
+            response = asyncio.run(email_routes.send_bulk_stream(
+                request,
+                2026,
+                5,
+                token="signed",
+                housing_array_id=2,
+            ))
+
+        self.assertEqual(response.status_code, 200)
+        mock_guides.assert_called_once_with(
+            year=2026,
+            month=5,
+            housing_array_id=2,
+        )
+
+    def test_retry_failed_stream_tracks_each_retry_and_keeps_original_skipped(self):
+        request = _FakeRequest(
+            user={"role": "framework_manager", "housing_array_id": 7, "person_id": 10}
+        )
+        original_logs = [
+            {
+                "recipient_id": 20,
+                "recipient_name": "נכשל א",
+                "recipient_email": "a@example.com",
+                "status": "failed",
+                "error_message": "שגיאה ביצירת PDF",
+                "year": 2026,
+                "month": 9,
+            },
+            {
+                "recipient_id": 21,
+                "recipient_name": "נכשל ב",
+                "recipient_email": "b@example.com",
+                "status": "failed",
+                "error_message": "שגיאה ביצירת PDF",
+                "year": 2026,
+                "month": 9,
+            },
+            {
+                "recipient_id": 30,
+                "recipient_name": "ללא מייל",
+                "recipient_email": "",
+                "status": "skipped",
+                "error_message": "אין מייל תקין",
+                "year": 2026,
+                "month": 9,
+            },
+            {
+                "recipient_id": 40,
+                "recipient_name": "כבר נשלח",
+                "recipient_email": "sent@example.com",
+                "status": "sent",
+                "error_message": None,
+                "year": 2026,
+                "month": 9,
+            },
+        ]
+        retry_results = [
+            {"id": 20, "name": "נכשל א", "status": "sent", "reason": None},
+            {"id": 21, "name": "נכשל ב", "status": "failed", "reason": "שגיאה בשליחה"},
+        ]
+
+        with (
+            patch.object(email_routes, "validate_action_token", return_value=True),
+            patch.object(email_routes, "get_conn", return_value=_FakeConnectionManager(_FakeConnection())),
+            patch.object(email_routes, "get_email_settings", return_value={"smtp_host": "smtp"}),
+            patch.object(email_routes, "get_email_logs", return_value=original_logs) as mock_get_logs,
+            patch.object(email_routes, "process_guide_for_bulk", side_effect=retry_results) as mock_process,
+        ):
+            response = asyncio.run(email_routes.retry_failed_stream(
+                request,
+                batch_id="batch-1",
+                year=2026,
+                month=9,
+                token="signed",
+            ))
+            text = asyncio.run(_stream_text(response))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("event: start", text)
+        self.assertEqual(text.count("event: sending"), 2)
+        self.assertEqual(text.count("event: progress"), 2)
+        self.assertIn("event: complete", text)
+        self.assertIn('"recipientName": "ללא מייל"', text)
+        self.assertIn('"reason": "אין מייל תקין"', text)
+        self.assertIn('"failedIds": [21]', text)
+        self.assertEqual(mock_process.call_count, 2)
+        self.assertEqual({call.args[0]["id"] for call in mock_process.call_args_list}, {20, 21})
+        self.assertEqual(mock_get_logs.call_args.kwargs["housing_array_id"], 7)
+        self.assertEqual(mock_get_logs.call_args.kwargs["limit"], 1000)
+
+    def test_retry_failed_stream_rejects_invalid_token_before_database_access(self):
+        request = _FakeRequest(
+            user={"role": "framework_manager", "housing_array_id": 7, "person_id": 10}
+        )
+
+        with patch.object(email_routes, "get_conn") as mock_get_conn:
+            response = asyncio.run(email_routes.retry_failed_stream(
+                request,
+                batch_id="batch-1",
+                year=2026,
+                month=9,
+                token="bad",
+            ))
+            text = asyncio.run(_stream_text(response))
+
+        mock_get_conn.assert_not_called()
+        self.assertIn("אין הרשאה", text)
+
+    def test_retry_failed_stream_scopes_validated_backup_ids_when_logs_are_missing(self):
+        request = _FakeRequest(
+            user={"role": "super_admin", "housing_array_id": None, "person_id": 10}
+        )
+        conn = _FakeConnection(rows=[
+            {"id": 20, "name": "א", "email": "a@example.com"},
+            {"id": 21, "name": "ב", "email": "b@example.com"},
+        ])
+
+        def sent_result(guide, *_args):
+            return {
+                "id": guide["id"],
+                "name": guide["name"],
+                "status": "sent",
+                "reason": None,
+            }
+
+        with (
+            patch.object(email_routes, "validate_action_token", return_value=True),
+            patch.object(email_routes, "get_conn", return_value=_FakeConnectionManager(conn)),
+            patch.object(email_routes, "get_email_settings", return_value={"smtp_host": "smtp"}),
+            patch.object(email_routes, "get_email_logs", return_value=[]),
+            patch.object(email_routes, "process_guide_for_bulk", side_effect=sent_result) as mock_process,
+        ):
+            response = asyncio.run(email_routes.retry_failed_stream(
+                request,
+                batch_id="batch-1",
+                year=2026,
+                month=9,
+                token="signed",
+                failed_guide_ids="20,21,20",
+                housing_array_id=2,
+            ))
+            text = asyncio.run(_stream_text(response))
+
+        sql, params = conn.calls[-1]
+        self.assertIn("p.housing_array_id = %s", sql)
+        self.assertEqual(params, (20, 21, 2))
+        self.assertEqual(mock_process.call_count, 2)
+        self.assertIn('"failedIds": []', text)
 
     def test_email_service_hides_unexpected_send_error_details(self):
         with patch.object(email_service.smtplib, "SMTP", side_effect=RuntimeError("secret smtp host")):

@@ -16,14 +16,14 @@ from fastapi.templating import Jinja2Templates
 from starlette.responses import StreamingResponse
 
 from core.config import config
-from core.database import get_conn
+from core.database import get_conn, get_housing_array_filter
 from core.auth import (
     enforce_framework_manager_guide_access,
     get_user_housing_array,
     is_super_admin,
     validate_action_token,
 )
-from core.report_filters import completion_exclusion_sql_for_reports
+from routes.reports import _guides_with_reports_for_period
 from services.email_service import (
     get_email_settings,
     save_email_settings,
@@ -270,7 +270,26 @@ def _sse_event(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-async def send_bulk_stream(request: Request, year: int, month: int, token: str = "") -> StreamingResponse:
+def _effective_email_housing_filter(
+    request: Request,
+    selected_housing_array_id: int | None = None,
+) -> int | None:
+    """Managers are fixed to their array; admins use the reports selection."""
+    managed_array = get_user_housing_array(request)
+    if managed_array is not None:
+        return managed_array
+    if selected_housing_array_id is not None:
+        return selected_housing_array_id
+    return get_housing_array_filter()
+
+
+async def send_bulk_stream(
+    request: Request,
+    year: int,
+    month: int,
+    token: str = "",
+    housing_array_id: int | None = None,
+) -> StreamingResponse:
     """שליחת דוחות מרוכזת עם SSE לעדכון התקדמות בזמן אמת."""
     import asyncio
 
@@ -280,7 +299,9 @@ async def send_bulk_stream(request: Request, year: int, month: int, token: str =
 
         return StreamingResponse(forbidden_stream(), media_type="text/event-stream")
 
-    # שליפת הגדרות ורשימת מדריכים
+    # Use the same guide population as the reports table, including approved
+    # payment-only rows and the period-specific exclusions.
+    hid = _effective_email_housing_filter(request, housing_array_id)
     with get_conn() as conn:
         settings = get_email_settings(conn)
         if not settings:
@@ -288,36 +309,11 @@ async def send_bulk_stream(request: Request, year: int, month: int, token: str =
                 yield _sse_event("error", {"message": "הגדרות מייל לא נמצאו"})
             return StreamingResponse(error_stream(), media_type="text/event-stream")
 
-        hid = get_user_housing_array(request)
-        if hid is not None:
-            exclusion_sql, exclusion_params = completion_exclusion_sql_for_reports(
-                year, month, hid
-            )
-            guides = conn.execute(f"""
-                SELECT DISTINCT p.id, p.name, p.email
-                FROM people p
-                JOIN time_reports tr ON tr.person_id = p.id
-                WHERE p.is_active = TRUE
-                AND p.housing_array_id = %s
-                AND EXTRACT(YEAR FROM tr.date) = %s
-                AND EXTRACT(MONTH FROM tr.date) = %s
-                {exclusion_sql}
-                ORDER BY p.name
-            """, (hid, year, month) + exclusion_params).fetchall()
-        else:
-            exclusion_sql, exclusion_params = completion_exclusion_sql_for_reports(
-                year, month, hid
-            )
-            guides = conn.execute(f"""
-                SELECT DISTINCT p.id, p.name, p.email
-                FROM people p
-                JOIN time_reports tr ON tr.person_id = p.id
-                WHERE p.is_active = TRUE
-                AND EXTRACT(YEAR FROM tr.date) = %s
-                AND EXTRACT(MONTH FROM tr.date) = %s
-                {exclusion_sql}
-                ORDER BY p.name
-            """, (year, month) + exclusion_params).fetchall()
+    guides = _guides_with_reports_for_period(
+        year=year,
+        month=month,
+        housing_array_id=hid,
+    )
 
     if not guides:
         async def empty_stream() -> AsyncGenerator[str, None]:
@@ -426,6 +422,182 @@ async def email_batch_summary_route(request: Request, batch_id: str) -> JSONResp
         return JSONResponse({"success": False, "error": GENERIC_ERROR})
 
 
+def _parse_retry_guide_ids(raw_ids) -> list[int]:
+    """Normalize retry backup IDs supplied by the reports page."""
+    if not raw_ids:
+        return []
+    values = raw_ids.split(",") if isinstance(raw_ids, str) else raw_ids
+    try:
+        guide_ids = list(dict.fromkeys(int(value) for value in values))
+    except (TypeError, ValueError):
+        return []
+    return [guide_id for guide_id in guide_ids if guide_id > 0][:500]
+
+
+async def retry_failed_stream(
+    request: Request,
+    batch_id: str,
+    year: int,
+    month: int,
+    token: str = "",
+    failed_guide_ids: str = "",
+    housing_array_id: int | None = None,
+) -> StreamingResponse:
+    """Retry failed bulk emails and stream per-guide progress over SSE."""
+    import asyncio
+
+    if not validate_action_token(request, token, "retry_failed_email"):
+        async def forbidden_stream() -> AsyncGenerator[str, None]:
+            yield _sse_event("error", {"message": "אין הרשאה להפעלת שליחה מחדש"})
+
+        return StreamingResponse(forbidden_stream(), media_type="text/event-stream")
+
+    hid = _effective_email_housing_filter(request, housing_array_id)
+    backup_ids = _parse_retry_guide_ids(failed_guide_ids)
+
+    with get_conn() as conn:
+        settings = get_email_settings(conn)
+        if not settings:
+            async def settings_error_stream() -> AsyncGenerator[str, None]:
+                yield _sse_event("error", {"message": "הגדרות מייל לא נמצאו"})
+
+            return StreamingResponse(settings_error_stream(), media_type="text/event-stream")
+
+        original_logs = get_email_logs(
+            conn,
+            batch_id=batch_id,
+            housing_array_id=hid,
+            limit=1000,
+        )
+        failed_logs = [log for log in original_logs if log.get("status") == "failed"]
+
+        if not failed_logs and backup_ids:
+            placeholders = ",".join(["%s"] * len(backup_ids))
+            housing_sql = ""
+            params: tuple = tuple(backup_ids)
+            if hid is not None:
+                housing_sql = "AND p.housing_array_id = %s"
+                params += (hid,)
+            guides = conn.execute(f"""
+                SELECT p.id, p.name, p.email
+                FROM people p
+                WHERE p.id IN ({placeholders})
+                {housing_sql}
+                ORDER BY p.name
+            """, params).fetchall()
+            failed_logs = [
+                {
+                    "recipient_id": guide["id"],
+                    "recipient_name": guide["name"],
+                    "recipient_email": guide["email"],
+                    "year": year,
+                    "month": month,
+                    "status": "failed",
+                }
+                for guide in guides
+            ]
+
+    unique_failed_logs = list({log["recipient_id"]: log for log in failed_logs}.values())
+    original_skipped = list({
+        log["recipient_id"]: {
+            "id": log["recipient_id"],
+            "recipientName": log.get("recipient_name") or "",
+            "status": "skipped",
+            "reason": log.get("error_message") or "דולג",
+        }
+        for log in original_logs
+        if log.get("status") == "skipped"
+    }.values())
+
+    if not unique_failed_logs:
+        async def no_failures_stream() -> AsyncGenerator[str, None]:
+            yield _sse_event("error", {"message": "לא נמצאו שליחות שנכשלו ב-batch זה"})
+
+        return StreamingResponse(no_failures_stream(), media_type="text/event-stream")
+
+    user = getattr(request.state, "current_user", None)
+    sent_by = user.get("person_id") if user else None
+    retry_batch_id = f"{batch_id}-retry"
+
+    async def event_stream() -> AsyncGenerator[str, None]:
+        total = len(unique_failed_logs)
+        yield _sse_event("start", {
+            "total": total,
+            "batchId": retry_batch_id,
+            "originalSkipped": original_skipped,
+        })
+
+        sent = []
+        failed = []
+        skipped = list(original_skipped)
+        loop = asyncio.get_running_loop()
+
+        for processed, log in enumerate(unique_failed_logs, start=1):
+            if await request.is_disconnected():
+                logger.info("Client disconnected during retry batch %s", retry_batch_id)
+                break
+
+            guide = {
+                "id": log["recipient_id"],
+                "name": log.get("recipient_name") or "",
+                "email": log.get("recipient_email") or "",
+            }
+            yield _sse_event("sending", {"id": guide["id"], "name": guide["name"]})
+
+            result = await loop.run_in_executor(
+                None,
+                process_guide_for_bulk,
+                guide,
+                log.get("year") or year,
+                log.get("month") or month,
+                retry_batch_id,
+                settings,
+                sent_by,
+                hid,
+            )
+            if result["status"] == "sent":
+                sent.append(result)
+            elif result["status"] == "skipped":
+                skipped.append({
+                    "id": result["id"],
+                    "recipientName": result["name"],
+                    "status": "skipped",
+                    "reason": result.get("reason") or "דולג",
+                })
+            else:
+                failed.append(result)
+
+            yield _sse_event("progress", {
+                "processed": processed,
+                "total": total,
+                "currentId": result["id"],
+                "currentName": result["name"],
+                "status": result["status"],
+                "reason": result.get("reason"),
+                "sent": len(sent),
+                "failed": len(failed),
+                "skipped": len(skipped),
+            })
+
+        yield _sse_event("complete", {
+            "sent": sent,
+            "failed": failed,
+            "failedIds": [result["id"] for result in failed],
+            "skipped": skipped,
+            "batchId": retry_batch_id,
+        })
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 async def retry_failed_route(request: Request) -> JSONResponse:
     """שליחה מחדש של מיילים שנכשלו ב-batch."""
     try:
@@ -447,7 +619,10 @@ async def retry_failed_route(request: Request) -> JSONResponse:
             if not settings:
                 return JSONResponse({"success": False, "error": "הגדרות מייל לא נמצאו"})
 
-            hid = get_user_housing_array(request)
+            hid = _effective_email_housing_filter(
+                request,
+                body.get("housing_array_id"),
+            )
             failed_logs = get_email_logs(
                 conn,
                 batch_id=batch_id,

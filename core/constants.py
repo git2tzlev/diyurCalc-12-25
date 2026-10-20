@@ -79,7 +79,9 @@ BERESHIT_APT_TYPE = 3       # בראשית
 KALANIYOT_APT_TYPE = 5      # כלניות
 HIGH_FUNCTIONING_APT_TYPE = 6   # תפקוד גבוה
 LOW_FUNCTIONING_APT_TYPE = 7    # תפקוד נמוך
-ASD_APT_TYPES = {HIGH_FUNCTIONING_APT_TYPE, LOW_FUNCTIONING_APT_TYPE}
+NURSING_APT_TYPE = 9            # סיעודית - כמו תפקוד נמוך, נבדלת רק בתוספת השעתית
+# סוגי דירה שבהם סימון "ערות בלילה" הופך כוננות לשעות עבודה
+NIGHT_WAKEFULNESS_APT_TYPES = {LOW_FUNCTIONING_APT_TYPE, NURSING_APT_TYPE}
 SPECIAL_ABSENCE_PAYMENT_APT_TYPES = {BERESHIT_APT_TYPE, KALANIYOT_APT_TYPE}
 
 # דירות השלמות - זיהוי לפי ID (לתצוגה בלבד, לא לחישוב שכר)
@@ -130,6 +132,7 @@ APT_TYPE_NAMES = {
     KALANIYOT_APT_TYPE: "כלניות",
     HIGH_FUNCTIONING_APT_TYPE: "תפקוד גבוה",
     LOW_FUNCTIONING_APT_TYPE: "תפקוד נמוך",
+    NURSING_APT_TYPE: "סיעודית",
 }
 
 # =============================================================================

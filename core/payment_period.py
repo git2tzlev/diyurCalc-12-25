@@ -88,7 +88,6 @@ def get_payment_period_completions(
     housing_array_id: Optional[int] = None,
 ) -> dict[str, Any]:
     """Fetch reports/components marked for a later payment month."""
-    ensure_payment_period_columns(conn.conn if hasattr(conn, "conn") else conn)
     params: list[Any] = [payment_year, payment_month]
     housing_sql = ""
     if housing_array_id is not None:

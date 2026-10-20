@@ -28,7 +28,7 @@ from core.logic import (
     get_available_months_for_person,
     auto_approve_substitute_travel,
 )
-from core.history import get_minimum_wage_for_month
+from core.history import get_all_apartment_types_for_month, get_minimum_wage_for_month
 from services.gesher_difference import build_approved_completion_gesher_rows
 from services.gesher_exporter import (
     apply_completion_rows_to_monthly_totals,
@@ -36,7 +36,7 @@ from services.gesher_exporter import (
 )
 from app_utils import get_daily_segments_data, aggregate_daily_segments_to_monthly
 from core.constants import (
-    HIGH_FUNCTIONING_APT_TYPE, LOW_FUNCTIONING_APT_TYPE,
+    HIGH_FUNCTIONING_APT_TYPE, NIGHT_WAKEFULNESS_APT_TYPES,
     CLEANING_SHIFT_ID, MEDICAL_ESCORT_SHIFT_ID, NIGHT_WATCH_SHIFT_ID, WORK_HOUR_SHIFT_ID,
     COMPLETION_APARTMENT_IDS,
     is_asd_housing_array,
@@ -1573,6 +1573,13 @@ def prepare_guide_pdf_data(
             report.get("apartment_id"),
         )
     ]
+    # סוג הדירה בחודש הדיווח (כמו בחישוב השכר) - קובע ערות בלילה ותווית ASD
+    month_apartment_types = get_all_apartment_types_for_month(
+        conn, list({r["apartment_id"] for r in reports if r.get("apartment_id")}), year, month
+    )
+    for report in reports:
+        if report.get("apartment_id") in month_apartment_types:
+            report["apartment_type_id"] = month_apartment_types[report["apartment_id"]]
 
     # שליפת סגמנטים
     shift_ids = list({r["shift_type_id"] for r in reports if r["shift_type_id"]})
@@ -1610,7 +1617,7 @@ def prepare_guide_pdf_data(
         apt_type = r.get("apartment_type_id")
         if apt_type == HIGH_FUNCTIONING_APT_TYPE:
             return "שינה בסלון"
-        if apt_type == LOW_FUNCTIONING_APT_TYPE:
+        if apt_type in NIGHT_WAKEFULNESS_APT_TYPES:
             return "ערות בלילה"
         return ""
 
@@ -1724,6 +1731,7 @@ def prepare_guide_pdf_data(
                     r["shift_type_id"], segments_by_shift,
                     apartment_type_id=r.get("apartment_type_id"),
                     housing_array_id=r.get("housing_array_id"),
+                    asd_night_marking=r.get("asd_night_marking"),
                 )
 
             total_work_hours += work_hours
