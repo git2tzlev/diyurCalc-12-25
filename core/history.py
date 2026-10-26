@@ -401,74 +401,62 @@ def _query_standby_rate_for_month(
     year: int,
     month: int
 ) -> Optional[int]:
+    """
+    תעריף כוננות (באגורות) לחודש, בגישת "שמור בשינוי".
+
+    סוג דירה עם תעריף משלו: היסטוריה של הסוג, אחרת התעריף הנוכחי של הסוג.
+    התעריף הכללי (היסטוריה ונוכחי) חל רק כשלסוג אין שורה משלו - גם בחודשים קודמים,
+    כדי ששינוי בתעריף הכללי לא ידרוס סוגים שיש להם תעריף ספציפי.
+    """
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     try:
-        # 1. Try historical record for specific apartment type
-        # Logic: requested (year, month) < historical (year, month)
         if apartment_type_id is not None:
-            cursor.execute("""
-                SELECT amount
-                FROM standby_rates_history
-                WHERE segment_id = %s
-                  AND apartment_type_id = %s
-                  AND marital_status = %s
-                  AND (year > %s OR (year = %s AND month > %s))
-                ORDER BY year ASC, month ASC
-                LIMIT 1
-            """, (segment_id, apartment_type_id, marital_status, year, year, month))
+            amount = _first_standby_history_amount(cursor, segment_id, apartment_type_id, marital_status, year, month)
+            if amount is not None:
+                return amount
+            amount = _current_standby_amount(cursor, segment_id, apartment_type_id, marital_status)
+            if amount is not None:
+                return amount
 
-            history = cursor.fetchone()
-            if history:
-                logger.debug(f"Using historical standby rate for segment {segment_id}, apt_type {apartment_type_id} ({year}/{month})")
-                return history["amount"]
-
-        # 2. Try historical record for general (apt_type=NULL)
-        cursor.execute("""
-            SELECT amount
-            FROM standby_rates_history
-            WHERE segment_id = %s
-              AND apartment_type_id IS NULL
-              AND marital_status = %s
-              AND (year > %s OR (year = %s AND month > %s))
-            ORDER BY year ASC, month ASC
-            LIMIT 1
-        """, (segment_id, marital_status, year, year, month))
-
-        history = cursor.fetchone()
-        if history:
-            logger.debug(f"Using historical standby rate (general) for segment {segment_id} ({year}/{month})")
-            return history["amount"]
-
-        # 3. No history - try current data for specific apartment type
-        if apartment_type_id is not None:
-            cursor.execute("""
-                SELECT amount
-                FROM standby_rates
-                WHERE segment_id = %s
-                AND apartment_type_id = %s
-                AND marital_status = %s
-            """, (segment_id, apartment_type_id, marital_status))
-
-            rate = cursor.fetchone()
-            if rate:
-                return rate["amount"]
-
-        # 4. Fallback to current general rate (apt_type=NULL)
-        cursor.execute("""
-            SELECT amount
-            FROM standby_rates
-            WHERE segment_id = %s
-            AND apartment_type_id IS NULL
-            AND marital_status = %s
-        """, (segment_id, marital_status))
-
-        rate = cursor.fetchone()
-        if rate:
-            return rate["amount"]
-
-        return None
+        amount = _first_standby_history_amount(cursor, segment_id, None, marital_status, year, month)
+        if amount is not None:
+            return amount
+        return _current_standby_amount(cursor, segment_id, None, marital_status)
     finally:
         cursor.close()
+
+
+def _first_standby_history_amount(
+    cursor, segment_id: int, apartment_type_id: int | None, marital_status: str, year: int, month: int
+) -> Optional[int]:
+    """הסכום מהשורה ההיסטורית הראשונה שחלה על החודש (חודש השורה גדול מחודש החישוב)."""
+    cursor.execute("""
+        SELECT amount
+        FROM standby_rates_history
+        WHERE segment_id = %s
+          AND apartment_type_id IS NOT DISTINCT FROM %s
+          AND marital_status = %s
+          AND (year > %s OR (year = %s AND month > %s))
+        ORDER BY year ASC, month ASC
+        LIMIT 1
+    """, (segment_id, apartment_type_id, marital_status, year, year, month))
+    row = cursor.fetchone()
+    return row["amount"] if row else None
+
+
+def _current_standby_amount(
+    cursor, segment_id: int, apartment_type_id: int | None, marital_status: str
+) -> Optional[int]:
+    """התעריף הנוכחי מ-standby_rates (לסוג דירה, או הכללי כש-apartment_type_id=None)."""
+    cursor.execute("""
+        SELECT amount
+        FROM standby_rates
+        WHERE segment_id = %s
+          AND apartment_type_id IS NOT DISTINCT FROM %s
+          AND marital_status = %s
+    """, (segment_id, apartment_type_id, marital_status))
+    row = cursor.fetchone()
+    return row["amount"] if row else None
 
 
 @cached(ttl=300, key_prefix="core.history.standby_rate_for_month")
