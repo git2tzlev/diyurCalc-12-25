@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Dict, List, Tuple
 
 from core.constants import (
@@ -15,16 +15,54 @@ from core.constants import (
     NIGHT_SHIFT_STANDBY_END,
     TAGBUR_FRIDAY_PRE_ENTRY_MINUTES,
     TAGBUR_FRIDAY_SHIFT_ID,
+    TAGBUR_HOLY_NIGHT_END_MINUTES,
+    TAGBUR_HOLY_NIGHT_START_MINUTES,
+    TAGBUR_REPORT_BASED_START_MONTH,
     TAGBUR_SHABBAT_POST_EXIT_MINUTES,
     TAGBUR_SHABBAT_SHIFT_ID,
     is_asd_housing_array,
     is_tagbur_shift,
 )
-from core.time_utils import MINUTES_PER_DAY, MINUTES_PER_HOUR, _get_shabbat_boundaries, span_minutes
+from core.time_utils import (
+    MINUTES_PER_DAY,
+    MINUTES_PER_HOUR,
+    _get_shabbat_boundaries,
+    classify_day_type,
+    span_minutes,
+)
 
 
 def _format_minutes_as_hhmm(minutes: int) -> str:
     return f"{(minutes // MINUTES_PER_HOUR) % 24:02d}:{minutes % MINUTES_PER_HOUR:02d}"
+
+
+def build_report_based_tagbur_windows(
+    report_date: date,
+    report_start_min: int,
+    report_end_min: int,
+    shabbat_cache: Dict[str, Dict[str, str]],
+) -> List[Tuple[int, int]]:
+    """
+    חלונות תשלום לתגבור (מ-10/2026): שעות הדיווח פחות ליל שבת/חג.
+
+    ליל שבת/חג = מ-22:00 עד 10:00 בבוקר של יום שבת/חג - כוננות ללא תשלום.
+
+    Returns:
+        רשימת (start, end) בדקות מחצות של יום הדיווח (end יכול לעבור 1440).
+    """
+    windows = [(report_start_min, report_end_min)]
+    for day_offset in range(report_end_min // MINUTES_PER_DAY + 1):
+        if classify_day_type(report_date + timedelta(days=day_offset), shabbat_cache) != "holy":
+            continue
+        night_start = (day_offset - 1) * MINUTES_PER_DAY + TAGBUR_HOLY_NIGHT_START_MINUTES
+        night_end = day_offset * MINUTES_PER_DAY + TAGBUR_HOLY_NIGHT_END_MINUTES
+        windows = [
+            part
+            for start, end in windows
+            for part in ((start, min(end, night_start)), (max(start, night_end), end))
+            if part[1] > part[0]
+        ]
+    return windows
 
 
 def apply_tagbur_dynamic_boundaries(
@@ -38,11 +76,28 @@ def apply_tagbur_dynamic_boundaries(
     shabbat_cache: Dict[str, Dict[str, str]],
 ) -> list[dict]:
     """
-    התאמת גבולות תגבור לפי שבת/חג.
+    התאמת מקטעי תגבור לחודש החישוב.
 
-    מ-04/2026 לא מאריכים תגבור מעבר לדיווח בפועל בצד הדינמי.
+    מ-10/2026 המקטעים נבנים מהדיווח בפועל פחות ליל שבת/חג (day_offset = היום ביחס ליום הדיווח).
+    לפני כן: מקטעי הטבלה עם גבולות לפי כניסה/יציאה, ומ-04/2026 חיתוך לפי הדיווח בצד הדינמי.
     """
-    if not is_tagbur_shift(shift_type_id) or not seg_list:
+    if not is_tagbur_shift(shift_type_id):
+        return seg_list
+
+    if (year, month) >= TAGBUR_REPORT_BASED_START_MONTH:
+        windows = build_report_based_tagbur_windows(report_date, report_start_min, report_end_min, shabbat_cache)
+        return [
+            {
+                "start_time": _format_minutes_as_hhmm(start),
+                "end_time": _format_minutes_as_hhmm(end),
+                "segment_type": "work",
+                "id": None,
+                "day_offset": start // MINUTES_PER_DAY,
+            }
+            for start, end in windows
+        ]
+
+    if not seg_list:
         return seg_list
 
     adjusted = [dict(seg) for seg in seg_list]
@@ -204,6 +259,34 @@ def calculate_shift_hours(
     return round(work_hours, 2), round(standby_hours, 2)
 
 
+def _collect_segment_overlaps(
+    segment_list: List[dict],
+    shift_type_id: int,
+    actual_start: int,
+    actual_end: int,
+    has_dynamic_context: bool,
+) -> List[dict]:
+    """איסוף החפיפה בין הדיווח למקטעי התגבור מהטבלה (חודשים לפני 10/2026)."""
+    overlapping = []
+    for seg in segment_list:
+        seg_start, seg_end = span_minutes(seg["start_time"], seg["end_time"])
+        overlap_start = max(seg_start, actual_start)
+        overlap_end = min(seg_end, actual_end)
+
+        if has_dynamic_context and shift_type_id == TAGBUR_FRIDAY_SHIFT_ID and seg is segment_list[0]:
+            overlap_start = min(seg_start, actual_start)
+        elif has_dynamic_context and shift_type_id == TAGBUR_SHABBAT_SHIFT_ID and seg is segment_list[-1]:
+            overlap_end = max(seg_end, actual_end)
+
+        if overlap_end > overlap_start:
+            overlapping.append({
+                "overlap_start": overlap_start,
+                "overlap_end": overlap_end,
+                "segment_type": seg.get("segment_type", "work"),
+            })
+    return overlapping
+
+
 def calculate_tagbur_segments(
     start_time: str,
     end_time: str,
@@ -222,43 +305,34 @@ def calculate_tagbur_segments(
     """
     actual_start, actual_end = span_minutes(start_time, end_time)
     effective_actual_end = actual_end if actual_end > actual_start else actual_end + MINUTES_PER_DAY
-    segment_list = segments_by_shift.get(shift_type_id, [])
     has_dynamic_context = (
         report_date is not None
         and year is not None
         and month is not None
         and shabbat_cache is not None
     )
-    if has_dynamic_context:
-        segment_list = apply_tagbur_dynamic_boundaries(
-            shift_type_id,
-            segment_list,
-            report_date,
-            actual_start,
-            effective_actual_end,
-            year,
-            month,
-            shabbat_cache,
+    if has_dynamic_context and (year, month) >= TAGBUR_REPORT_BASED_START_MONTH:
+        windows = build_report_based_tagbur_windows(report_date, actual_start, effective_actual_end, shabbat_cache)
+        overlapping = [
+            {"overlap_start": start, "overlap_end": end, "segment_type": "work"}
+            for start, end in windows
+        ]
+    else:
+        segment_list = segments_by_shift.get(shift_type_id, [])
+        if has_dynamic_context:
+            segment_list = apply_tagbur_dynamic_boundaries(
+                shift_type_id,
+                segment_list,
+                report_date,
+                actual_start,
+                effective_actual_end,
+                year,
+                month,
+                shabbat_cache,
+            )
+        overlapping = _collect_segment_overlaps(
+            segment_list, shift_type_id, actual_start, actual_end, has_dynamic_context
         )
-
-    # איסוף מקטעים חופפים
-    overlapping = []
-    for seg in segment_list:
-        seg_start, seg_end = span_minutes(seg["start_time"], seg["end_time"])
-        overlap_start = max(seg_start, actual_start)
-        overlap_end = min(seg_end, actual_end)
-
-        if has_dynamic_context and shift_type_id == TAGBUR_FRIDAY_SHIFT_ID and seg is segment_list[0]:
-            overlap_start = min(seg_start, actual_start)
-        elif has_dynamic_context and shift_type_id == TAGBUR_SHABBAT_SHIFT_ID and seg is segment_list[-1]:
-            overlap_end = max(seg_end, actual_end)
-
-        if overlap_end > overlap_start:
-            overlapping.append({
-                "overlap_start": overlap_start,
-                "overlap_end": overlap_end,
-                "segment_type": seg.get("segment_type", "work"),
-            })
 
     result = []
     for i, seg_data in enumerate(overlapping):

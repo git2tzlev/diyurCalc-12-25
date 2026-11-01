@@ -520,6 +520,38 @@ class TestElections(unittest.TestCase):
         self.assertEqual(result["calc200_premium"], 180)
 
 
+class TestPremiumWindowCityPerSegment(unittest.TestCase):
+    def test_mixed_city_chain_applies_window_only_to_matching_segment(self):
+        premium_date = date(2027, 3, 23)
+        window = PremiumWindow(
+            start_date=premium_date,
+            start_min=480,
+            end_date=premium_date,
+            end_min=600,
+            rate_pct=150,
+            origin="purim",
+            standby_mode="shabbat",
+            source_id=99,
+            city_filter=("ירושלים",),
+            name="שושן פורים",
+        )
+
+        result = _calculate_chain_wages(
+            [
+                (480, 540, 103, premium_date, "תל אביב"),
+                (540, 600, 103, premium_date, "ירושלים"),
+            ],
+            {},
+            0,
+            False,
+            premium_windows=[window],
+        )
+
+        self.assertEqual(result["calc100"], 60)
+        self.assertEqual(result["calc150"], 60)
+        self.assertEqual(result["calc150_premium"], 60)
+
+
 # =============================================================================
 # Test: Independence Day (150%, cross-midnight)
 # =============================================================================
@@ -568,6 +600,33 @@ class TestCarryoverWithPurim(unittest.TestCase):
         self.assertEqual(result["calc175"], 120)
         self.assertEqual(result["calc175_premium"], 120)
         self.assertEqual(result["calc150"], 0)
+
+
+class TestSundayBeforeMondayHoliday(unittest.TestCase):
+    """רגרסיה לתקלה שבה ערב חג ביום ראשון סווג כולו כחג."""
+
+    def test_yom_kippur_eve_starts_premium_only_at_candle_lighting(self):
+        """20.09.2026: 12:00–17:58 חול; רק מ־17:58 מתחיל החג."""
+        holiday_cache = {
+            "2026-09-21": {
+                "enter": "17:58",
+                "exit": "19:27",
+                "holiday": "יום כיפור",
+            },
+        }
+
+        result = _calculate_chain_wages(
+            [(720, 1320, 103, date(2026, 9, 20))],
+            holiday_cache,
+            0,
+            False,
+            premium_windows=[],
+        )
+
+        self.assertEqual(result["calc100"], 358)
+        self.assertEqual(result["calc150"], 122)
+        self.assertEqual(result["calc175"], 120)
+        self.assertEqual(result["calc150_shabbat"], 122)
 
 
 if __name__ == "__main__":

@@ -95,6 +95,20 @@ def minutes_to_time_str(minutes: int) -> str:
 
 SHABBAT_CACHE_KEY = "shabbat_times_cache"
 SHABBAT_CACHE_TTL = 86400  # 24 hours
+SHABBAT_TIMES_CITY = "תל אביב"
+
+
+def _is_valid_clock_text(value: Any) -> bool:
+    """Return whether value is a strict 24-hour HH:MM clock value."""
+    if not isinstance(value, str):
+        return False
+    try:
+        hours_text, minutes_text = value.split(":")
+        hours = int(hours_text)
+        minutes = int(minutes_text)
+    except (TypeError, ValueError):
+        return False
+    return 0 <= hours <= 23 and 0 <= minutes <= 59
 
 
 def get_shabbat_times_cache(conn) -> Dict[str, Dict[str, Any]]:
@@ -110,17 +124,65 @@ def get_shabbat_times_cache(conn) -> Dict[str, Dict[str, Any]]:
 
     try:
         cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-        cursor.execute("SELECT shabbat_date, candle_lighting, havdalah, parsha, holiday_name FROM shabbat_times")
+        cursor.execute("""
+            SELECT city, shabbat_date, candle_lighting, havdalah, parsha, holiday_name
+            FROM shabbat_times
+            WHERE city = %s
+            ORDER BY shabbat_date,
+                     candle_lighting NULLS LAST,
+                     havdalah NULLS LAST,
+                     holiday_name NULLS LAST
+        """, (SHABBAT_TIMES_CITY,))
         rows = cursor.fetchall()
         result = {}
         for r in rows:
-            if r["shabbat_date"]:
-                result[r["shabbat_date"]] = {
-                    "enter": r["candle_lighting"],
-                    "exit": r["havdalah"],
+            if r["city"] != SHABBAT_TIMES_CITY:
+                continue
+            is_placeholder = (
+                r["candle_lighting"] == "00:00"
+                and r["havdalah"] == "00:00"
+            )
+            enter_value = (
+                r["candle_lighting"]
+                if _is_valid_clock_text(r["candle_lighting"])
+                else None
+            )
+            exit_value = (
+                r["havdalah"]
+                if _is_valid_clock_text(r["havdalah"])
+                else None
+            )
+            date_key = r["shabbat_date"]
+            if not date_key or is_placeholder or (enter_value is None and exit_value is None):
+                continue
+            if date_key not in result:
+                result[date_key] = {
+                    "enter": enter_value,
+                    "exit": exit_value,
                     "parsha": r["parsha"],
                     "holiday": r["holiday_name"]
                 }
+            else:
+                existing = result[date_key]
+                conflict = False
+                for field, candidate in (
+                    ("enter", enter_value),
+                    ("exit", exit_value),
+                    ("holiday", r["holiday_name"]),
+                    ("parsha", r["parsha"]),
+                ):
+                    if candidate is None:
+                        continue
+                    if existing.get(field) is None:
+                        existing[field] = candidate
+                    elif existing[field] != candidate:
+                        conflict = True
+                if conflict:
+                    logger.warning(
+                        "Conflicting shabbat_times rows for %s/%s; using deterministic first row",
+                        SHABBAT_TIMES_CITY,
+                        date_key,
+                    )
         cursor.close()
 
         # Store in cache

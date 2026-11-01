@@ -551,7 +551,8 @@ def _apply_payment_component_overrides(
             "component_type_id": type_id,
             "payment_year": component.get("payment_year"),
             "payment_month": component.get("payment_month"),
-            "for_pension": pension_by_type.get(type_id, bool(component.get("for_pension"))),
+            "for_pension": bool(component.get("for_pension")),
+            "type_for_pension": pension_by_type.get(type_id, False),
         }
     return list(by_id.values())
 
@@ -871,8 +872,8 @@ def calculate_monthly_summary(
     if housing_filter is not None:
         cursor.execute("""
             SELECT pc.id, pc.person_id, (pc.quantity * pc.rate) as total_amount, pc.component_type_id,
-                   pc.payment_year, pc.payment_month,
-                   COALESCE(pct.for_pension, FALSE) as for_pension
+                   pc.payment_year, pc.payment_month, pc.for_pension,
+                   COALESCE(pct.for_pension, FALSE) as type_for_pension
             FROM payment_components pc
             JOIN apartments ap ON ap.id = pc.apartment_id
             LEFT JOIN payment_component_types pct ON pc.component_type_id = pct.id
@@ -882,8 +883,8 @@ def calculate_monthly_summary(
     else:
         cursor.execute("""
             SELECT pc.id, pc.person_id, (pc.quantity * pc.rate) as total_amount, pc.component_type_id,
-                   pc.payment_year, pc.payment_month,
-                   COALESCE(pct.for_pension, FALSE) as for_pension
+                   pc.payment_year, pc.payment_month, pc.for_pension,
+                   COALESCE(pct.for_pension, FALSE) as type_for_pension
             FROM payment_components pc
             LEFT JOIN payment_component_types pct ON pc.component_type_id = pct.id
             WHERE pc.person_id = ANY(%s) AND pc.date >= %s AND pc.date < %s
@@ -944,6 +945,11 @@ def calculate_monthly_summary(
     holiday_payments = calculate_holiday_payments(
         conn, year, month, shabbat_cache, minimum_wage,
         all_reports=all_reports,
+        previous_reports=[
+            report
+            for reports in prev_reports_by_person.values()
+            for report in reports
+        ],
         person_types=person_types,
         person_start_dates=person_start_dates,
         person_is_married=person_is_married,

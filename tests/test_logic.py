@@ -28,7 +28,7 @@ from core.constants import (
     WEEKDAY_SHIFT_TYPE_ID,
     WORK_HOUR_SHIFT_ID,
 )
-from core.shift_hours import calculate_tagbur_segments
+from core.shift_hours import build_report_based_tagbur_windows, calculate_tagbur_segments
 from routes.guide import (
     _allocation_windows_for_report,
     _apply_calculated_hours_to_shift_rows,
@@ -441,6 +441,90 @@ class TestTagburDynamicBoundaries(unittest.TestCase):
         self.assertEqual(sum(row["work_hours"] for row in result), 9.0)
 
 
+class TestTagburReportBased(unittest.TestCase):
+    """בדיקות תגבור לפי דיווח (מ-10/2026): שעות הדיווח פחות ליל שבת/חג 22:00-10:00."""
+
+    def setUp(self):
+        self.friday = date(2026, 10, 9)
+        self.saturday = date(2026, 10, 10)
+        self.shabbat_cache = {"2026-10-10": {"enter": "17:30", "exit": "18:30"}}
+        self.db_segments = [
+            {"start_time": "10:00", "end_time": "16:00", "segment_type": "work"},
+            {"start_time": "17:00", "end_time": "19:00", "segment_type": "work"},
+        ]
+
+    def _apply(self, shift_type_id: int, report_date: date, start_min: int, end_min: int, month: int = 10) -> list[dict]:
+        return _apply_tagbur_dynamic_boundaries(
+            shift_type_id, self.db_segments, report_date, start_min, end_min, 2026, month, self.shabbat_cache
+        )
+
+    def test_friday_tagbur_pays_from_report_start_until_holy_night(self):
+        result = self._apply(TAGBUR_FRIDAY_SHIFT_ID, self.friday, 17 * 60 + 10, 32 * 60)
+
+        self.assertEqual(
+            [(seg["start_time"], seg["end_time"], seg["day_offset"]) for seg in result],
+            [("17:10", "22:00", 0)],
+        )
+
+    def test_shabbat_tagbur_pays_continuously_from_ten_until_report_end(self):
+        result = self._apply(TAGBUR_SHABBAT_SHIFT_ID, self.saturday, 0, 22 * 60 + 35)
+
+        self.assertEqual(
+            [(seg["start_time"], seg["end_time"]) for seg in result],
+            [("10:00", "22:35")],
+        )
+
+    def test_short_report_inside_holy_night_pays_nothing(self):
+        self.assertEqual(self._apply(TAGBUR_SHABBAT_SHIFT_ID, self.saturday, 0, 2 * 60), [])
+        self.assertEqual(self._apply(TAGBUR_FRIDAY_SHIFT_ID, self.friday, 23 * 60, 32 * 60), [])
+
+    def test_holiday_followed_by_shabbat_excludes_night_between_them(self):
+        cache = {
+            "2026-10-09": {"enter": "17:30", "exit": "18:30", "holiday": "חג"},
+            "2026-10-10": {"enter": "17:30", "exit": "18:30"},
+        }
+
+        windows = build_report_based_tagbur_windows(self.friday, 10 * 60, 36 * 60, cache)
+
+        self.assertEqual(windows, [(10 * 60, 22 * 60), (34 * 60, 36 * 60)])
+
+    def test_next_day_segment_gets_day_offset(self):
+        cache = {
+            "2026-10-09": {"enter": "17:30", "exit": "18:30", "holiday": "חג"},
+            "2026-10-10": {"enter": "17:30", "exit": "18:30"},
+        }
+
+        result = _apply_tagbur_dynamic_boundaries(
+            TAGBUR_SHABBAT_SHIFT_ID, self.db_segments, self.friday, 10 * 60, 36 * 60, 2026, 10, cache
+        )
+
+        self.assertEqual(result[-1]["start_time"], "10:00")
+        self.assertEqual(result[-1]["day_offset"], 1)
+
+    def test_september_keeps_table_segments(self):
+        result = self._apply(TAGBUR_SHABBAT_SHIFT_ID, self.saturday, 0, 22 * 60 + 35, month=9)
+
+        self.assertEqual(result[0]["start_time"], "10:00")
+        self.assertEqual(result[0]["end_time"], "16:00")
+        self.assertNotIn("day_offset", result[0])
+
+    def test_shift_report_shows_report_based_hours(self):
+        result = calculate_tagbur_segments(
+            "00:00",
+            "22:30",
+            TAGBUR_SHABBAT_SHIFT_ID,
+            {TAGBUR_SHABBAT_SHIFT_ID: self.db_segments},
+            report_date=self.saturday,
+            year=2026,
+            month=10,
+            shabbat_cache=self.shabbat_cache,
+        )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual((result[0]["display_start"], result[0]["display_end"]), ("10:00", "22:30"))
+        self.assertEqual(result[0]["work_hours"], 12.5)
+
+
 class TestShiftReportDisplayAllocation(unittest.TestCase):
     """בדיקות הקצאת שעות חישוב לשורות דוח משמרות בלי שינוי מבנה הדוח."""
 
@@ -769,24 +853,47 @@ class TestPaymentComponentsClassification(unittest.TestCase):
             ],
         )
 
-    def test_preloaded_for_pension_components_are_split_from_regular_extras(self):
-        totals = aggregate_daily_segments_to_monthly(
+    def _aggregate_payment_comps(self, year: int, month: int, payment_comps: list) -> dict:
+        return aggregate_daily_segments_to_monthly(
             conn=None,
             daily_segments=[],
             person_id=1,
-            year=2026,
-            month=4,
+            year=year,
+            month=month,
             minimum_wage=34.40,
-            preloaded_payment_comps=[
-                {"total_amount": 10000, "component_type_id": 99, "for_pension": True},
-                {"total_amount": 2500, "component_type_id": 99, "for_pension": False},
-            ],
+            preloaded_payment_comps=payment_comps,
             person_start_date=date(2026, 1, 1),
         )
+
+    def test_pension_follows_payment_row_flag_from_october_2026(self):
+        totals = self._aggregate_payment_comps(2026, 10, [
+            {"total_amount": 10000, "component_type_id": 99, "for_pension": True, "type_for_pension": False},
+            {"total_amount": 2500, "component_type_id": 99, "for_pension": False, "type_for_pension": True},
+        ])
 
         self.assertEqual(totals["extras_for_pension"], 100.0)
         self.assertEqual(totals["extras"], 25.0)
         self.assertEqual(totals["gesher_total"], 125.0)
+
+    def test_pension_follows_component_type_flag_before_october_2026(self):
+        totals = self._aggregate_payment_comps(2026, 9, [
+            {"total_amount": 10000, "component_type_id": 99, "for_pension": True, "type_for_pension": False},
+            {"total_amount": 2500, "component_type_id": 99, "for_pension": False, "type_for_pension": True},
+        ])
+
+        self.assertEqual(totals["extras_for_pension"], 25.0)
+        self.assertEqual(totals["extras"], 100.0)
+
+    def test_pension_flag_takes_precedence_over_travel_and_professional_support(self):
+        totals = self._aggregate_payment_comps(2026, 10, [
+            {"total_amount": 1000, "component_type_id": 2, "for_pension": True},
+            {"total_amount": 2000, "component_type_id": 7, "for_pension": True},
+            {"total_amount": 3000, "component_type_id": 13, "for_pension": True},
+        ])
+
+        self.assertEqual(totals["extras_for_pension"], 60.0)
+        self.assertEqual(totals["travel"], 0.0)
+        self.assertEqual(totals["professional_support"], 0.0)
 
 
 class TestAsdSenioritySupplement(unittest.TestCase):

@@ -13,12 +13,18 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
-from typing import Optional
+from typing import Iterable, Optional
 
 import psycopg2
 import psycopg2.extras
 
-from core.time_utils import MINUTES_PER_DAY
+from core.time_utils import (
+    MINUTES_PER_DAY,
+    SHABBAT_ENTER_DEFAULT,
+    SHABBAT_EXIT_DEFAULT,
+    SHABBAT_TIMES_CITY,
+    _is_two_day_yom_tov,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +80,11 @@ def _hhmm_to_minutes(value: str | None) -> int | None:
         return None
     try:
         hh, mm = value.split(":")
-        return int(hh) * 60 + int(mm)
+        hours = int(hh)
+        minutes = int(mm)
+        if not 0 <= hours <= 23 or not 0 <= minutes <= 59:
+            return None
+        return hours * 60 + minutes
     except (ValueError, AttributeError):
         return None
 
@@ -105,6 +115,125 @@ def _city_matches(window_filter: list[str] | None,
     return normalized_city in window_filter
 
 
+def build_sacred_windows_from_cache(
+    shabbat_cache: dict[str, dict[str, str]],
+    relevant_dates: Iterable[date] | None = None,
+) -> list[PremiumWindow]:
+    """Build absolute Shabbat/holiday windows from the legacy cache.
+
+    The production table normally stores entry and exit on the sacred date.
+    Older tests and imports may store entry on the eve and exit on the next
+    date, so that representation is supported as well.  A window is always
+    half-open: entry is included and exit is excluded.
+    """
+    parsed_rows: list[tuple[date, dict[str, str]]] = []
+    for raw_date, info in shabbat_cache.items():
+        parsed_date = _parse_iso_date(raw_date)
+        if parsed_date is not None and info:
+            parsed_rows.append((parsed_date, info))
+    parsed_rows.sort(key=lambda item: item[0])
+    rows_by_date = dict(parsed_rows)
+
+    windows: list[PremiumWindow] = []
+    for row_date, info in parsed_rows:
+        enter_min = _hhmm_to_minutes(info.get("enter") or info.get("start"))
+        exit_min = _hhmm_to_minutes(info.get("exit") or info.get("end"))
+        holiday_name = info.get("holiday")
+        entry_row_is_holiday = bool(holiday_name)
+
+        if enter_min is None:
+            continues_previous = any(
+                window.end_date == row_date and window.end_min == 0
+                for window in windows
+            )
+            if exit_min is not None and exit_min > 0 and continues_previous:
+                windows.append(PremiumWindow(
+                    start_date=row_date,
+                    start_min=0,
+                    end_date=row_date,
+                    end_min=exit_min,
+                    rate_pct=150,
+                    origin="holiday" if holiday_name else "shabbat",
+                    standby_mode="shabbat",
+                    source_id=None,
+                    name=holiday_name or "שבת",
+                ))
+            continue
+
+        if enter_min == 0 and exit_min == 0:
+            continue
+
+        if exit_min is not None:
+            if row_date.weekday() == 4 and not holiday_name:
+                start_date = row_date
+                end_date = row_date + timedelta(days=1)
+            else:
+                days_before = 2 if holiday_name and _is_two_day_yom_tov(row_date) else 1
+                start_date = row_date - timedelta(days=days_before)
+                end_date = row_date
+        else:
+            end_date = None
+            for days_ahead in range(1, 4):
+                candidate_date = row_date + timedelta(days=days_ahead)
+                candidate = rows_by_date.get(candidate_date)
+                candidate_exit = _hhmm_to_minutes(candidate.get("exit")) if candidate else None
+                if candidate_exit is not None:
+                    end_date = candidate_date
+                    exit_min = candidate_exit
+                    holiday_name = holiday_name or candidate.get("holiday")
+                    break
+            if end_date is None or exit_min is None:
+                continue
+            # Split holiday imports put candle lighting on the first sacred
+            # date; the actual entry is its eve. Split Shabbat imports put
+            # the entry on Friday itself.
+            start_date = row_date - timedelta(days=1) if entry_row_is_holiday else row_date
+
+        if exit_min == 0:
+            end_date += timedelta(days=1)
+
+        windows.append(PremiumWindow(
+            start_date=start_date,
+            start_min=enter_min,
+            end_date=end_date,
+            end_min=exit_min,
+            rate_pct=150,
+            origin="holiday" if holiday_name else "shabbat",
+            standby_mode="shabbat",
+            source_id=None,
+            name=holiday_name or "שבת",
+        ))
+
+    fallback_fridays: set[date] = set()
+    for relevant_date in relevant_dates or ():
+        if relevant_date.weekday() == 4:
+            fallback_fridays.add(relevant_date)
+        elif relevant_date.weekday() == 5:
+            fallback_fridays.add(relevant_date - timedelta(days=1))
+
+    for friday in fallback_fridays:
+        saturday = friday + timedelta(days=1)
+        has_explicit_window = any(
+            window.start_date <= friday and window.end_date >= saturday
+            for window in windows
+        )
+        if not has_explicit_window:
+            windows.append(PremiumWindow(
+                start_date=friday,
+                start_min=SHABBAT_ENTER_DEFAULT,
+                end_date=saturday,
+                end_min=SHABBAT_EXIT_DEFAULT,
+                rate_pct=150,
+                origin="shabbat",
+                standby_mode="shabbat",
+                source_id=None,
+                name="שבת",
+            ))
+
+    windows.sort(key=lambda window: (window.start_date, window.start_min))
+    return windows
+
+
 # =============================================================================
 # Data Loading
 # =============================================================================
@@ -128,44 +257,62 @@ def _load_shabbat_windows(conn, start_date: date, end_date: date) -> list[Premiu
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     try:
         cursor.execute("""
-            SELECT shabbat_date, candle_lighting, havdalah, holiday_name
+            SELECT city, shabbat_date, candle_lighting, havdalah, holiday_name
             FROM shabbat_times
             WHERE shabbat_date BETWEEN %s AND %s
-              AND candle_lighting IS NOT NULL
-              AND havdalah IS NOT NULL
-        """, (query_start, query_end))
+              AND city = %s
+              AND (candle_lighting IS NOT NULL OR havdalah IS NOT NULL)
+            ORDER BY shabbat_date,
+                     candle_lighting NULLS LAST,
+                     havdalah NULLS LAST,
+                     holiday_name NULLS LAST
+        """, (query_start, query_end, SHABBAT_TIMES_CITY))
         rows = cursor.fetchall()
     finally:
         cursor.close()
 
-    windows: list[PremiumWindow] = []
+    cache_rows: dict[str, dict[str, str]] = {}
+    seen_dates: set[date] = set()
     for row in rows:
         shabbat_date = _parse_iso_date(row["shabbat_date"])
         enter_min = _hhmm_to_minutes(row["candle_lighting"])
         exit_min = _hhmm_to_minutes(row["havdalah"])
 
-        if shabbat_date is None or enter_min is None or exit_min is None:
+        if row["city"] != SHABBAT_TIMES_CITY:
             continue
+        if shabbat_date is None or (enter_min is None and exit_min is None):
+            continue
+        if enter_min == 0 and exit_min == 0:
+            continue
+        if shabbat_date in seen_dates:
+            existing = cache_rows[shabbat_date.isoformat()]
+            conflict = False
+            for field, candidate in (
+                ("enter", row["candle_lighting"] if enter_min is not None else None),
+                ("exit", row["havdalah"] if exit_min is not None else None),
+                ("holiday", row["holiday_name"]),
+            ):
+                if candidate is None:
+                    continue
+                if existing.get(field) is None:
+                    existing[field] = candidate
+                elif existing[field] != candidate:
+                    conflict = True
+            if conflict:
+                logger.warning(
+                    "Conflicting shabbat_times rows for %s/%s; using deterministic first row",
+                    SHABBAT_TIMES_CITY,
+                    shabbat_date,
+                )
+            continue
+        seen_dates.add(shabbat_date)
+        cache_rows[shabbat_date.isoformat()] = {
+            "enter": row["candle_lighting"] if enter_min is not None else None,
+            "exit": row["havdalah"] if exit_min is not None else None,
+            "holiday": row["holiday_name"],
+        }
 
-        # candle_lighting = שעת כניסה בערב (shabbat_date - 1).
-        # havdalah = שעת יציאה ביום המקודש עצמו (shabbat_date).
-        enter_date = shabbat_date - timedelta(days=1)
-        exit_date = shabbat_date
-
-        origin = "holiday" if row["holiday_name"] else "shabbat"
-
-        windows.append(PremiumWindow(
-            start_date=enter_date,
-            start_min=enter_min,
-            end_date=exit_date,
-            end_min=exit_min,
-            rate_pct=150,
-            origin=origin,
-            standby_mode="shabbat",
-            source_id=None,  # shabbat_times אין id נפרד, זיהוי לפי תאריך
-        ))
-
-    return windows
+    return build_sacred_windows_from_cache(cache_rows)
 
 
 def _load_special_day_windows(

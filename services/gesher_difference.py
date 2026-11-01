@@ -17,7 +17,7 @@ from services.gesher_archive import get_gesher_export_file, list_gesher_export_f
 MONEY_EPSILON = 0.01
 QUANTITY_EPSILON = 0.01
 RATE_IS_NOT_MONEY_VALUE_TYPES = {"days_with_total_hours"}
-COMPLETION_PENSION_SOURCE_SYMBOLS = {"360", "362", "363"}
+COMPLETION_PENSION_SOURCE_SYMBOLS = {"360", "362", "363", "379"}
 COMPLETION_NON_PENSION_SOURCE_SYMBOLS = {
     "366", "368", "370", "371", "373", "374", "382", "434",
 }

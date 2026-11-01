@@ -53,6 +53,9 @@ from core.constants import (
     SUBSTITUTE_TRAVEL_TYPE_ID,
     TAGBUR_FRIDAY_PRE_ENTRY_MINUTES,
     TAGBUR_FRIDAY_SHIFT_ID,
+    TAGBUR_HOLY_NIGHT_END_MINUTES,
+    TAGBUR_HOLY_NIGHT_START_MINUTES,
+    TAGBUR_REPORT_BASED_START_MONTH,
     TAGBUR_SHABBAT_POST_EXIT_MINUTES,
     TAGBUR_SHABBAT_SHIFT_ID,
     THERAPEUTIC_APT_TYPE,
@@ -132,13 +135,15 @@ BUSINESS_RULE_TABLES: tuple[BusinessRuleTable, ...] = (
                 str(TAGBUR_FRIDAY_SHIFT_ID),
                 "תגבור שישי / ערב חג",
                 "מקטעי תגבור סביב כניסת שבת או חג.",
-                f"מצופה להתחיל {TAGBUR_FRIDAY_PRE_ENTRY_MINUTES} דקות לפני כניסה.",
+                "מ-10/2026: מהכניסה בדיווח עד 22:00. קודם: מצופה להתחיל "
+                f"{TAGBUR_FRIDAY_PRE_ENTRY_MINUTES} דקות לפני כניסה.",
             ),
             (
                 str(TAGBUR_SHABBAT_SHIFT_ID),
                 "תגבור שבת / חג",
                 "מקטעי תגבור סביב יציאת שבת או חג.",
-                f"מצופה להסתיים {TAGBUR_SHABBAT_POST_EXIT_MINUTES} דקות אחרי יציאה.",
+                "מ-10/2026: מ-10:00 ברצף עד היציאה בדיווח. קודם: מצופה להסתיים "
+                f"{TAGBUR_SHABBAT_POST_EXIT_MINUTES} דקות אחרי יציאה.",
             ),
             (
                 str(WORK_HOUR_SHIFT_ID),
@@ -345,13 +350,19 @@ BUSINESS_RULE_TABLES: tuple[BusinessRuleTable, ...] = (
             (
                 "תגבור ערב",
                 f"{TAGBUR_FRIDAY_PRE_ENTRY_MINUTES} דקות לפני כניסה",
-                "גבול מצופה למשמרת תגבור שישי/ערב חג.",
+                "גבול מצופה למשמרת תגבור שישי/ערב חג (עד 09/2026).",
                 "core/constants.py",
             ),
             (
                 "תגבור יציאה",
                 f"{TAGBUR_SHABBAT_POST_EXIT_MINUTES} דקות אחרי יציאה",
-                "גבול מצופה למשמרת תגבור שבת/חג.",
+                "גבול מצופה למשמרת תגבור שבת/חג (עד 09/2026).",
+                "core/constants.py",
+            ),
+            (
+                "ליל שבת/חג בתגבור",
+                f"{_minutes_to_clock(TAGBUR_HOLY_NIGHT_START_MINUTES)}-{_minutes_to_clock(TAGBUR_HOLY_NIGHT_END_MINUTES)}",
+                "מ-10/2026: שעות תגבור בטווח הזה לא משולמות (כוננות ללא תוספת).",
                 "core/constants.py",
             ),
             (
@@ -678,10 +689,13 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
                 summary="רצף חול מתחלק ל-100%, 125%, 150%; שבת/חג מתחלקים ל-150%, 175%, 200%.",
                 details=(
                     "שבת וחג נקבעים לפי זמני כניסה/יציאה בפועל, לא רק לפי שם המשמרת.",
+                    "החישוב משתמש בחלון זמן מוחלט וחצי-פתוח: שעת הכניסה כלולה ושעת היציאה אינה כלולה.",
+                    "ערב חג נשאר יום חול עד שעת הכניסה, גם כאשר החג חל ביום שני.",
+                    "רצף חג ושבת או חג דו-יומי מחובר ללא דקת חול מלאכותית וללא כפל תשלום.",
                     "150% שבת מפוצל בגשר ל-100% ול-50% כדי להתאים לפנסיה/מירב.",
                     "חלונות פרימיום יכולים לשנות את אחוז השכר בתוך אותו רצף.",
                 ),
-                source=("app_utils.py:_calculate_chain_wages", "app_utils.py:aggregate_daily_segments_to_monthly"),
+                source=("app_utils.py:_calculate_chain_wages", "core/premium_windows.py:build_sacred_windows_from_cache", "app_utils.py:aggregate_daily_segments_to_monthly"),
                 tags=("100%", "125%", "150%", "שבת"),
             ),
         ),
@@ -932,9 +946,13 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
                 summary="חג רגיל מזוהה לפי shabbat_times כאשר לשדה holiday יש ערך.",
                 details=(
                     "שבת חול המועד מוחרגת מתשלום חג.",
-                    "חג דו-יומי חייב רשומה ישירה לכל יום חג.",
+                    "בראש השנה נתמכות גם שתי רשומות ישירות וגם רשומת ב' תשרי יחידה מהפורמט הישן; בשני המקרים נבנה רצף חג מלא.",
+                    "זמני שבת וחג נטענים באופן דטרמיניסטי עבור תל אביב; placeholder של 00:00/00:00 אינו דורס שורה תקינה.",
+                    "עבודה בחג נקבעת לפי חפיפת שעות בפועל לחלון, כולל ערב החג, ולא לפי תאריך הדיווח בלבד.",
+                    "דיווח עבודה אחרי צאת החג אינו מבטל תשלום חג; חופשה, מחלה או דיווח ללא שעות ביום החג כן נחשבים דיווח בחג ומבטלים את התשלום.",
+                    "בחג שחל ביום הראשון בחודש נבדק גם דיווח מערב החג בחודש הקודם.",
                 ),
-                source=("core/holiday_payment.py:get_holiday_dates_in_month", "core/time_utils.py:get_shabbat_times_cache"),
+                source=("core/holiday_payment.py:get_holiday_dates_in_month", "core/holiday_payment.py:_report_overlaps_regular_holiday_window", "core/time_utils.py:get_shabbat_times_cache"),
                 tags=("shabbat_times", "חגים"),
             ),
             BusinessRule(
@@ -944,6 +962,7 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
                     "החלון נשאר ב-special_days ולא מוכנס ל-shabbat_times.",
                     "בחלון שחוצה חצות, תאריך הזכאות הוא end_date.",
                     "ביטול התשלום נבדק לפי חפיפה שעותית לחלון המיוחד, לא רק לפי תאריך הדיווח.",
+                    "חופשה, מחלה או דיווח ללא שעות בתאריך שנכלל בחלון המיוחד נחשבים דיווח בחג ומבטלים את התשלום.",
                     "משמרת מהיום שלפני החג שנמשכת לתוך החג לא מבטלת אם היא לא עברה את סוף המקטעים המוגדרים של המשמרת.",
                     "הדגל counts_as_holiday_payment נקבע בעת יצירת יום פרימיום; במסך הנוכחי אין פעולת עריכה ייעודית לדגל אחרי יצירה.",
                 ),
@@ -1037,7 +1056,24 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
         description="כללי תגבור לפי זמני שבת וחג.",
         rules=(
             BusinessRule(
-                title="תגבור שישי / ערב חג",
+                title="תגבור לפי דיווח (מ-10/2026)",
+                summary=(
+                    f"מחודש {TAGBUR_REPORT_BASED_START_MONTH[1]:02d}/{TAGBUR_REPORT_BASED_START_MONTH[0]} "
+                    "שעות תגבור שישי/שבת נלקחות מהדיווח בפועל, פחות ליל שבת/חג."
+                ),
+                details=(
+                    f"ליל שבת/חג = {_minutes_to_clock(TAGBUR_HOLY_NIGHT_START_MINUTES)} עד "
+                    f"{_minutes_to_clock(TAGBUR_HOLY_NIGHT_END_MINUTES)} בבוקר של יום שבת/חג: כוננות ללא תשלום וללא תוספת כוננות.",
+                    "תגבור שישי: מכניסת המדריך בדיווח עד 22:00. תגבור שבת: מ-10:00 ברצף עד יציאת המדריך בדיווח.",
+                    "אין גבולות לפי כניסת/צאת שבת ואין פער 16:00-17:00 בשבת.",
+                    "דיווח שכולו בתוך ליל שבת/חג לא מזכה בשעות.",
+                    "החודשים הקודמים נשארים לפי מקטעי shift_time_segments, כפי שיצא בתלושים (הכללים הבאים).",
+                ),
+                source=("core/shift_hours.py:build_report_based_tagbur_windows", "app_utils.py:get_daily_segments_data"),
+                tags=("תגבור", "שישי", "שבת", "חג"),
+            ),
+            BusinessRule(
+                title="תגבור שישי / ערב חג (עד 09/2026)",
                 summary=f"תגבור שישי או ערב חג אמור להתחיל {TAGBUR_FRIDAY_PRE_ENTRY_MINUTES} דקות לפני כניסת שבת/חג.",
                 details=(
                     "המקטע הראשון נבנה דינמית לפי shabbat_times.",
@@ -1049,7 +1085,7 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
                 tags=("תגבור", "שישי", "ערב חג"),
             ),
             BusinessRule(
-                title="תגבור שבת / חג",
+                title="תגבור שבת / חג (עד 09/2026)",
                 summary=f"תגבור שבת או חג אמור להסתיים {TAGBUR_SHABBAT_POST_EXIT_MINUTES} דקות אחרי צאת שבת/חג.",
                 details=(
                     "המקטע האחרון נבנה דינמית לפי זמן יציאה.",
@@ -1107,8 +1143,7 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
                 details=(
                     "חלון 150% מתנהג כמו שבת מבחינת מדרגות: 150%, 175%, 200%.",
                     "חלון 200% ומעלה מתנהג כתעריף שטוח באחוז החלון.",
-                    "חלון יכול להיחתך לפי עיר הדירה.",
-                    "פער ידוע: ברצף שמערב כמה דירות, סינון העיר נעשה לפי עיר הסגמנט הראשון של הרצף.",
+                    "חלון נחתך לפי עיר הדירה של כל מקטע, גם כאשר רצף אחד עובר בין כמה דירות או ערים.",
                 ),
                 source=("app_utils.py:_calculate_chain_wages", "core/premium_windows.py:filter_windows_by_city"),
                 tags=("ימי פרימיום", "150%", "200%"),
@@ -1135,9 +1170,9 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
                 title="רכיבי תשלום ידניים",
                 summary="payment_components נצברים לפי quantity*rate ומסווגים לפי סוג הרכיב.",
                 details=(
-                    "סוגים 2 ו-7 נצברים כנסיעות.",
-                    "סוג 13 נצבר כתומך מקצועי.",
-                    "רכיב שמסומן for_pension נכנס לתוספות לפנסיה; השאר לתוספות רגילות.",
+                    "רכיב שמסומן לפנסיה נכנס לתוספות לפנסיה (379), בלי קשר לסוג שלו.",
+                    "מחודש 10/2026 הסימון לפנסיה נקבע לפי payment_components.for_pension (סימון על התשלום עצמו); בחודשים קודמים לפי payment_component_types.for_pension, כפי שיצא לגשר.",
+                    "רכיב שאינו לפנסיה: סוגים 2 ו-7 נצברים כנסיעות, סוג 13 כתומך מקצועי, והשאר כתוספות רגילות.",
                     "הסיווג נשמר גם במסלול עובד יחיד וגם במסלול הסיכום החודשי המרוכז.",
                 ),
                 source=("app_utils.py:aggregate_daily_segments_to_monthly", "core/logic.py:calculate_monthly_summary"),
@@ -1197,7 +1232,7 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
                     "רשומה שסומנה לחודש תשלום מאוחר ואין לה salary_impact_event מחושבת במנגנון הישן.",
                     "במנגנון הישן, כשיש גשר סופי מיוצא מלוא הפער מול החישוב הנוכחי; כשאין גשר סופי מיוצאת רק השפעת הרשומות המסומנות.",
                     "הבחירה בין המנגנונים היא לפי קיום אירוע תואם ולא לפי חודש תשלום קשיח.",
-                    "רכיבי מקור לפנסיה ממופים לסמל 317.",
+                    "רכיבי מקור לפנסיה (360, 362, 363 ותוספות לפנסיה 379) ממופים לסמל 317.",
                     "רכיבי מקור לא לפנסיה ממופים לסמל 253.",
                     "מחלה וחופשה אינן נכנסות לסמלי הכסף אלא לסמלי רטרו ייעודיים: תשלום מחלה לסמל 306 ותשלום חופשה לסמל 332 (שעות בתעריף חודש העבודה), ניצול ימי מחלה לסמל 414 וניצול ימי חופשה לסמל 427, וזכאות חודשית לימי מחלה לסמל 410 ולימי חופשה לסמל 799 (מספר ימים בלבד, ללא תעריף).",
                     "הזכאות החודשית נגזרת ממספר ימי העבודה של חודש העבודה, ולכן כל השלמה שמשנה ימי עבודה מייצרת גם הפרש זכאות, לרוב בשברי יום.",
@@ -1205,7 +1240,7 @@ BUSINESS_RULE_SECTIONS: tuple[BusinessRuleSection, ...] = (
                     "סמל רטרו של שעות משלם תמיד בתעריף של חודש העבודה; אם התעריף ששולם היה שונה, נוצרות שתי שורות - שלילית בתעריף הישן וחיובית בתעריף חודש העבודה.",
                     "כמות ימים שלילית בסמלים 414 ו-427 מיוצאת כרגיל, כדי לקזז ניצול שבוטל רטרו.",
                     "שורות ימים אינן נספרות בסכום הכספי של ההשלמות.",
-                    "ימי עבודה 767, תשלום חג 254, דמי הבראה 38, ביגוד 107 ותוספות לפנסיה 379 אינם מועברים כרגע כהשלמות.",
+                    "ימי עבודה 767, תשלום חג 254, דמי הבראה 38, ביגוד 107 אינם מועברים כרגע כהשלמות.",
                     "השלמת תומך מקצועי מאושרת לייצוא אוטומטית ומוצגת בדוח המדריך ובמסך ההשלמות, אך אינה נכתבת לקובץ הגשר ואינה נכנסת לאף סיכום כספי: אין לה סמל רטרו במירב והמזכירה משלמת אותה ידנית.",
                     "קובץ גשר סופי משמש בעמוד ההשלמות לבקרה בלבד ואינו מקור סכום ההשלמה.",
                     "בקרת גשר לחודש תשלום כוללת רק רשומות לא דחויות ורשומות שסומנו בדיוק לאותו חודש תשלום; רשומות שסומנו לחודש אחר אינן נכללות בהשוואה.",

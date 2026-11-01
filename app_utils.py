@@ -6,8 +6,7 @@ from core.time_utils import (
     MINUTES_PER_DAY, LOCAL_TZ,
     REGULAR_HOURS_LIMIT, OVERTIME_125_LIMIT,
     FRIDAY, SATURDAY,
-    span_minutes, to_local_date, _get_shabbat_boundaries,
-    classify_day_type,
+    span_minutes, to_local_date,
 )
 from core.premium_windows import (
     PremiumWindow,
@@ -15,6 +14,7 @@ from core.premium_windows import (
     get_window_at,
     minutes_until_state_change,
     filter_windows_by_city,
+    build_sacred_windows_from_cache,
 )
 from utils.utils import overlap_minutes, to_gematria, month_range_ts, merge_intervals, find_uncovered_intervals
 from convertdate import hebrew
@@ -39,6 +39,7 @@ from core.constants import (
     NIGHT_SHIFT_ID,
     TAGBUR_FRIDAY_SHIFT_ID,
     TAGBUR_SHABBAT_SHIFT_ID,
+    TAGBUR_REPORT_BASED_START_MONTH,
     HOSPITAL_ESCORT_SHIFT_ID,
     WORK_HOUR_SHIFT_ID,
     # Shift ID groups
@@ -86,6 +87,8 @@ from core.constants import (
     WEEKDAY_STANDBY_END,
     calculate_weekday_work_minutes,
     should_exclude_asd_completion_report,
+    # Pension payments
+    PENSION_ROW_FLAG_START_MONTH,
 )
 
 logger = logging.getLogger(__name__)
@@ -876,7 +879,7 @@ def calculate_wage_rate(
 # =============================================================================
 
 def _calculate_chain_wages(
-    chain_segments: List[Tuple[int, int, int, date]],
+    chain_segments: List[Tuple],
     shabbat_cache: Dict[str, Dict[str, str]],
     minutes_offset: int = 0,
     is_night_shift: bool = False,
@@ -892,7 +895,7 @@ def _calculate_chain_wages(
     - גבולות חלונות פרימיום (פורים/עצמאות/בחירות מ-premium_windows)
 
     Args:
-        chain_segments: List of (start_min, end_min, shift_id, actual_date) tuples
+        chain_segments: List of (start_min, end_min, shift_id, actual_date[, apt_city]) tuples
         shabbat_cache: Cache of Shabbat times
         minutes_offset: Minutes already worked in this chain (from previous day's carryover)
         is_night_shift: Whether this is a night shift (uses 7-hour day instead of 8)
@@ -904,7 +907,18 @@ def _calculate_chain_wages(
         calc150_premium, calc175_premium, calc200_premium — שדות פרימיום,
         segments_detail - list of (start_min, end_min, label, is_shabbat) for display.
     """
-    windows = premium_windows or []
+    windows = list(premium_windows or [])
+    if not any(w.origin in ("shabbat", "holiday") for w in windows):
+        relevant_dates = set()
+        for segment in chain_segments:
+            start_min, end_min, _shift_id, actual_date = segment[:4]
+            duration = end_min - start_min
+            physical_start_min = start_min % MINUTES_PER_DAY
+            last_day_offset = (physical_start_min + max(0, duration - 1)) // MINUTES_PER_DAY
+            for day_offset in range(last_day_offset + 1):
+                relevant_dates.add(actual_date + timedelta(days=day_offset))
+        windows.extend(build_sacred_windows_from_cache(shabbat_cache, relevant_dates))
+        windows.sort(key=lambda w: (w.start_date, w.start_min))
     result = {
         "calc100": 0, "calc125": 0, "calc150": 0, "calc175": 0, "calc200": 0,
         "calc150_shabbat": 0, "calc150_overtime": 0,
@@ -921,8 +935,10 @@ def _calculate_chain_wages(
     total_chain_minutes = 0
     flat_segments = []
 
-    for seg_start, seg_end, seg_shift_id, seg_actual_date in chain_segments:
-        flat_segments.append((seg_start, seg_end, seg_actual_date))
+    for segment in chain_segments:
+        seg_start, seg_end, seg_shift_id, seg_actual_date = segment[:4]
+        seg_city = segment[4] if len(segment) > 4 else ""
+        flat_segments.append((seg_start, seg_end, seg_actual_date, seg_city))
         total_chain_minutes += (seg_end - seg_start)
 
     # Process in blocks based on overtime thresholds
@@ -934,17 +950,10 @@ def _calculate_chain_wages(
 
     _PREMIUM_FALLBACK = "פרימיום"
 
-    for seg_start, seg_end, seg_actual_date in flat_segments:
+    for seg_start, seg_end, seg_actual_date, seg_city in flat_segments:
         seg_duration = seg_end - seg_start
         seg_offset = 0
-
-        # Get Shabbat/Holiday boundaries for THIS segment's actual date
-        shabbat_enter, shabbat_exit = _get_shabbat_boundaries(seg_actual_date, shabbat_cache)
-        seg_is_shabbat_or_holiday = (shabbat_enter > 0)
-
-        # סיווג סוג היום: ערב חג/שבת, יום חג/שבת, או חול
-        day_type = classify_day_type(seg_actual_date, shabbat_cache)
-        seg_is_holy_day = (day_type == "holy")
+        segment_windows = filter_windows_by_city(windows, seg_city or "")
 
         while seg_offset < seg_duration:
             current_abs_minute = seg_start + seg_offset
@@ -981,11 +990,11 @@ def _calculate_chain_wages(
             days_over = current_abs_minute // MINUTES_PER_DAY - seg_base_days
             physical_date = seg_actual_date + timedelta(days=days_over)
             physical_min = current_abs_minute % MINUTES_PER_DAY
-            current_premium = get_window_at(windows, physical_date, physical_min) if windows else None
-            if windows:
+            current_premium = get_window_at(segment_windows, physical_date, physical_min) if segment_windows else None
+            if segment_windows:
                 block_size = min(
                     block_size,
-                    minutes_until_state_change(windows, physical_date, physical_min, block_size),
+                    minutes_until_state_change(segment_windows, physical_date, physical_min, block_size),
                 )
 
             # Helper to add segment detail
@@ -997,6 +1006,7 @@ def _calculate_chain_wages(
                 block_abs_start = current_abs_minute
                 block_abs_end = current_abs_minute + block_size
                 premium_label = current_premium.name or _PREMIUM_FALLBACK
+                is_sacred_window = current_premium.origin in ("shabbat", "holiday")
 
                 if current_premium.rate_pct == 150:
                     # 150% — tier stacking כמו שבת: 150%/175%/200% לפי שעת הרצף
@@ -1005,181 +1015,34 @@ def _calculate_chain_wages(
                         result["calc150_shabbat"] += block_size
                         result["calc150_shabbat_100"] += block_size
                         result["calc150_shabbat_50"] += block_size
-                        result["calc150_premium"] += block_size
+                        if not is_sacred_window:
+                            result["calc150_premium"] += block_size
                         add_segment_detail(block_abs_start, block_abs_end, f"150% {premium_label}", True)
                     elif shabbat_rate == "175%":
                         result["calc175"] += block_size
-                        result["calc175_premium"] += block_size
+                        if not is_sacred_window:
+                            result["calc175_premium"] += block_size
                         add_segment_detail(block_abs_start, block_abs_end, f"175% {premium_label}", True)
                     else:
                         result["calc200"] += block_size
-                        result["calc200_premium"] += block_size
+                        if not is_sacred_window:
+                            result["calc200_premium"] += block_size
                         add_segment_detail(block_abs_start, block_abs_end, f"200% {premium_label}", True)
                 else:
                     # Flat rate (למשל 200%) — ללא tier stacking
                     rate_label = f"{current_premium.rate_pct}% {premium_label}"
                     if current_premium.rate_pct >= 200:
                         result["calc200"] += block_size
-                        result["calc200_premium"] += block_size
+                        if not is_sacred_window:
+                            result["calc200_premium"] += block_size
                     else:
                         result["calc150"] += block_size
-                        result["calc150_premium"] += block_size
+                        if not is_sacred_window:
+                            result["calc150_premium"] += block_size
                     add_segment_detail(block_abs_start, block_abs_end, rate_label, True)
 
-            # Now check Shabbat/Holiday boundaries within this block
-            elif seg_is_shabbat_or_holiday:
-                block_abs_start = current_abs_minute
-                block_abs_end = current_abs_minute + block_size
-
-                # נרמול זמנים - זמנים מעל 1440 הם בבוקר (אחרי חצות)
-                # לדוגמה: 1830 = 06:30 בבוקר של היום הבא
-                actual_block_start = block_abs_start % MINUTES_PER_DAY
-                actual_block_end = block_abs_end % MINUTES_PER_DAY
-                # אם הסגמנט חוצה חצות, end יהיה קטן מ-start
-                if actual_block_end <= actual_block_start and block_abs_end > block_abs_start:
-                    actual_block_end = block_abs_end % MINUTES_PER_DAY or MINUTES_PER_DAY
-
-                # Adjust for day offset (if segment crosses midnight)
-                # day_offset מייצג את המרחק מחצות יום שישי
-                # - יום שישי: offset = 0 (כל הזמנים ביום שישי הם לפני או אחרי כניסת שבת)
-                # - יום שבת: offset = 1440 (כל הזמנים הם ביחס לחצות שישי + 1440)
-                #
-                # חשוב: משתמשים ב-actual_block_start/end (הזמן האמיתי ביום 0-1440)
-                # ולא ב-block_abs_start/end (הזמן המנורמל שיכול להיות 1440+)
-                # כי אנחנו רוצים לדעת מה השעה בפועל ביום הספציפי
-                day_offset_start = 0
-                day_offset_end = 0
-                if seg_is_holy_day:
-                    # ביום שבת/חג, כל הזמנים הם ביחס לחצות הערב + 1440
-                    # זמנים בבוקר (00:00-08:00) עדיין שייכים לשבת/חג
-                    # הבדיקה אם זה אחרי צאת שבת/חג תתבצע מול shabbat_exit
-                    day_offset_start = MINUTES_PER_DAY
-                    day_offset_end = MINUTES_PER_DAY
-                # עבור ערב שבת/חג - לא צריך offset, הזמנים כבר ביחס לחצות הערב
-
-                abs_start_from_fri = actual_block_start + day_offset_start
-                abs_end_from_fri = actual_block_end + day_offset_end
-
-                # Split block at Shabbat boundaries
-                # Case 1: Entirely before Shabbat
-                if abs_end_from_fri <= shabbat_enter:
-                    if base_rate == "100%":
-                        result["calc100"] += block_size
-                        add_segment_detail(block_abs_start, block_abs_end, "100%", False)
-                    elif base_rate == "125%":
-                        result["calc125"] += block_size
-                        add_segment_detail(block_abs_start, block_abs_end, "125%", False)
-                    else:
-                        result["calc150"] += block_size
-                        result["calc150_overtime"] += block_size
-                        add_segment_detail(block_abs_start, block_abs_end, "150%", False)
-
-                # Case 2: Entirely during Shabbat
-                elif abs_start_from_fri >= shabbat_enter and abs_end_from_fri <= shabbat_exit:
-                    if shabbat_rate == "150%":
-                        result["calc150"] += block_size
-                        result["calc150_shabbat"] += block_size
-                        result["calc150_shabbat_100"] += block_size
-                        result["calc150_shabbat_50"] += block_size
-                        add_segment_detail(block_abs_start, block_abs_end, "150% שבת", True)
-                    elif shabbat_rate == "175%":
-                        result["calc175"] += block_size
-                        add_segment_detail(block_abs_start, block_abs_end, "175% שבת", True)
-                    else:
-                        result["calc200"] += block_size
-                        add_segment_detail(block_abs_start, block_abs_end, "200% שבת", True)
-
-                # Case 3: Entirely after Shabbat
-                elif abs_start_from_fri >= shabbat_exit:
-                    if base_rate == "100%":
-                        result["calc100"] += block_size
-                        add_segment_detail(block_abs_start, block_abs_end, "100%", False)
-                    elif base_rate == "125%":
-                        result["calc125"] += block_size
-                        add_segment_detail(block_abs_start, block_abs_end, "125%", False)
-                    else:
-                        result["calc150"] += block_size
-                        result["calc150_overtime"] += block_size
-                        add_segment_detail(block_abs_start, block_abs_end, "150%", False)
-
-                # Case 4: Block crosses Shabbat start
-                elif abs_start_from_fri < shabbat_enter < abs_end_from_fri:
-                    before_shabbat = shabbat_enter - abs_start_from_fri
-                    during_shabbat = abs_end_from_fri - shabbat_enter
-
-                    # Before Shabbat part
-                    if base_rate == "100%":
-                        result["calc100"] += before_shabbat
-                        add_segment_detail(block_abs_start, block_abs_start + before_shabbat, "100%", False)
-                    elif base_rate == "125%":
-                        result["calc125"] += before_shabbat
-                        add_segment_detail(block_abs_start, block_abs_start + before_shabbat, "125%", False)
-                    else:
-                        result["calc150"] += before_shabbat
-                        result["calc150_overtime"] += before_shabbat
-                        add_segment_detail(block_abs_start, block_abs_start + before_shabbat, "150%", False)
-
-                    # During Shabbat part
-                    shabbat_start_abs = block_abs_start + before_shabbat
-                    if shabbat_rate == "150%":
-                        result["calc150"] += during_shabbat
-                        result["calc150_shabbat"] += during_shabbat
-                        result["calc150_shabbat_100"] += during_shabbat
-                        result["calc150_shabbat_50"] += during_shabbat
-                        add_segment_detail(shabbat_start_abs, block_abs_end, "150% שבת", True)
-                    elif shabbat_rate == "175%":
-                        result["calc175"] += during_shabbat
-                        add_segment_detail(shabbat_start_abs, block_abs_end, "175% שבת", True)
-                    else:
-                        result["calc200"] += during_shabbat
-                        add_segment_detail(shabbat_start_abs, block_abs_end, "200% שבת", True)
-
-                # Case 5: Block crosses Shabbat end
-                elif abs_start_from_fri < shabbat_exit < abs_end_from_fri:
-                    during_shabbat = shabbat_exit - abs_start_from_fri
-                    after_shabbat = abs_end_from_fri - shabbat_exit
-
-                    # During Shabbat part
-                    if shabbat_rate == "150%":
-                        result["calc150"] += during_shabbat
-                        result["calc150_shabbat"] += during_shabbat
-                        result["calc150_shabbat_100"] += during_shabbat
-                        result["calc150_shabbat_50"] += during_shabbat
-                        add_segment_detail(block_abs_start, block_abs_start + during_shabbat, "150% שבת", True)
-                    elif shabbat_rate == "175%":
-                        result["calc175"] += during_shabbat
-                        add_segment_detail(block_abs_start, block_abs_start + during_shabbat, "175% שבת", True)
-                    else:
-                        result["calc200"] += during_shabbat
-                        add_segment_detail(block_abs_start, block_abs_start + during_shabbat, "200% שבת", True)
-
-                    # After Shabbat part
-                    after_start_abs = block_abs_start + during_shabbat
-                    if base_rate == "100%":
-                        result["calc100"] += after_shabbat
-                        add_segment_detail(after_start_abs, block_abs_end, "100%", False)
-                    elif base_rate == "125%":
-                        result["calc125"] += after_shabbat
-                        add_segment_detail(after_start_abs, block_abs_end, "125%", False)
-                    else:
-                        result["calc150"] += after_shabbat
-                        result["calc150_overtime"] += after_shabbat
-                        add_segment_detail(after_start_abs, block_abs_end, "150%", False)
-
-                else:
-                    # Fallback - shouldn't happen but just in case
-                    if base_rate == "100%":
-                        result["calc100"] += block_size
-                        add_segment_detail(block_abs_start, block_abs_end, "100%", False)
-                    elif base_rate == "125%":
-                        result["calc125"] += block_size
-                        add_segment_detail(block_abs_start, block_abs_end, "125%", False)
-                    else:
-                        result["calc150"] += block_size
-                        result["calc150_overtime"] += block_size
-                        add_segment_detail(block_abs_start, block_abs_end, "150%", False)
             else:
-                # Not Friday or Saturday - simple calculation
+                # זמן שאינו בתוך חלון שבת/חג/יום מיוחד.
                 if base_rate == "100%":
                     result["calc100"] += block_size
                     result["segments_detail"].append((current_abs_minute, current_abs_minute + block_size, "100%", False))
@@ -2001,8 +1864,8 @@ def get_daily_segments_data(
     # Build apartment type change dates cache
     apartment_change_dates = get_all_apartment_type_change_dates(conn, list(apartment_ids))
 
-    # טעינת חלונות פרימיום (ימים מיוחדים בלבד) לחודש המבוקש + כרית 2 ימים מכל צד
-    # מסננים שבת/חג כי אלה כבר מטופלים ב-_get_shabbat_boundaries + shabbat_cache
+    # טעינת ימים מיוחדים לחודש המבוקש + כרית 2 ימים מכל צד.
+    # חלונות שבת/חג נבנים פעם אחת מתוך shabbat_cache בתוך מנוע הרצפים.
     _month_start_d = date(year, month, 1)
     if month == 12:
         _month_end_d = date(year + 1, 1, 1)
@@ -2442,11 +2305,12 @@ def get_daily_segments_data(
             # החלפת רשימת הסגמנטים בסגמנטים הדינמיים
             seg_list = dynamic_segments
 
-        # משמרת תגבור - סגמנטים דינמיים לפי זמני שבת
-        # תגבור שישי (108): סגמנט ראשון מתחיל שעה לפני כניסת שבת
-        # תגבור שבת (109): סגמנט אחרון מסתיים שעתיים אחרי צאת שבת
-        # מ-04/2026 לא מאריכים מעבר לשעת הדיווח בצד הדינמי.
-        # שאר הסגמנטים נשארים במקום - הפיצול לשבת מתבצע אוטומטית
+        # משמרת תגבור - סגמנטים דינמיים
+        # מ-10/2026: שעות הדיווח פחות ליל שבת/חג (22:00-10:00)
+        # לפני כן: תגבור שישי (108) מתחיל שעה לפני כניסת שבת, תגבור שבת (109) מסתיים
+        # שעתיים אחרי צאת שבת; מ-04/2026 לא מאריכים מעבר לשעת הדיווח בצד הדינמי.
+        # הפיצול לשבת מתבצע אוטומטית
+        is_report_based_tagbur = is_tagbur_shift(shift_type_id) and (year, month) >= TAGBUR_REPORT_BASED_START_MONTH
         if is_tagbur_shift(shift_type_id) and seg_list:
             effective_report_end = rep_end_orig if rep_end_orig > rep_start_orig else rep_end_orig + MINUTES_PER_DAY
             seg_list = _apply_tagbur_dynamic_boundaries(
@@ -2459,6 +2323,8 @@ def get_daily_segments_data(
                 month,
                 shabbat_cache,
             )
+            if not seg_list:
+                continue  # כל הדיווח בתוך ליל שבת/חג - אין שעות לתשלום
 
         # אם זו משמרת תגבור - מוסיפים את הסגמנטים ישירות בלי לחשב חפיפה עם שעות הדיווח
         if is_fixed_segments_shift and seg_list:
@@ -2505,7 +2371,10 @@ def get_daily_segments_data(
             is_tagbur_holy = (shift_type_id == TAGBUR_SHABBAT_SHIFT_ID)
             is_vacation_or_sick = is_vacation_report or is_sick_report
 
-            if (year, month) >= (2025, 12):
+            if is_report_based_tagbur:
+                # מ-10/2026: המקטעים כבר הם הדיווח פחות ליל שבת/חג - מה שנשאר מחוץ להם לא משולם
+                skip_uncov_before = skip_uncov_after = True
+            elif (year, month) >= (2025, 12):
                 # מ-12/2025: לוגיקה חדשה - חסימה לפי סוג משמרת תגבור + חופשה/מחלה
                 skip_uncov_before = is_tagbur_holy or is_vacation_or_sick
                 skip_uncov_after = is_tagbur_eve or is_vacation_or_sick
@@ -2530,7 +2399,10 @@ def get_daily_segments_data(
 
                 # זיהוי מעבר יום: אם זמן ההתחלה קטן מזמן הסיום של הסגמנט הקודם
                 # זה אומר שעברנו חצות והסגמנט הזה הוא ביום הבא
-                if prev_seg_end is not None and seg_start < prev_seg_end:
+                # תגבור לפי דיווח (מ-10/2026) מגיע עם day_offset מפורש
+                if "day_offset" in seg:
+                    days_offset = seg["day_offset"]
+                elif prev_seg_end is not None and seg_start < prev_seg_end:
                     days_offset += 1
                 prev_seg_end = seg_end
 
@@ -3469,7 +3341,7 @@ def get_daily_segments_data(
         # Merge all events for processing - כל המשמרות כולל תגבור
         all_events = []
         for s, e, l, sid, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date, apt_city in work_segments:
-            all_events.append({"start": s, "end": e, "type": "work", "label": l, "shift_id": sid, "apartment_name": apt_name or "", "apartment_type_id": actual_apt_type, "rate_apt_type": rate_apt_type, "actual_date": actual_date or day_date, "housing_array_id": housing_array_id, "apartment_type_name": apt_type_name or "", "housing_array_name": ha_name or "", "rate_apt_type_name": rate_apt_type_name or "", "apt_type_change_date": apt_type_change_date or ""})
+            all_events.append({"start": s, "end": e, "type": "work", "label": l, "shift_id": sid, "apartment_name": apt_name or "", "apartment_type_id": actual_apt_type, "rate_apt_type": rate_apt_type, "actual_date": actual_date or day_date, "housing_array_id": housing_array_id, "apartment_type_name": apt_type_name or "", "housing_array_name": ha_name or "", "rate_apt_type_name": rate_apt_type_name or "", "apt_type_change_date": apt_type_change_date or "", "apt_city": apt_city or ""})
         for s, e, seg_id, apt, married, actual_date, _shift_type_id, actual_apt_type, _standby_defined_end, sb_apt_city in standby_segments:
             all_events.append({"start": s, "end": e, "type": "standby", "label": "כוננות", "seg_id": seg_id, "apt": apt, "actual_apt_type": actual_apt_type, "married": married, "actual_date": actual_date or day_date, "apt_city": sb_apt_city or ""})
         for s, e, actual_date, v_apt_name, v_apt_type_name, v_ha_name, v_rate_apt_type_name, *_ in vacation_segments:
@@ -3494,11 +3366,7 @@ def get_daily_segments_data(
             # segments is list of (start, end, label, shift_id, apartment_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date, apt_city)
             # Convert to format expected by _calculate_chain_wages: (start, end, shift_id, actual_date)
             # Include actual_date for each segment for correct Shabbat calculation
-            chain_segs = [(s, e, sid, adate) for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date, apt_city in segments]
-
-            # חלונות פרימיום מסוננים לפי עיר הדירה הראשונה ברצף
-            first_city = segments[0][14] if segments else ""
-            chain_premium_windows = filter_windows_by_city(premium_windows_all, first_city or "")
+            chain_segs = [(s, e, sid, adate, apt_city) for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date, apt_city in segments]
 
             # Calculate night hours in current chain segments
             # Times are in extended 00:00-32:00 axis (0-1920 minutes)
@@ -3524,7 +3392,7 @@ def get_daily_segments_data(
             # Each segment includes its actual_date for correct Shabbat boundary calculation
             result = _calculate_chain_wages(
                 chain_segs, shabbat_cache, minutes_offset, chain_is_night,
-                premium_windows=chain_premium_windows,
+                premium_windows=premium_windows_all,
             )
 
             c_100 = result["calc100"]
@@ -4023,14 +3891,25 @@ def get_daily_segments_data(
                 new_housing_array_id = event.get("housing_array_id")
                 new_rate_apt_type = event.get("rate_apt_type")
                 new_rate_key = (new_shift_id, new_housing_array_id, new_rate_apt_type)
-                new_rates = shift_rates.get(new_rate_key, {"weekday": minimum_wage})
-                # בדיקת התעריף של ה-chain הנוכחי - משווים תעריף חול
+                new_rates = shift_rates.get(
+                    new_rate_key,
+                    {"weekday": minimum_wage, "shabbat": minimum_wage},
+                )
+                # רצף כספי חייב להישבר כשאחד מתעריפי הבסיס משתנה. כך
+                # segments_detail של שבת/חג מתומחר לפי הדירה שלו ולא לפי
+                # הדירה הראשונה ברצף, תוך שמירת offset השעות הנוספות.
                 current_shift_id = current_chain_segments[0][3] if current_chain_segments else None
                 current_housing_array_id = current_chain_segments[0][9] if current_chain_segments else None
                 current_rate_apt_type = current_chain_segments[0][8] if current_chain_segments else None
                 current_rate_key = (current_shift_id, current_housing_array_id, current_rate_apt_type)
-                current_rates = shift_rates.get(current_rate_key, {"weekday": minimum_wage})
-                if new_rates["weekday"] != current_rates["weekday"]:
+                current_rates = shift_rates.get(
+                    current_rate_key,
+                    {"weekday": minimum_wage, "shabbat": minimum_wage},
+                )
+                if (
+                    new_rates.get("weekday") != current_rates.get("weekday")
+                    or new_rates.get("shabbat") != current_rates.get("shabbat")
+                ):
                     should_break = True
                     break_reason = "שינוי תעריף"
 
@@ -4261,6 +4140,13 @@ def get_daily_segments_data(
         prev_day_date = day_date
 
     return daily_segments, reports[0]["person_name"] if reports else ""
+
+
+def _is_pension_payment(payment_component: Dict, year: int, month: int) -> bool:
+    """רכיב תשלום לפנסיה: לפי הסימון על התשלום, ולפני PENSION_ROW_FLAG_START_MONTH לפי סוג הרכיב."""
+    if (year, month) >= PENSION_ROW_FLAG_START_MONTH:
+        return bool(payment_component.get("for_pension"))
+    return bool(payment_component.get("type_for_pension"))
 
 
 def aggregate_daily_segments_to_monthly(
@@ -4639,8 +4525,8 @@ def aggregate_daily_segments_to_monthly(
         if housing_filter is not None:
             payment_comps = conn.execute("""
                 SELECT (pc.quantity * pc.rate) as total_amount, pc.component_type_id,
-                       pc.payment_year, pc.payment_month,
-                       COALESCE(pct.for_pension, FALSE) as for_pension
+                       pc.payment_year, pc.payment_month, pc.for_pension,
+                       COALESCE(pct.for_pension, FALSE) as type_for_pension
                 FROM payment_components pc
                 JOIN apartments ap ON ap.id = pc.apartment_id
                 LEFT JOIN payment_component_types pct ON pc.component_type_id = pct.id
@@ -4650,8 +4536,8 @@ def aggregate_daily_segments_to_monthly(
         else:
             payment_comps = conn.execute("""
                 SELECT pc.quantity * pc.rate as total_amount, pc.component_type_id,
-                       pc.payment_year, pc.payment_month,
-                       COALESCE(pct.for_pension, FALSE) as for_pension
+                       pc.payment_year, pc.payment_month, pc.for_pension,
+                       COALESCE(pct.for_pension, FALSE) as type_for_pension
                 FROM payment_components pc
                 LEFT JOIN payment_component_types pct ON pc.component_type_id = pct.id
                 WHERE pc.person_id = %s AND pc.date >= %s AND pc.date < %s
@@ -4668,12 +4554,12 @@ def aggregate_daily_segments_to_monthly(
     for pc in payment_comps:
         amount = (pc["total_amount"] or 0) / 100
         component_type = pc["component_type_id"]
-        if component_type == 2 or component_type == 7:
+        if _is_pension_payment(pc, year, month):
+            monthly_totals["extras_for_pension"] += amount
+        elif component_type == 2 or component_type == 7:
             monthly_totals["travel"] += amount
         elif component_type == 13:
             monthly_totals["professional_support"] += amount
-        elif pc.get("for_pension"):
-            monthly_totals["extras_for_pension"] += amount
         else:
             monthly_totals["extras"] += amount
 

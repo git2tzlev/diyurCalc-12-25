@@ -28,6 +28,9 @@ from core.constants import (
     PERMANENT_EMPLOYEE_TYPE,
 )
 from core.holiday_payment import _has_sufficient_seniority
+from core.holiday_payment import _load_reports_and_types
+from core.premium_windows import PremiumWindow
+import core.holiday_payment as holiday_payment_module
 
 
 def _make_shabbat_cache_with_holiday(holiday_dates, enter_dates=None):
@@ -53,6 +56,9 @@ def _make_report(person_id, apartment_id, report_date, housing_array_id=None,
         "person_id": person_id,
         "apartment_id": apartment_id,
         "date": report_date,
+        "start_time": "08:00",
+        "end_time": "16:00",
+        "shift_type_id": 103,
         "housing_array_id": housing_array_id,
         "apartment_type_id": apartment_type_id,
     }
@@ -186,6 +192,19 @@ class TestSpecialHolidayPaymentDates(unittest.TestCase):
         self.assertIn(date(2025, 9, 24), result)
         self.assertEqual(len(result), 2)
 
+    def test_legacy_single_row_rosh_hashana_includes_both_days(self):
+        cache = {
+            "2025-09-24": {
+                "holiday": "ראש השנה",
+                "enter": "18:15",
+                "exit": "19:10",
+            },
+        }
+
+        result = get_holiday_dates_in_month(2025, 9, cache)
+
+        self.assertEqual(result, [date(2025, 9, 23), date(2025, 9, 24)])
+
     def test_shabbat_without_holiday_excluded(self):
         """שבת רגילה בלי holiday לא נכללת."""
         cache = {
@@ -193,6 +212,128 @@ class TestSpecialHolidayPaymentDates(unittest.TestCase):
         }
         result = get_holiday_dates_in_month(2025, 3, cache)
         self.assertEqual(result, [])
+
+
+class TestRegularHolidayWorkOverlap(unittest.TestCase):
+    def setUp(self):
+        self.window = PremiumWindow(
+            start_date=date(2026, 9, 20),
+            start_min=17 * 60 + 58,
+            end_date=date(2026, 9, 21),
+            end_min=19 * 60 + 27,
+            rate_pct=150,
+            origin="holiday",
+            standby_mode="shabbat",
+            source_id=None,
+            name="יום כיפור",
+        )
+
+    def test_work_on_eve_after_entry_counts_as_holiday_work(self):
+        report = {
+            "date": date(2026, 9, 20),
+            "start_time": "18:00",
+            "end_time": "22:00",
+            "shift_type_id": 103,
+        }
+        self.assertTrue(
+            holiday_payment_module._report_overlaps_regular_holiday_window(
+                report, self.window,
+            )
+        )
+
+    def test_work_after_havdalah_does_not_count_as_holiday_work(self):
+        report = {
+            "date": date(2026, 9, 21),
+            "start_time": "20:00",
+            "end_time": "22:00",
+            "shift_type_id": 103,
+        }
+        self.assertFalse(
+            holiday_payment_module._report_overlaps_regular_holiday_window(
+                report, self.window,
+            )
+        )
+
+    def test_sick_and_vacation_reports_count_as_holiday_work(self):
+        for shift_type_id in (143, 146):
+            with self.subTest(shift_type_id=shift_type_id):
+                report = {
+                    "date": date(2026, 9, 21),
+                    "start_time": "08:00",
+                    "end_time": "16:00",
+                    "shift_type_id": shift_type_id,
+                }
+                self.assertTrue(
+                    holiday_payment_module._report_overlaps_regular_holiday_window(
+                        report, self.window,
+                    )
+                )
+
+    def test_report_without_hours_on_holiday_counts_as_holiday_work(self):
+        report = {
+            "date": date(2026, 9, 21),
+            "start_time": None,
+            "end_time": None,
+            "shift_type_id": 103,
+        }
+
+        self.assertTrue(
+            holiday_payment_module._report_overlaps_regular_holiday_window(
+                report, self.window,
+            )
+        )
+
+
+class TestSpecialHolidayWorkOverlap(unittest.TestCase):
+    def setUp(self):
+        self.window = {
+            "start_date": date(2026, 4, 21),
+            "start_time": time(20, 0),
+            "end_date": date(2026, 4, 22),
+            "end_time": time(20, 0),
+        }
+
+    def test_sick_and_vacation_count_as_special_holiday_work(self):
+        for shift_type_id in (143, 146):
+            with self.subTest(shift_type_id=shift_type_id):
+                report = {
+                    "date": date(2026, 4, 22),
+                    "start_time": "08:00",
+                    "end_time": "16:00",
+                    "shift_type_id": shift_type_id,
+                }
+
+                self.assertTrue(
+                    holiday_payment_module._report_overlaps_special_holiday_window(
+                        MagicMock(), report, date(2026, 4, 22), self.window,
+                    )
+                )
+
+    def test_report_without_hours_counts_as_special_holiday_work(self):
+        report = {
+            "date": date(2026, 4, 22),
+            "start_time": None,
+            "end_time": None,
+            "shift_type_id": 103,
+        }
+
+        self.assertTrue(
+            holiday_payment_module._report_overlaps_special_holiday_window(
+                MagicMock(), report, date(2026, 4, 22), self.window,
+            )
+        )
+
+def test_report_loader_includes_previous_calendar_day_for_month_boundary_holiday():
+    conn = MagicMock()
+    cursor = MagicMock()
+    cursor.fetchall.side_effect = [[], []]
+    conn.cursor.return_value = cursor
+
+    _load_reports_and_types(conn, 2026, 10, None)
+
+    first_query_params = cursor.execute.call_args_list[0].args[1]
+    assert first_query_params[0] == date(2026, 9, 30)
+    assert first_query_params[1] == date(2026, 11, 1)
 
 
 class TestCalculateHolidayPayments(unittest.TestCase):
@@ -384,6 +525,92 @@ class TestCalculateHolidayPayments(unittest.TestCase):
             person_start_dates=_start_dates(1),
         )
         self.assertEqual(_get_amount(result, 1), 0)
+
+    def test_regular_holiday_work_on_eve_after_entry_blocks_payment(self):
+        holiday = date(2026, 9, 21)
+        cache = {
+            "2026-09-21": {
+                "holiday": "יום כיפור",
+                "enter": "17:58",
+                "exit": "19:27",
+            },
+        }
+        report = _make_report(1, 100, date(2026, 9, 20))
+        report.update({"start_time": "18:00", "end_time": "22:00"})
+
+        result = calculate_holiday_payments(
+            self.conn, 2026, 9, cache, self.minimum_wage,
+            all_reports=[report],
+            person_types={1: PERMANENT_EMPLOYEE_TYPE},
+            person_start_dates=_start_dates(1),
+        )
+
+        self.assertEqual(_get_amount(result, 1), 0)
+
+    def test_regular_holiday_work_after_exit_does_not_block_payment(self):
+        holiday = date(2026, 9, 21)
+        cache = {
+            "2026-09-21": {
+                "holiday": "יום כיפור",
+                "enter": "17:58",
+                "exit": "19:27",
+            },
+        }
+        report = _make_report(1, 100, holiday)
+        report.update({"start_time": "20:00", "end_time": "22:00"})
+
+        result = calculate_holiday_payments(
+            self.conn, 2026, 9, cache, self.minimum_wage,
+            all_reports=[report],
+            person_types={1: PERMANENT_EMPLOYEE_TYPE},
+            person_start_dates=_start_dates(1),
+        )
+
+        self.assertAlmostEqual(_get_amount(result, 1), self.full_shift_pay)
+
+    def test_first_of_month_holiday_checks_previous_month_eve_report(self):
+        holiday = date(2026, 10, 1)
+        cache = {
+            "2026-10-01": {
+                "holiday": "סוכות",
+                "enter": "17:45",
+                "exit": "18:40",
+            },
+        }
+        current_report = _make_report(1, 100, date(2026, 10, 5))
+        eve_report = _make_report(1, 100, date(2026, 9, 30))
+        eve_report.update({"start_time": "18:00", "end_time": "22:00"})
+
+        result = calculate_holiday_payments(
+            self.conn, 2026, 10, cache, self.minimum_wage,
+            all_reports=[current_report],
+            previous_reports=[eve_report],
+            person_types={1: PERMANENT_EMPLOYEE_TYPE},
+            person_start_dates=_start_dates(1),
+        )
+
+        self.assertEqual(_get_amount(result, 1), 0)
+
+    def test_previous_month_eve_report_alone_does_not_create_monthly_eligibility(self):
+        cache = {
+            "2026-10-01": {
+                "holiday": "סוכות",
+                "enter": "17:45",
+                "exit": "18:40",
+            },
+        }
+        eve_report = _make_report(1, 100, date(2026, 9, 30))
+        eve_report.update({"start_time": "08:00", "end_time": "16:00"})
+
+        result = calculate_holiday_payments(
+            self.conn, 2026, 10, cache, self.minimum_wage,
+            all_reports=[],
+            previous_reports=[eve_report],
+            person_types={1: PERMANENT_EMPLOYEE_TYPE},
+            person_start_dates=_start_dates(1),
+        )
+
+        self.assertNotIn(1, result)
 
     def test_completion_apartment_never_gets_holiday_payment(self):
         """דירת השלמות לא מקבלת תשלום חג גם אם יש בה דיווח בחודש."""

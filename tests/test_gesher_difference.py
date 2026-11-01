@@ -242,6 +242,17 @@ def test_build_completion_gesher_rows_maps_source_symbols_to_target_symbols():
     ]
 
 
+def test_build_completion_gesher_rows_maps_extras_for_pension_to_pension_target():
+    diffs = [
+        {"employee_code": "000123", "person_name": "מדריך", "symbol": "379", "amount_diff": 80.0, "employer_code": "400"},
+        {"employee_code": "000123", "person_name": "מדריך", "symbol": "371", "amount_diff": -80.0, "employer_code": "400"},
+    ]
+
+    rows = build_completion_gesher_rows(diffs)
+
+    assert [(row["symbol"], row["amount"]) for row in rows] == [("253", -80.0), ("317", 80.0)]
+
+
 def test_unverified_completion_diffs_net_by_employee_and_symbol():
     before_lines = [{
         "employee_code": "000123",

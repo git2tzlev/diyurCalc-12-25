@@ -26,7 +26,12 @@ from core.constants import (
     WEEKDAY_SHIFT_TYPE_ID,
     is_asd_housing_array,
 )
-from core.time_utils import calculate_seniority_months, span_minutes
+from core.time_utils import calculate_seniority_months, span_minutes, _is_two_day_yom_tov
+from core.premium_windows import (
+    PremiumWindow,
+    _is_within_window,
+    build_sacred_windows_from_cache,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -595,7 +600,7 @@ def get_holiday_dates_in_month(
     מציאת כל ימי החג בחודש נתון (ללא שבתות רגילות).
 
     חג מזוהה לפי שדה holiday ב-shabbat_cache.
-    כל יום חג חייב להיות עם רשומה ישירה ב-shabbat_times (כולל חגים דו-יומיים כמו ר"ה).
+    ראש השנה בפורמט הישן של רשומה יחידה ליום ב' מורחב גם ליום א'.
     """
     holidays: List[date] = []
     days_in_month = monthrange(year, month)[1]
@@ -610,8 +615,16 @@ def get_holiday_dates_in_month(
             if d.weekday() == 5 and "חול המועד" in day_info["holiday"]:
                 continue
             holidays.append(d)
+            previous_day = d - timedelta(days=1)
+            if (
+                _is_two_day_yom_tov(d)
+                and previous_day.year == year
+                and previous_day.month == month
+                and previous_day not in holidays
+            ):
+                holidays.append(previous_day)
 
-    return holidays
+    return sorted(set(holidays))
 
 
 def _get_special_holiday_payment_windows(conn, year: int, month: int) -> dict[date, Set[date]]:
@@ -788,6 +801,93 @@ def _report_overlaps_special_holiday_window(conn, report: dict, pay_date: date, 
     return True
 
 
+def _report_overlaps_regular_holiday_window(
+    report: dict,
+    window: PremiumWindow,
+) -> bool:
+    """Return whether actual work overlaps a regular holiday window."""
+    report_date = _normal_date(report.get("date"))
+    start_obj = _parse_report_time(report.get("start_time"))
+    end_obj = _parse_report_time(report.get("end_time"))
+    if report_date is None:
+        return False
+    if start_obj is None or end_obj is None:
+        holiday_date = (
+            window.end_date
+            if window.end_min > 0
+            else window.end_date - timedelta(days=1)
+        )
+        return report_date == holiday_date
+
+    report_start = datetime.combine(report_date, start_obj)
+    report_end = datetime.combine(report_date, end_obj)
+    if report_end <= report_start:
+        report_end += timedelta(days=1)
+
+    window_start = datetime.combine(window.start_date, time.min) + timedelta(
+        minutes=window.start_min,
+    )
+    window_end = datetime.combine(window.end_date, time.min) + timedelta(
+        minutes=window.end_min,
+    )
+    return report_start < window_end and report_end > window_start
+
+
+def _regular_holiday_payment_windows(
+    holiday_dates: Set[date],
+    shabbat_cache: Dict[str, Dict[str, str]],
+) -> dict[date, PremiumWindow]:
+    """Build one bounded work-exclusion window for every payable holiday."""
+    sacred_windows = [
+        window
+        for window in build_sacred_windows_from_cache(shabbat_cache, holiday_dates)
+        if window.origin == "holiday"
+    ]
+    result: dict[date, PremiumWindow] = {}
+
+    for holiday_date in holiday_dates:
+        candidates = [
+            window
+            for window in sacred_windows
+            if _is_within_window(window, holiday_date, 12 * 60)
+        ]
+        if not candidates:
+            result[holiday_date] = PremiumWindow(
+                start_date=holiday_date,
+                start_min=0,
+                end_date=holiday_date + timedelta(days=1),
+                end_min=0,
+                rate_pct=150,
+                origin="holiday",
+                standby_mode="shabbat",
+                source_id=None,
+                name=(shabbat_cache.get(holiday_date.isoformat()) or {}).get("holiday"),
+            )
+            continue
+
+        source = min(candidates, key=lambda window: (window.start_date, window.start_min))
+        source_start = datetime.combine(source.start_date, time.min) + timedelta(minutes=source.start_min)
+        source_end = datetime.combine(source.end_date, time.min) + timedelta(minutes=source.end_min)
+        day_start = datetime.combine(holiday_date, time.min)
+        day_end = day_start + timedelta(days=1)
+
+        bounded_start = max(source_start, day_start) if holiday_date - timedelta(days=1) in holiday_dates else source_start
+        bounded_end = min(source_end, day_end)
+        result[holiday_date] = PremiumWindow(
+            start_date=bounded_start.date(),
+            start_min=bounded_start.hour * 60 + bounded_start.minute,
+            end_date=bounded_end.date(),
+            end_min=bounded_end.hour * 60 + bounded_end.minute,
+            rate_pct=150,
+            origin="holiday",
+            standby_mode="shabbat",
+            source_id=None,
+            name=source.name,
+        )
+
+    return result
+
+
 def get_holiday_payment_dates_in_month(
     conn,
     year: int,
@@ -836,6 +936,7 @@ def calculate_holiday_payments(
     shabbat_cache: Dict[str, Dict[str, str]],
     minimum_wage: float,
     all_reports: list | None = None,
+    previous_reports: list | None = None,
     person_types: Dict[int, str] | None = None,
     person_start_dates: Dict[int, date] | None = None,
     person_is_married: Dict[int, bool] | None = None,
@@ -850,6 +951,7 @@ def calculate_holiday_payments(
         shabbat_cache: מטמון זמני שבת/חג
         minimum_wage: שכר מינימום לשעה
         all_reports: רשימת דיווחים (מ-batch path), או None לשליפה מ-DB
+        previous_reports: דיווחי החודש הקודם; רק ערב היום הראשון נטען לחפיפת חג
         person_types: {person_id: "permanent"/"substitute"}, או None לשליפה מ-DB
         person_start_dates: {person_id: start_date}, או None לשליפה מ-DB
         housing_filter: סינון לפי מערך דיור
@@ -861,6 +963,10 @@ def calculate_holiday_payments(
     if not holiday_dates:
         return {}
     regular_holiday_dates = set(get_holiday_dates_in_month(year, month, shabbat_cache))
+    regular_holiday_windows = _regular_holiday_payment_windows(
+        regular_holiday_dates,
+        shabbat_cache,
+    )
     special_holiday_windows = _get_special_holiday_payment_window_details(conn, year, month)
 
     # שליפת דיווחים ונתוני מדריכים אם לא סופקו
@@ -868,6 +974,13 @@ def calculate_holiday_payments(
         all_reports, person_types, person_start_dates, person_is_married = _load_reports_and_types(
             conn, year, month, housing_filter
         )
+    elif previous_reports:
+        previous_eve = date(year, month, 1) - timedelta(days=1)
+        all_reports = list(all_reports) + [
+            report
+            for report in previous_reports
+            if _normal_date(report.get("date")) == previous_eve
+        ]
     if person_is_married is None:
         person_is_married = {}
 
@@ -957,19 +1070,27 @@ def calculate_holiday_payments(
         if _person_type_on(person_id, report_date) != PERMANENT_EMPLOYEE_TYPE:
             continue
 
-        # מיפוי: קבועים שעבדו בדירה החודש
-        apt_permanent_guides.setdefault(apartment_id, set()).add(person_id)
+        # דיווח מערב החודש הקודם נדרש רק כדי לזהות עבודה בחג שחל ב־1 בחודש.
+        # הוא אינו יוצר לבדו זכאות חודשית בדירה בחודש החדש.
+        if report_date.year == year and report_date.month == month:
+            apt_permanent_guides.setdefault(apartment_id, set()).add(person_id)
 
         # מיפוי: מי עבד ביום חג
         for holiday_date in holiday_dates_set:
             worked_on_regular_holiday = (
-                holiday_date in regular_holiday_dates and report_date == holiday_date
+                holiday_date in regular_holiday_dates
+                and _report_overlaps_regular_holiday_window(
+                    r,
+                    regular_holiday_windows[holiday_date],
+                )
             )
             worked_in_special_window = any(
                 _report_overlaps_special_holiday_window(conn, r, holiday_date, window)
                 for window in special_holiday_windows.get(holiday_date, [])
             )
             worked_on_legacy_holiday_date = (
+                holiday_date not in regular_holiday_dates
+                and
                 not special_holiday_windows.get(holiday_date)
                 and report_date in holiday_work_dates.get(holiday_date, {holiday_date})
             )
@@ -1117,7 +1238,7 @@ def _load_reports_and_types(
     """שליפת דיווחים, סוגי מדריכים ותאריכי התחלה מה-DB (ל-single-guide path)."""
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
-    start_date = date(year, month, 1)
+    start_date = date(year, month, 1) - timedelta(days=1)
     days_in_month = monthrange(year, month)[1]
     end_date = date(year, month, days_in_month) + timedelta(days=1)
 

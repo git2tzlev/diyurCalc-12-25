@@ -28,6 +28,14 @@ TAGBUR_SHABBAT_SHIFT_ID = 109   # משמרת תגבור שבת/חג
 TAGBUR_FRIDAY_PRE_ENTRY_MINUTES = 60    # שעה לפני כניסת שבת
 TAGBUR_SHABBAT_POST_EXIT_MINUTES = 120  # שעתיים אחרי צאת שבת
 
+# מחודש עבודה זה ואילך, שעות תגבור נלקחות מהדיווח בפועל פחות ליל שבת/חג.
+# בחודשים קודמים נשארים מקטעי shift_time_segments והגבולות לפי כניסה/יציאה, כפי שיצא בתלושים.
+TAGBUR_REPORT_BASED_START_MONTH = (2026, 10)
+
+# ליל שבת/חג בתגבור: כוננות ללא תשלום, מ-22:00 עד 10:00 בבוקר של יום השבת/החג
+TAGBUR_HOLY_NIGHT_START_MINUTES = 22 * 60
+TAGBUR_HOLY_NIGHT_END_MINUTES = 10 * 60
+
 # Special shifts
 HOSPITAL_ESCORT_SHIFT_ID = 120  # משמרת ליווי בי"ח
 MEDICAL_ESCORT_SHIFT_ID = 148   # משמרת ליווי רפואי
@@ -350,3 +358,12 @@ def calculate_weekday_work_minutes(start_min: int, end_min: int) -> int:
 # מחושבת ומוצגת בדוח ובמסך ההשלמות אך לעולם אינה נכתבת לקובץ הגשר.
 MANUAL_COMPLETION_SYMBOLS = {"243"}
 MANUAL_COMPLETION_COMPONENT_TYPE_IDS = {13}  # תומך מקצועי
+
+
+# =============================================================================
+# Pension Payments
+# =============================================================================
+
+# מחודש עבודה זה ואילך, תשלום לפנסיה (סמל 379) נקבע לפי payment_components.for_pension.
+# בחודשים קודמים הסיווג נשאר לפי payment_component_types.for_pension, כפי שיצא לגשר.
+PENSION_ROW_FLAG_START_MONTH = (2026, 10)
