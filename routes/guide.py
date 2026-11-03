@@ -29,6 +29,7 @@ from core.logic import (
     auto_approve_substitute_travel,
 )
 from core.history import get_all_apartment_types_for_month, get_minimum_wage_for_month
+from services.gesher_archive import has_final_gesher_export
 from services.gesher_difference import build_approved_completion_gesher_rows
 from services.gesher_exporter import (
     apply_completion_rows_to_monthly_totals,
@@ -2717,14 +2718,11 @@ def get_holiday_payment_setup_api(request: Request, year: int, month: int) -> JS
 
 
 async def save_holiday_payment_setup_api(request: Request) -> JSONResponse:
-    """API: שמירת ניהול תשלום חג לחודש."""
-    from core.history import is_month_locked
-
+    """API: שמירת ניהול תשלום חג לחודש. חסום אם קיים לחודש קובץ גשר סופי."""
     data = await request.json()
     year = int(data.get("year") or 0)
     month = int(data.get("month") or 0)
     rows = data.get("rows") or []
-    force = bool(data.get("force"))
     if year <= 0 or month < 1 or month > 12:
         return JSONResponse({"success": False, "error": "חודש או שנה לא תקינים"}, status_code=400)
     if not isinstance(rows, list):
@@ -2733,9 +2731,9 @@ async def save_holiday_payment_setup_api(request: Request) -> JSONResponse:
     housing_filter = get_housing_array_filter()
     try:
         with get_conn() as conn:
-            if not force and is_month_locked(conn.conn, year, month):
+            if has_final_gesher_export(conn, year, month, housing_filter):
                 return JSONResponse(
-                    {"success": False, "locked": True, "error": "החודש נעול לעריכה"},
+                    {"success": False, "error": "לחודש זה כבר יש קובץ גשר סופי - לא ניתן לשנות תשלום חג"},
                     status_code=400,
                 )
             save_holiday_payment_setup(conn.conn, year, month, rows, housing_filter)

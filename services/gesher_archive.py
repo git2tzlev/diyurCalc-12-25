@@ -169,6 +169,30 @@ def list_gesher_export_files(
     return [dict(row) for row in rows]
 
 
+def has_final_gesher_export(
+    conn,
+    year: int,
+    month: int,
+    housing_array_id: Optional[int] = None,
+) -> bool:
+    """Return whether a final, non-cancelled Gesher file exists for the month."""
+    ensure_gesher_export_files_table(conn.conn if hasattr(conn, "conn") else conn)
+    params: list[Any] = [year, month]
+    housing_sql = ""
+    if housing_array_id is not None:
+        housing_sql = "AND housing_array_id = %s"
+        params.append(housing_array_id)
+    row = conn.execute(f"""
+        SELECT 1
+        FROM gesher_export_files
+        WHERE year = %s AND month = %s
+          AND is_final AND NOT is_cancelled
+          {housing_sql}
+        LIMIT 1
+    """, tuple(params)).fetchone()
+    return row is not None
+
+
 def get_gesher_export_file(
     conn,
     file_id: int,

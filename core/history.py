@@ -496,24 +496,15 @@ def is_month_locked(conn, year: int, month: int) -> bool:
     Returns:
         True if locked, False otherwise
     """
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cursor = conn.cursor()
     try:
         cursor.execute("""
-            SELECT id, unlocked_at
+            SELECT 1
             FROM month_locks
-            WHERE year = %s AND month = %s
+            WHERE year = %s AND month = %s AND unlocked_at IS NULL
+            LIMIT 1
         """, (year, month))
-
-        lock = cursor.fetchone()
-
-        if lock is None:
-            return False
-
-        # If unlocked_at is set, the month was unlocked
-        if lock["unlocked_at"] is not None:
-            return False
-
-        return True
+        return cursor.fetchone() is not None
     finally:
         cursor.close()
 
@@ -532,6 +523,8 @@ def get_month_lock_info(conn, year: int, month: int) -> Optional[dict]:
             FROM month_locks ml
             LEFT JOIN people p ON ml.locked_by = p.id
             WHERE ml.year = %s AND ml.month = %s
+            ORDER BY (ml.unlocked_at IS NULL) DESC, ml.locked_at DESC
+            LIMIT 1
         """, (year, month))
 
         lock = cursor.fetchone()
@@ -559,13 +552,6 @@ def lock_month(conn, year: int, month: int, locked_by: int, notes: str = None) -
         cursor.execute("""
             INSERT INTO month_locks (year, month, locked_by, notes, locked_at)
             VALUES (%s, %s, %s, %s, NOW())
-            ON CONFLICT (year, month)
-            DO UPDATE SET
-                locked_at = NOW(),
-                locked_by = EXCLUDED.locked_by,
-                notes = EXCLUDED.notes,
-                unlocked_at = NULL,
-                unlocked_by = NULL
         """, (year, month, locked_by, notes))
 
         conn.commit()
@@ -590,7 +576,7 @@ def unlock_month(conn, year: int, month: int, unlocked_by: int) -> bool:
         cursor.execute("""
             UPDATE month_locks
             SET unlocked_at = NOW(), unlocked_by = %s
-            WHERE year = %s AND month = %s
+            WHERE year = %s AND month = %s AND unlocked_at IS NULL
         """, (unlocked_by, year, month))
 
         conn.commit()

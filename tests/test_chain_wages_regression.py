@@ -365,7 +365,7 @@ class TestPurimViaPremiumWindow(unittest.TestCase):
             [(540, 900, 103, PURIM_2026)],
             {}, 0, False, premium_windows=self.purim_windows,
         )
-        labels = [lbl for _, _, lbl, _ in result["segments_detail"]]
+        labels = [lbl for _, _, lbl, _, _ in result["segments_detail"]]
         self.assertTrue(any("פרימיום" in lbl for lbl in labels))
 
 
@@ -518,6 +518,47 @@ class TestElections(unittest.TestCase):
         self.assertEqual(result["calc100"], 60)
         self.assertEqual(result["calc200"], 180)
         self.assertEqual(result["calc200_premium"], 180)
+
+    def test_elections_priced_by_weekday_rate(self):
+        """בחירות מתומחרות לפי תעריף החול (uses_shabbat_rate=False), לא לפי תעריף שבת."""
+        elections_date = date(2026, 11, 3)
+        windows = [_make_elections_window(elections_date)]
+        result = _calculate_chain_wages(
+            [(360, 600, 103, elections_date)],
+            {}, 0, False, premium_windows=windows,
+        )
+        premium_flags = [
+            uses_shabbat_rate
+            for _, _, lbl, is_shabbat, uses_shabbat_rate in result["segments_detail"]
+            if is_shabbat
+        ]
+        self.assertEqual(premium_flags, [False])
+
+    def test_premium_overlapping_shabbat_uses_shabbat_base(self):
+        """יום פרימיום שחופף לשבת: השעות שבתוך השבת מתומחרות לפי תעריף שבת."""
+        friday = date(2026, 11, 6)
+        windows = [_make_elections_window(friday)]
+        shabbat_cache = {"2026-11-06": {"enter": "16:30", "exit": "17:30"}}
+        result = _calculate_chain_wages(
+            [(600, 1200, 103, friday)],  # 10:00-20:00
+            shabbat_cache, 0, False, premium_windows=windows,
+        )
+        flags = [
+            (start, end, uses_shabbat_rate)
+            for start, end, _, _, uses_shabbat_rate in result["segments_detail"]
+        ]
+        self.assertEqual(flags, [(600, 990, False), (990, 1200, True)])
+        self.assertEqual(result["calc200"], 600)
+
+    def test_shabbat_priced_by_shabbat_rate(self):
+        """שבת נשארת מתומחרת לפי תעריף שבת (uses_shabbat_rate=True)."""
+        saturday = date(2026, 11, 7)
+        result = _calculate_chain_wages(
+            [(540, 900, 106, saturday)],
+            {}, 0, False,
+        )
+        flags = {uses_shabbat_rate for _, _, _, _, uses_shabbat_rate in result["segments_detail"]}
+        self.assertEqual(flags, {True})
 
 
 class TestPremiumWindowCityPerSegment(unittest.TestCase):

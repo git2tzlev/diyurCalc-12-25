@@ -905,7 +905,8 @@ def _calculate_chain_wages(
         Dict with calc100, calc125, calc150, calc175, calc200,
         calc150_shabbat, calc150_overtime, calc150_shabbat_100, calc150_shabbat_50,
         calc150_premium, calc175_premium, calc200_premium — שדות פרימיום,
-        segments_detail - list of (start_min, end_min, label, is_shabbat) for display.
+        segments_detail - list of (start_min, end_min, label, is_shabbat, uses_shabbat_rate).
+        uses_shabbat_rate=True כשהזמן בתוך שבת/חג (גם אם יום פרימיום חופף); אחרת הבסיס הוא תעריף החול.
     """
     windows = list(premium_windows or [])
     if not any(w.origin in ("shabbat", "holiday") for w in windows):
@@ -954,6 +955,8 @@ def _calculate_chain_wages(
         seg_duration = seg_end - seg_start
         seg_offset = 0
         segment_windows = filter_windows_by_city(windows, seg_city or "")
+        # חלונות שבת/חג קובעים את תעריף הבסיס גם כשיום פרימיום חופף להם
+        sacred_windows = [w for w in segment_windows if w.origin in ("shabbat", "holiday")]
 
         while seg_offset < seg_duration:
             current_abs_minute = seg_start + seg_offset
@@ -995,11 +998,14 @@ def _calculate_chain_wages(
                 block_size = min(
                     block_size,
                     minutes_until_state_change(segment_windows, physical_date, physical_min, block_size),
+                    minutes_until_state_change(sacred_windows, physical_date, physical_min, block_size),
                 )
+            # תעריף הבסיס הוא מה שהשעה הייתה מקבלת בלי יום פרימיום: שבת/חג → תעריף שבת, אחרת חול
+            in_sacred_time = get_window_at(sacred_windows, physical_date, physical_min) is not None
 
             # Helper to add segment detail
-            def add_segment_detail(start_min, end_min, rate_label, is_shabbat):
-                result["segments_detail"].append((start_min, end_min, rate_label, is_shabbat))
+            def add_segment_detail(start_min, end_min, rate_label, uses_shabbat_rate):
+                result["segments_detail"].append((start_min, end_min, rate_label, True, uses_shabbat_rate))
 
             if current_premium is not None:
                 # נמצאים בחלון פרימיום (יום מיוחד)
@@ -1017,17 +1023,17 @@ def _calculate_chain_wages(
                         result["calc150_shabbat_50"] += block_size
                         if not is_sacred_window:
                             result["calc150_premium"] += block_size
-                        add_segment_detail(block_abs_start, block_abs_end, f"150% {premium_label}", True)
+                        add_segment_detail(block_abs_start, block_abs_end, f"150% {premium_label}", in_sacred_time)
                     elif shabbat_rate == "175%":
                         result["calc175"] += block_size
                         if not is_sacred_window:
                             result["calc175_premium"] += block_size
-                        add_segment_detail(block_abs_start, block_abs_end, f"175% {premium_label}", True)
+                        add_segment_detail(block_abs_start, block_abs_end, f"175% {premium_label}", in_sacred_time)
                     else:
                         result["calc200"] += block_size
                         if not is_sacred_window:
                             result["calc200_premium"] += block_size
-                        add_segment_detail(block_abs_start, block_abs_end, f"200% {premium_label}", True)
+                        add_segment_detail(block_abs_start, block_abs_end, f"200% {premium_label}", in_sacred_time)
                 else:
                     # Flat rate (למשל 200%) — ללא tier stacking
                     rate_label = f"{current_premium.rate_pct}% {premium_label}"
@@ -1039,20 +1045,20 @@ def _calculate_chain_wages(
                         result["calc150"] += block_size
                         if not is_sacred_window:
                             result["calc150_premium"] += block_size
-                    add_segment_detail(block_abs_start, block_abs_end, rate_label, True)
+                    add_segment_detail(block_abs_start, block_abs_end, rate_label, in_sacred_time)
 
             else:
                 # זמן שאינו בתוך חלון שבת/חג/יום מיוחד.
                 if base_rate == "100%":
                     result["calc100"] += block_size
-                    result["segments_detail"].append((current_abs_minute, current_abs_minute + block_size, "100%", False))
+                    result["segments_detail"].append((current_abs_minute, current_abs_minute + block_size, "100%", False, False))
                 elif base_rate == "125%":
                     result["calc125"] += block_size
-                    result["segments_detail"].append((current_abs_minute, current_abs_minute + block_size, "125%", False))
+                    result["segments_detail"].append((current_abs_minute, current_abs_minute + block_size, "125%", False, False))
                 else:
                     result["calc150"] += block_size
                     result["calc150_overtime"] += block_size
-                    result["segments_detail"].append((current_abs_minute, current_abs_minute + block_size, "150%", False))
+                    result["segments_detail"].append((current_abs_minute, current_abs_minute + block_size, "150%", False, False))
 
             seg_offset += block_size
             minutes_processed += block_size
@@ -1060,9 +1066,9 @@ def _calculate_chain_wages(
     # Merge adjacent segments with the same label for cleaner display
     merged_segments = []
     for seg in result["segments_detail"]:
-        if merged_segments and merged_segments[-1][2] == seg[2] and merged_segments[-1][1] == seg[0]:
+        if merged_segments and merged_segments[-1][2:] == seg[2:] and merged_segments[-1][1] == seg[0]:
             # Merge with previous segment
-            merged_segments[-1] = (merged_segments[-1][0], seg[1], seg[2], seg[3])
+            merged_segments[-1] = (merged_segments[-1][0], seg[1], *seg[2:])
         else:
             merged_segments.append(seg)
     result["segments_detail"] = merged_segments
@@ -3413,10 +3419,10 @@ def get_daily_segments_data(
             # חישוב תשלום לפי סגמנטים - כל סגמנט עם התעריף המתאים לו (חול/שבת)
             if seg_detail:
                 c_pay = 0
-                for seg_start, seg_end, seg_label, is_shabbat in seg_detail:
+                for seg_start, seg_end, seg_label, _is_shabbat, uses_shabbat_rate in seg_detail:
                     seg_minutes = seg_end - seg_start
-                    # קביעת תעריף לפי שבת/חול
-                    seg_rate = rates_dict["shabbat"] if is_shabbat else rates_dict["weekday"]
+                    # תעריף שבת רק בשבת/חג; ימי פרימיום מתומחרים לפי תעריף החול
+                    seg_rate = rates_dict["shabbat"] if uses_shabbat_rate else rates_dict["weekday"]
                     # קביעת מכפיל לפי אחוז
                     if "200%" in seg_label:
                         multiplier = 2.0
@@ -3494,7 +3500,7 @@ def get_daily_segments_data(
             shift_name_str = shift_names_map.get(chain_shift_id, "") if chain_shift_id else ""
 
             # Helper function: Split a rate segment by apartment boundaries
-            def split_segment_by_apartments(seg_start, seg_end, seg_label, is_shabbat, segs):
+            def split_segment_by_apartments(seg_start, seg_end, seg_label, is_shabbat, uses_shabbat_rate, segs):
                 """
                 פיצול סגמנט לפי גבולות דירות.
                 אם יש כמה דירות באותו טווח זמן, מחזיר רשימת תת-סגמנטים.
@@ -3519,6 +3525,7 @@ def get_daily_segments_data(
                                 "end": overlap_end,
                                 "label": seg_label,
                                 "is_shabbat": is_shabbat,
+                                "uses_shabbat_rate": uses_shabbat_rate,
                                 "apt_name": apt,
                                 "apt_type": apt_type,
                                 "actual_apt_type": actual_apt_type,
@@ -3544,6 +3551,7 @@ def get_daily_segments_data(
                             "end": seg_end,
                             "label": seg_label,
                             "is_shabbat": is_shabbat,
+                            "uses_shabbat_rate": uses_shabbat_rate,
                             "apt_name": apt,
                             "apt_type": apt_type,
                             "actual_apt_type": actual_apt_type,
@@ -3561,6 +3569,7 @@ def get_daily_segments_data(
                             "end": seg_end,
                             "label": seg_label,
                             "is_shabbat": is_shabbat,
+                            "uses_shabbat_rate": uses_shabbat_rate,
                             "apt_name": "",
                             "apt_type": None,
                             "actual_apt_type": None,
@@ -3578,8 +3587,10 @@ def get_daily_segments_data(
             # Create a separate chain row for each rate segment, split by apartment
             # First, expand all segments by apartment boundaries
             expanded_segments = []
-            for seg_start, seg_end, seg_label, is_shabbat in seg_detail:
-                sub_segments = split_segment_by_apartments(seg_start, seg_end, seg_label, is_shabbat, segments)
+            for seg_start, seg_end, seg_label, is_shabbat, uses_shabbat_rate in seg_detail:
+                sub_segments = split_segment_by_apartments(
+                    seg_start, seg_end, seg_label, is_shabbat, uses_shabbat_rate, segments
+                )
                 expanded_segments.extend(sub_segments)
 
             # Now create chain rows from expanded segments
@@ -3595,6 +3606,7 @@ def get_daily_segments_data(
                 seg_end = sub_seg["end"]
                 seg_label = sub_seg["label"]
                 is_shabbat = sub_seg["is_shabbat"]
+                uses_shabbat_rate = sub_seg["uses_shabbat_rate"]
                 seg_apt_name = sub_seg["apt_name"]
                 seg_apt_type = sub_seg["apt_type"]
                 seg_actual_apt = sub_seg["actual_apt_type"]
@@ -3636,8 +3648,8 @@ def get_daily_segments_data(
                     "apartment_supplement": 0,
                     "asd_seniority_supplement": 0,
                 })
-                # בחירת תעריף שבת או חול לפי is_shabbat (מטבלת shift_type_housing_rates)
-                seg_rate = seg_rates_dict["shabbat"] if is_shabbat else seg_rates_dict["weekday"]
+                # תעריף שבת רק בשבת/חג; ימי פרימיום מתומחרים לפי תעריף החול (מטבלת shift_type_housing_rates)
+                seg_rate = seg_rates_dict["shabbat"] if uses_shabbat_rate else seg_rates_dict["weekday"]
 
                 # תוספת סוג דירה מוצגת בעמודת «בסיס» בטבלה, לא בתווית הפירוט (אחוזים בלבד)
                 hourly_supplement = apt_type_apartment_supplement.get(seg_actual_apt, 0)
