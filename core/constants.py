@@ -364,6 +364,7 @@ MANUAL_COMPLETION_COMPONENT_TYPE_IDS = {13}  # תומך מקצועי
 # Pension Payments
 # =============================================================================
 
-# מחודש עבודה זה ואילך, תשלום לפנסיה (סמל 379) נקבע לפי payment_components.for_pension.
-# בחודשים קודמים הסיווג נשאר לפי payment_component_types.for_pension, כפי שיצא לגשר.
+# מחודש עבודה או חודש תשלום זה ואילך, תשלום לפנסיה (סמל 379) נקבע לפי payment_components.for_pension.
+# השלמה מחודש עבודה קודם שמשולמת מחודש זה נקבעת גם היא לפי הסימון על התשלום.
+# שאר התשלומים בחודשים קודמים נשארים לפי payment_component_types.for_pension, כפי שיצאו לגשר.
 PENSION_ROW_FLAG_START_MONTH = (2026, 10)

@@ -4155,8 +4155,12 @@ def get_daily_segments_data(
 
 
 def _is_pension_payment(payment_component: Dict, year: int, month: int) -> bool:
-    """רכיב תשלום לפנסיה: לפי הסימון על התשלום, ולפני PENSION_ROW_FLAG_START_MONTH לפי סוג הרכיב."""
-    if (year, month) >= PENSION_ROW_FLAG_START_MONTH:
+    """רכיב תשלום לפנסיה: לפי הסימון על התשלום כשחודש העבודה או חודש התשלום הגיעו ל-PENSION_ROW_FLAG_START_MONTH, אחרת לפי סוג הרכיב."""
+    payment_period = (
+        int(payment_component.get("payment_year") or 0),
+        int(payment_component.get("payment_month") or 0),
+    )
+    if max((year, month), payment_period) >= PENSION_ROW_FLAG_START_MONTH:
         return bool(payment_component.get("for_pension"))
     return bool(payment_component.get("type_for_pension"))
 

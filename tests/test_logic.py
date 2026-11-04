@@ -853,7 +853,13 @@ class TestPaymentComponentsClassification(unittest.TestCase):
             ],
         )
 
-    def _aggregate_payment_comps(self, year: int, month: int, payment_comps: list) -> dict:
+    def _aggregate_payment_comps(
+        self,
+        year: int,
+        month: int,
+        payment_comps: list,
+        include_deferred: bool = False,
+    ) -> dict:
         return aggregate_daily_segments_to_monthly(
             conn=None,
             daily_segments=[],
@@ -863,6 +869,7 @@ class TestPaymentComponentsClassification(unittest.TestCase):
             minimum_wage=34.40,
             preloaded_payment_comps=payment_comps,
             person_start_date=date(2026, 1, 1),
+            include_deferred_payment_items=include_deferred,
         )
 
     def test_pension_follows_payment_row_flag_from_october_2026(self):
@@ -883,6 +890,26 @@ class TestPaymentComponentsClassification(unittest.TestCase):
 
         self.assertEqual(totals["extras_for_pension"], 25.0)
         self.assertEqual(totals["extras"], 100.0)
+
+    def test_pension_follows_payment_row_flag_for_completion_paid_from_october_2026(self):
+        paid_in_october = {"payment_year": 2026, "payment_month": 10}
+        totals = self._aggregate_payment_comps(2026, 3, [
+            {"total_amount": 6190, "component_type_id": 6, "for_pension": True, "type_for_pension": False, **paid_in_october},
+            {"total_amount": 2500, "component_type_id": 99, "for_pension": False, "type_for_pension": True, **paid_in_october},
+        ], include_deferred=True)
+
+        self.assertEqual(totals["extras_for_pension"], 61.9)
+        self.assertEqual(totals["extras"], 25.0)
+
+    def test_pension_follows_component_type_flag_for_completion_paid_before_october_2026(self):
+        paid_in_september = {"payment_year": 2026, "payment_month": 9}
+        totals = self._aggregate_payment_comps(2026, 3, [
+            {"total_amount": 6190, "component_type_id": 6, "for_pension": True, "type_for_pension": False, **paid_in_september},
+            {"total_amount": 2500, "component_type_id": 99, "for_pension": False, "type_for_pension": True, **paid_in_september},
+        ], include_deferred=True)
+
+        self.assertEqual(totals["extras_for_pension"], 25.0)
+        self.assertEqual(totals["extras"], 61.9)
 
     def test_pension_flag_takes_precedence_over_travel_and_professional_support(self):
         totals = self._aggregate_payment_comps(2026, 10, [
